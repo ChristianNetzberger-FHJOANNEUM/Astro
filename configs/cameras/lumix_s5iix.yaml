@@ -1,0 +1,9 @@
+# Lumix S5II / S5IIX - Hinweise fuer Burst-Erkennung (SH30 / H / M).
+camera: DC-S5M2X
+drive_fps:
+  SH30: 30
+  H: 9
+  M: 5
+  L: 2
+raw_suffix: ".RW2"
+jpg_sidecar: true

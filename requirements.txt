@@ -1,0 +1,6 @@
+nicegui==3.7.1
+Pillow>=10.0
+PyYAML>=6.0
+exifread>=3.0
+tzdata>=2024.1
+pytest>=8.0

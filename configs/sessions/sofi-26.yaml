@@ -1,0 +1,15 @@
+slug: Sofi-26
+title: Sonnenfinsternis Spanien 2026-08-12
+kind: eclipse
+timezone: Europe/Madrid
+location: Spanien
+originals_subdir: Lumix/Camera
+# EXIF der Lumix liegt 5 Stunden vor CEST (C1-Fotos um 00:33 EXIF = 19:33 Ortszeit).
+camera_clock_offset_s: -18000
+# Kontaktzeiten grob fuer Nordspanien - vor Ort anpassen.
+contacts:
+  C1: "2026-08-12T19:33:00"
+  C2: "2026-08-12T20:28:13"
+  C3: "2026-08-12T20:30:00"
+  C4: "2026-08-12T21:21:00"
+notes: Originale liegen unter Lumix/Camera. Siril/resolve bleiben Arbeitskopien.
