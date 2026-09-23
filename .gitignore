@@ -73,6 +73,28 @@ data/
 *.sqlite
 *.sqlite-journal
 
+# Fotos / Videos bleiben lokal oder auf der NAS
+media/
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.png
+*.rw2
+*.RW2
+*.cr2
+*.cr3
+*.nef
+*.arw
+*.dng
+*.raf
+*.fits
+*.fit
+*.mp4
+*.mov
+*.MP4
+*.MOV
+
 # OS
 .DS_Store
 Thumbs.db

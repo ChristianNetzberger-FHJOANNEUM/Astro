@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS session (
     title TEXT NOT NULL,
     root_path TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'general',
-    notes TEXT NOT NULL DEFAULT ''
+    notes TEXT NOT NULL DEFAULT '',
+    object TEXT NOT NULL DEFAULT '',
+    equipment TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS burst (
@@ -90,6 +92,8 @@ class SessionRow:
     root_path: str
     kind: str
     notes: str
+    object: str = ""
+    equipment: str = ""
     image_count: int = 0
     burst_count: int = 0
 
@@ -142,10 +146,18 @@ class Catalog:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
+
+    def _migrate(self) -> None:
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(session)")}
+        if "object" not in cols:
+            self.conn.execute("ALTER TABLE session ADD COLUMN object TEXT NOT NULL DEFAULT ''")
+        if "equipment" not in cols:
+            self.conn.execute("ALTER TABLE session ADD COLUMN equipment TEXT NOT NULL DEFAULT ''")
 
     def replace_session(
         self,
@@ -155,6 +167,8 @@ class Catalog:
         kind: str,
         notes: str,
         bursts: list,
+        object: str = "",
+        equipment: str = "",
     ) -> int:
         """Session upsert: image.id bleibt als stabile frame_id erhalten."""
         cur = self.conn.cursor()
@@ -163,13 +177,13 @@ class Catalog:
         if row:
             session_id = int(row["id"])
             cur.execute(
-                "UPDATE session SET title=?, root_path=?, kind=?, notes=? WHERE id=?",
-                (title, root_path, kind, notes, session_id),
+                "UPDATE session SET title=?, root_path=?, kind=?, notes=?, object=?, equipment=? WHERE id=?",
+                (title, root_path, kind, notes, object, equipment, session_id),
             )
         else:
             cur.execute(
-                "INSERT INTO session (slug, title, root_path, kind, notes) VALUES (?,?,?,?,?)",
-                (slug, title, root_path, kind, notes),
+                "INSERT INTO session (slug, title, root_path, kind, notes, object, equipment) VALUES (?,?,?,?,?,?,?)",
+                (slug, title, root_path, kind, notes, object, equipment),
             )
             session_id = int(cur.lastrowid)
 
@@ -388,6 +402,8 @@ class Catalog:
             root_path=row["root_path"],
             kind=row["kind"],
             notes=row["notes"],
+            object=row["object"] if "object" in row.keys() else "",
+            equipment=row["equipment"] if "equipment" in row.keys() else "",
             image_count=row["image_count"],
             burst_count=row["burst_count"],
         )

@@ -11,10 +11,15 @@ Gruppen wie "Burst 17 rund um C2" - das macht `core/`.
 ## Schichten
 
 ```
-app_astro/     NiceGUI, Port 8081
+app_astro/     Foto-Katalog, NiceGUI, Port 8081
 core/          Scan, EXIF, Burst, Eclipse, SQLite (kein NiceGUI)
+mele/          Astro-Computer (MeLE): Horizont, spaeter Sichtbarkeit
 N:\Astro       Originale: niemals umbenennen oder verschieben
 ```
+
+pp_astro verwaltet Aufnahmen. mele laeuft spaeter auf dem Garten-Mini-PC
+(Standort, Horizontmaske, Objekt-Sichtbarkeit). Gemeinsames Repo, getrennte
+Pakete — keine Horizontlogik in der Foto-GUI.
 
 Alles, was spaeter CLI, Siril-Export oder andere UIs braucht, gehoert in `core/`.
 

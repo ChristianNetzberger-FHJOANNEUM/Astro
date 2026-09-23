@@ -11,6 +11,7 @@ from core.config import AppSettings, SessionConfig, load_app_settings, load_sess
 from core.eclipse import annotate_bursts
 from core.exif import build_capture
 from core.models import Capture, SessionInfo
+from core.taxonomy import resolve_tags
 
 
 @dataclass
@@ -27,14 +28,25 @@ class ScanReport:
     messages: list[str] = field(default_factory=list)
 
 
-def discover_sessions(library_root: Path) -> list[SessionInfo]:
+def discover_sessions(
+    library_root: Path,
+    skip_names: tuple[str, ...] = (),
+    configs: dict[str, SessionConfig] | None = None,
+) -> list[SessionInfo]:
     if not library_root.is_dir():
         return []
+    skip = {name.casefold() for name in skip_names}
+    configs = configs if configs is not None else load_session_configs()
     sessions: list[SessionInfo] = []
-    for child in sorted(library_root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+    for child in sorted(library_root.iterdir(), key=lambda path: path.name.casefold()):
+        if not child.is_dir() or child.name.startswith(".") or child.name.casefold() in skip:
             continue
-        cfg = session_config_for(child.name)
+        cfg = session_config_for(child.name, configs)
+        obj, eqp = resolve_tags(
+            child.name,
+            cfg.object if cfg else "",
+            cfg.equipment if cfg else "",
+        )
         sessions.append(
             SessionInfo(
                 slug=cfg.slug if cfg else child.name,
@@ -43,6 +55,8 @@ def discover_sessions(library_root: Path) -> list[SessionInfo]:
                 kind=cfg.kind if cfg else "general",
                 originals_subdir=cfg.originals_subdir if cfg else "",
                 notes=cfg.notes if cfg else "",
+                object=obj,
+                equipment=eqp,
             )
         )
     return sessions
@@ -53,7 +67,8 @@ def _is_skipped(path: Path, root: Path, skip_names: tuple[str, ...]) -> bool:
         relative = path.relative_to(root)
     except ValueError:
         return True
-    return any(part in skip_names for part in relative.parts)
+    skip = {name.casefold() for name in skip_names}
+    return any(part.casefold() in skip for part in relative.parts)
 
 
 def collect_captures(
@@ -108,6 +123,8 @@ def scan_session(
         kind=session.kind,
         notes=session.notes,
         bursts=bursts,
+        object=session.object,
+        equipment=session.equipment,
     )
     dts = [c.datetime for c in captures if c.datetime is not None]
     srcs = {c.datetime_src for c in captures if c.datetime_src}
@@ -124,14 +141,25 @@ def scan_session(
     )
 
 
-def scan_library(settings: AppSettings | None = None, catalog: Catalog | None = None) -> list[ScanReport]:
+def scan_library(
+    settings: AppSettings | None = None,
+    catalog: Catalog | None = None,
+    slugs: list[str] | None = None,
+) -> list[ScanReport]:
     settings = settings or load_app_settings()
     own_catalog = catalog is None
     catalog = catalog or Catalog(settings.catalog_path)
     configs = load_session_configs()
     reports: list[ScanReport] = []
     try:
-        sessions = discover_sessions(settings.library_root)
+        sessions = discover_sessions(settings.library_root, settings.skip_dir_names, configs)
+        if slugs:
+            wanted = {item.casefold() for item in slugs}
+            sessions = [
+                session
+                for session in sessions
+                if session.slug.casefold() in wanted or session.root_path.name.casefold() in wanted
+            ]
         if not sessions:
             reports.append(
                 ScanReport(

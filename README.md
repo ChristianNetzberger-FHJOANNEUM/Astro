@@ -38,3 +38,15 @@ Browser: http://localhost:8081
 ### Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## MeLE Astro-Computer
+
+Separates Paket mele/ fuer den Garten-Mini-PC (Horizont, spaeter Sichtbarkeit).
+Nicht Teil der Foto-GUI.
+
+`powershell
+python -m mele horizon media\CAM_20260923151419_0942_D.JPG
+`
+
+Ergebnis unter data/horizon/ (CSV, JSON, Overlay). Norden mit --north-x setzen.
+

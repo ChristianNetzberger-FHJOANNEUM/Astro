@@ -73,3 +73,5 @@ class SessionInfo:
     kind: str = "general"
     originals_subdir: str = ""
     notes: str = ""
+    object: str = ""
+    equipment: str = ""

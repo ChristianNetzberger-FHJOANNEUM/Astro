@@ -31,10 +31,14 @@ def test_replace_session_roundtrip(tmp_path: Path) -> None:
         kind="eclipse",
         notes="",
         bursts=bursts,
+        object="Sonne",
+        equipment="Lumix",
     )
     sessions = catalog.list_sessions()
     assert len(sessions) == 1
     assert sessions[0].id == session_id
+    assert sessions[0].object == "Sonne"
+    assert sessions[0].equipment == "Lumix"
     assert sessions[0].image_count == 3
     listed = catalog.list_bursts(session_id)
     assert len(listed) == 1

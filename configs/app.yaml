@@ -1,7 +1,6 @@
 library_root: "N:/Astro"
 catalog_path: "data/astro.sqlite"
 ui_port: 8081
-
 # Diese Ordner unter einer Session werden nicht als Originale importiert.
 skip_dir_names:
   - Siril
@@ -9,13 +8,12 @@ skip_dir_names:
   - results
   - resolve
   - excluded
+  - Inventory
   - .git
-
 burst:
   same_burst_gap_s: 0.2
   new_burst_gap_s: 1.0
   min_burst_frames: 2
-
 original_raw_suffixes: [".rw2", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf"]
 original_jpg_suffixes: [".jpg", ".jpeg"]
 siril_work_subdir: "siril_work"

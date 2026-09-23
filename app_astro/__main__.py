@@ -9,7 +9,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from app_astro.main_app import run
+from app_astro.main_app import run_app
 
 if __name__ in {"__main__", "__mp_main__"}:
-    run()
+    run_app()

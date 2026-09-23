@@ -28,7 +28,15 @@ class AppSettings:
     library_root: Path = Path("N:/Astro")
     catalog_path: Path = REPO_ROOT / "data" / "astro.sqlite"
     ui_port: int = 8081
-    skip_dir_names: tuple[str, ...] = ("Siril", "resolve", ".git")
+    skip_dir_names: tuple[str, ...] = (
+        "Siril",
+        "siril_work",
+        "results",
+        "resolve",
+        "excluded",
+        "Inventory",
+        ".git",
+    )
     original_raw_suffixes: tuple[str, ...] = (
         ".rw2",
         ".cr2",
@@ -62,6 +70,8 @@ class SessionConfig:
     camera_clock_offset_s: float = 0.0
     contacts: EclipseContacts = field(default_factory=EclipseContacts)
     notes: str = ""
+    object: str = ""
+    equipment: str = ""
 
 
 def load_app_settings(path: Path | None = None) -> AppSettings:
@@ -74,7 +84,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         catalog_path = REPO_ROOT / catalog_path
     suffixes_raw = raw.get("original_raw_suffixes") or []
     suffixes_jpg = raw.get("original_jpg_suffixes") or []
-    skip = raw.get("skip_dir_names") or ["Siril", "resolve", ".git"]
+    skip = raw.get("skip_dir_names") or list(AppSettings.skip_dir_names)
     return AppSettings(
         library_root=Path(raw.get("library_root") or "N:/Astro"),
         catalog_path=catalog_path,
@@ -95,6 +105,37 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     )
 
 
+def _catalog_path_for_yaml(path: Path) -> str:
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def save_app_settings(settings: AppSettings, path: Path | None = None) -> Path:
+    cfg_path = path or REPO_ROOT / "configs" / "app.yaml"
+    payload = {
+        "library_root": settings.library_root.as_posix(),
+        "catalog_path": _catalog_path_for_yaml(settings.catalog_path),
+        "ui_port": settings.ui_port,
+        "skip_dir_names": list(settings.skip_dir_names),
+        "burst": {
+            "same_burst_gap_s": settings.burst.same_burst_gap_s,
+            "new_burst_gap_s": settings.burst.new_burst_gap_s,
+            "min_burst_frames": settings.burst.min_burst_frames,
+        },
+        "original_raw_suffixes": list(settings.original_raw_suffixes),
+        "original_jpg_suffixes": list(settings.original_jpg_suffixes),
+        "siril_work_subdir": settings.siril_work_subdir,
+    }
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return cfg_path
+
+
 def _parse_session(slug: str, raw: dict[str, Any]) -> SessionConfig:
     contacts_raw = raw.get("contacts") or {}
     return SessionConfig(
@@ -112,6 +153,8 @@ def _parse_session(slug: str, raw: dict[str, Any]) -> SessionConfig:
             C4=contacts_raw.get("C4"),
         ),
         notes=str(raw.get("notes") or ""),
+        object=str(raw.get("object") or ""),
+        equipment=str(raw.get("equipment") or ""),
     )
 
 
