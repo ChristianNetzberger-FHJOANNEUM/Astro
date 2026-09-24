@@ -1,0 +1,614 @@
+"""MeLE-UI: Panorama, Horizontlinie, Nordmarkierung, Himmelsgrid."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
+
+from nicegui import ui
+
+from app_mele.state import UiState
+from mele.horizon import overlay_svg, profile_belongs_to, sample_profile, sky_obstruction
+from mele.mask import mask_tint_data_uri
+from mele.sky import format_pointer, preview_to_horizontal
+
+FORMULAS_MD = """
+#### Projektion (equirektangular, 360° × 180°)
+
+`Az = 360° · (x − x_N) / W   mod 360°`  
+`h = 90° − 180° · y / H`  (geometrischer Horizont bei y = H/2)
+
+#### Verfahren
+
+**Automatisch.** Feste Blau/Sonne-Regel, erste Hinderniskante von oben.
+
+**Farbpicker.** Nur Blau-Proben. Helle Hauswaende sind kein Himmel.
+Sonne: eigener Exclude-Kreis (Farbe passt nie ins Blau). Optional
+*Kein Himmel* auf Wände/Fenster. Danach nur die mit dem Zenit
+zusammenhaengende Himmelsschicht.
+
+**Zeichnen.** Stuetzpunkte, zirkulaer interpoliert.
+
+**Pinsel / Radierer.** Malt die Alpha-Maske: Pinsel = Himmel (transparent),
+Radierer = Boden (opak). Arbeit auf der Vorschau; Export rechnet auf
+Vollaufloesung hoch (Nearest-Neighbour).
+
+#### Speichern / Export
+
+Pro Foto in `data/horizon/`:
+
+- `{stem}.horizon.json` / `.csv` — h(Az), bleibt beim naechsten Oeffnen
+- `{stem}.horizon.mask.png` — Graustufenmaske (0 = Himmel, 255 = Boden)
+- `{stem}.horizon.png` / `.tif` — RGB + Alpha (Vorschau)
+- `{stem}.horizon.full.png` — dasselbe in Originalgroesse
+- `{stem}.landscape/` — Stellarium *spherical landscape* (PNG + `landscape.ini`)
+
+Das ist das uebliche Format in der Astro-Community (Stellarium-Landschaften).
+Spaeter: transparenter Himmel + Sternenhimmel / Quest-3-Skybox.
+
+#### Nur oberer Halbraum
+
+Option *oberhalb geometrischer Horizont*: zeigt y = 0 … H/2. Im Garten ist
+der untere Teil fast immer Boden. Ausnahme: Berg mit Sicht nach unten.
+
+#### Verdeckte Himmelsflaeche (Raumwinkel)
+
+Nicht Pixel zaehlen (equirektangular verzerrt den Zenit). Mit Hoehe **h**
+in Bogenmass: `dΩ = cos(h) · dh · dAz`. Obere Hemisphaere = `2π` sr.
+
+Verdeckt: `(1 / 2π) ∫ sin(max(h(Az), 0)) dAz`. Bei konstantem h = 30°
+sind das 50 %.
+
+#### 360-Ansicht / Mini-Stellarium
+
+Three.js-Kugel im Browser, **ohne Internet**: `three.module.js` liegt lokal
+unter `app_mele/static/three/` und wird von NiceGUI ausgeliefert.
+
+Oben umschalten: **1 Vorschau** · **2 Transparentes PNG** · **3 Original**
+(oder Tasten 1/2/3). PNG ist erst aktiv, wenn zuvor exportiert wurde.
+Ziehen = umsehen, Mausrad / +/− = Zoom (Blickwinkel, nicht Kameradistanz).
+
+Sterne/Sternbilder/Messier: lokale SQLite (`data/catalogs/sky.sqlite`).
+Einmal mit Internet: `python -m mele.catalog import`. Danach offline.
+Mond/Planeten/Sonne: keine Tabelle, Positionen lokal aus Kepler/Meeus.
+
+In der 360-Ansicht: Jetzt / Fotozeit / ±1h ±1d / Datum-Uhrzeit.
+Klick auf Stern/Mond/DSO oeffnet Eigenschaften; Schalter **Bahn**
+zeichnet den Tagesbogen: dick durchgezogen = Nacht, gestrichelt =
+Daemmerung (±1 h um Sonnenauf-/-untergang), gepunktet = Tag.
+Blass = hinter der Horizontmaske. **Stunden** setzt Marken + Uhrzeit
+auf jeder vollen Stunde. **Anzeige**: Az/h-Gitter, Aequatorraster
+(Stundenkreise + Deklination) und Ekliptik, Schritt 5°/10°.
+Aequator und Ekliptik folgen Datum, Uhrzeit und Standort.
+Einstellungen bleiben in `data/horizon/ui-prefs.json`.
+Standort pro 360-Foto in `data/horizon/sites.json`. Beim erneuten
+Oeffnen kommen die GPS-Werte zurueck. Handyfotos mit GPS-EXIF liegen
+in `media/GPS-locations/` (nicht bei den 360-Panos in `media/`).
+
+#### Wetter / Beobachtungsfenster
+
+Eigene Seite wie die 360-Ansicht, gleicher Standort. Quelle:
+GeoSphere Austria NWP v2 (1 km, stündlich, ~60 h): Bewoelkung, Wind,
+Feuchte, Temperatur, Niederschlag. Abruf über den MeLE-Server, Cache
+in `data/weather/`. Ohne Netz bleibt der letzte Stand. Quellenangabe
+CC-BY 4.0. Seeing/Transparenz sind nicht enthalten.
+"""
+
+
+def build_ui(
+    *,
+    state: UiState,
+    media_dir: Path,
+    images_fn: Callable[[], list[Path]],
+    on_select_image: Callable[[str], None],
+    on_detect: Callable[[], None],
+    on_save: Callable[[], None],
+    on_pointer: Callable[..., None],
+    on_clear_samples: Callable[[], None],
+    on_clear_rejects: Callable[[], None],
+    on_clear_suns: Callable[[], None],
+    on_find_sun: Callable[[], None],
+    on_undo_point: Callable[[], None],
+    on_clear_points: Callable[[], None],
+    on_clear_mask: Callable[[], None],
+    on_export_transparent: Callable[[], None],
+    on_export_fullres: Callable[[], None],
+    on_toggle_sky_view: Callable[[], None],
+    on_open_pano: Callable[[], None],
+    on_open_weather: Callable[[], None],
+    on_set_site: Callable[[float, float, str], None],
+    geotagged_fn: Callable[[], list[tuple[str, float | None, float | None]]],
+    on_gps_upload: Callable[..., None],
+    preview_url_fn: Callable[[], str | None],
+) -> None:
+    ui.colors(primary="#1f4e5f")
+
+    with ui.header().classes("items-center justify-between q-px-md"):
+        ui.label("MeLE Astro-Computer").classes("text-h6")
+        ui.label("Horizont / Norden").classes("text-caption")
+
+    status_label = ui.label().classes("text-caption q-px-md")
+
+    with ui.row().classes("w-full no-wrap q-pa-md q-gutter-md"):
+        with ui.column().classes("w-1/5"):
+            ui.label("Panoramas").classes("text-subtitle2")
+            ui.label(str(media_dir)).classes("text-caption")
+            ui.label("360-Fotos hier, GPS-Handyfotos in media/GPS-locations").classes("text-caption")
+            file_box = ui.column().classes("w-full")
+        with ui.column().classes("w-7/12"):
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                hint = ui.label("Klick ins Foto setzt die Nordrichtung.").classes("text-caption")
+                sky_cover_label = ui.label("Himmel: —").classes("text-subtitle2")
+                weather_label = ui.label("Wetter: —").classes("text-caption")
+                state.refs["weather_label"] = weather_label
+                ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
+                    "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
+                )
+                ui.button("Wetter", icon="cloud", on_click=on_open_weather).props("flat dense").tooltip(
+                    "Neues Fenster: GeoSphere-Bewoelkung, Wind, Feuchte (~60 h). Cache lokal."
+                )
+            cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
+                "text-caption font-mono whitespace-pre-wrap"
+            )
+            image_box = ui.column().classes("w-full")
+        with ui.column().classes("w-1/4"):
+            ui.label("Verfahren").classes("text-subtitle2")
+
+            def on_method(event) -> None:
+                if event.value:
+                    state.method = str(event.value)
+                render_meta()
+                render_status()
+
+            def on_click_mode(event) -> None:
+                if event.value:
+                    state.click_mode = str(event.value)
+                render_status()
+
+            ui.toggle(
+                {
+                    "auto": "Auto",
+                    "picker": "Farbpicker",
+                    "draw": "Zeichnen",
+                    "brush": "Pinsel",
+                },
+                value=state.method,
+                on_change=on_method,
+            )
+            ui.toggle(
+                {"tool": "Klick: Verfahren", "north": "Klick: Norden"},
+                value=state.click_mode,
+                on_change=on_click_mode,
+            )
+
+            def on_sky_view(event) -> None:
+                state.above_horizon = bool(event.value)
+                on_toggle_sky_view()
+
+            ui.switch(
+                "Nur oberhalb geometr. Horizont",
+                value=state.above_horizon,
+                on_change=on_sky_view,
+            )
+            detect_btn = ui.button("Horizont erkennen", icon="timeline", on_click=on_detect).props("unelevated")
+            save_btn = ui.button("Profil speichern", icon="save", on_click=on_save).props("flat")
+            ui.button("PNG/TIFF + Stellarium", icon="image", on_click=on_export_transparent).props("flat")
+            ui.button("Vollaufloesung PNG", icon="hd", on_click=on_export_fullres).props("flat")
+            north_label = ui.label().classes("text-body1 q-mt-md")
+            range_label = ui.label().classes("text-caption")
+            site_label = ui.label().classes("text-caption q-mt-sm")
+            with ui.row().classes("w-full items-end no-wrap q-gutter-xs"):
+                lat_in = ui.number("Breite", value=state.latitude_deg, format="%.6f").classes("w-28").props("dense")
+                lon_in = ui.number("Laenge", value=state.longitude_deg, format="%.6f").classes("w-28").props("dense")
+                ui.button("Speichern", icon="save", on_click=lambda: _save_typed_site()).props("flat dense")
+            map_btn = ui.button("Karte pruefen (OSM)", icon="map", on_click=lambda: _open_osm()).props("flat dense")
+            site_select = ui.select(
+                options={"": "Handyfoto in media/GPS-locations waehlen"},
+                value="",
+            ).classes("w-full").props("dense")
+            ui.upload(
+                label="Oder Datei waehlen / ablegen",
+                auto_upload=True,
+                on_upload=on_gps_upload,
+            ).props('accept=".jpg,.jpeg,image/jpeg" dense').classes("w-full")
+            ui.label(
+                "Nur Originale mit Ortung. Freigabe/Export streicht oft das GPS."
+            ).classes("text-caption")
+
+            def _open_osm() -> None:
+                if state.latitude_deg is None or state.longitude_deg is None:
+                    ui.notify("Zuerst Standort setzen.", type="warning")
+                    return
+                url = (
+                    f"https://www.openstreetmap.org/?mlat={state.latitude_deg:.6f}"
+                    f"&mlon={state.longitude_deg:.6f}#map=18/"
+                    f"{state.latitude_deg:.6f}/{state.longitude_deg:.6f}"
+                )
+                ui.run_javascript(f"window.open({url!r}, '_blank')")
+
+            def _sync_site_inputs() -> None:
+                lat_in.value = state.latitude_deg
+                lon_in.value = state.longitude_deg
+                map_btn.visible = state.latitude_deg is not None and state.longitude_deg is not None
+
+            def _save_typed_site() -> None:
+                if lat_in.value is None or lon_in.value is None:
+                    ui.notify("Breite und Laenge setzen oder Handyfoto waehlen.", type="warning")
+                    return
+                on_set_site(float(lat_in.value), float(lon_in.value), "config")
+                _sync_site_inputs()
+
+            def _fill_site_select() -> None:
+                options = {"": "Handyfoto in media/GPS-locations waehlen"}
+                for name, lat, lon in geotagged_fn():
+                    if lat is not None and lon is not None:
+                        options[name] = f"{name}  ({lat:.5f}, {lon:.5f})"
+                    else:
+                        options[name] = f"{name}  (kein GPS in EXIF)"
+                site_select.options = options
+                site_select.update()
+
+            def _on_site_photo(event) -> None:
+                name = str(event.value or "")
+                if not name:
+                    return
+                for fname, lat, lon in geotagged_fn():
+                    if fname != name:
+                        continue
+                    if lat is None or lon is None:
+                        ui.notify(
+                            f"{name} hat keine GPS-EXIF. Original vom Handy kopieren "
+                            "(Ortung an, nicht teilen/exportieren).",
+                            type="warning",
+                            timeout=8000,
+                        )
+                        return
+                    on_set_site(lat, lon, "exif")
+                    _sync_site_inputs()
+                    return
+                ui.notify("Datei nicht gefunden.", type="warning")
+
+            site_select.on_value_change(_on_site_photo)
+            _fill_site_select()
+            _sync_site_inputs()
+            state.refs["sync_site_inputs"] = _sync_site_inputs
+            state.refs["fill_site_select"] = _fill_site_select
+            method_box = ui.column().classes("w-full q-mt-sm")
+            ui.separator()
+            ui.label("Himmelsgrid").classes("text-subtitle2")
+
+            def on_grid_toggle(event) -> None:
+                state.show_grid = bool(event.value)
+                _set_svg()
+
+            def on_grid_step(event) -> None:
+                try:
+                    state.grid_step = int(event.value)
+                except (TypeError, ValueError):
+                    state.grid_step = 10
+                _set_svg()
+
+            ui.switch("Linien konstanter Hoehe/Azimut", value=state.show_grid, on_change=on_grid_toggle)
+            ui.toggle({5: "5°", 10: "10°"}, value=state.grid_step, on_change=on_grid_step)
+            table_box = ui.column().classes("w-full q-mt-md")
+
+    with ui.expansion("Berechnungen und Formeln", icon="functions").classes("w-full q-px-md q-pb-md"):
+        ui.markdown(FORMULAS_MD)
+
+    interactive = {"image": None}
+
+    def _profile():
+        return state.profile if profile_belongs_to(state.profile, state.image_path) else None
+
+    def _overlay() -> str:
+        pw, ph = state.preview_width, state.preview_height
+        sw = state.source_width or pw
+        sh = state.source_height or ph
+        profile = _profile()
+        samples = [(s.preview_x, s.preview_y) for s in state.sky_samples] if state.method == "picker" else []
+        rejects = [(s.preview_x, s.preview_y) for s in state.reject_samples] if state.method == "picker" else []
+        suns = []
+        if state.method in {"picker", "auto"}:
+            suns = [
+                (excl.preview_x, excl.preview_y, excl.preview_radius) for excl in state.sun_excludes
+            ]
+        handles = []
+        if state.method == "draw" and sw and sh and pw and ph:
+            handles = [(x * pw / sw, y * ph / sh) for x, y in state.manual_points]
+        mask_uri = ""
+        if state.method == "brush" and state.mask is not None:
+            mask_uri = mask_tint_data_uri(state.mask, ph if not state.above_horizon else ph)
+        return overlay_svg(
+            profile,
+            pw,
+            ph,
+            state.north_x,
+            sw,
+            sh,
+            state.show_grid,
+            state.grid_step,
+            samples,
+            handles,
+            mask_uri,
+            suns,
+            rejects,
+        )
+
+    def _set_svg() -> None:
+        image = interactive.get("image")
+        if image is None or not state.preview_width:
+            return
+        try:
+            image.content = _overlay()
+        except RuntimeError:
+            interactive["image"] = None
+
+    def _display_size() -> tuple[int, int]:
+        pw, ph = state.preview_width, state.preview_height
+        if state.above_horizon and ph:
+            return pw, max(1, ph // 2)
+        return pw, ph
+
+    def _update_pointer(preview_x: float, preview_y: float) -> None:
+        if not state.preview_width or not state.preview_height:
+            return
+        src_w = state.source_width or state.preview_width
+        src_h = state.source_height or state.preview_height
+        az, alt = preview_to_horizontal(
+            preview_x,
+            preview_y,
+            state.preview_width,
+            state.preview_height,
+            src_w,
+            src_h,
+            state.north_x,
+        )
+        horizon_alt = None
+        profile = _profile()
+        if profile is not None and profile.points:
+            horizon_alt = profile.altitude_at(az)
+        cursor_label.text = format_pointer(
+            az,
+            alt,
+            latitude_deg=state.latitude_deg,
+            longitude_deg=state.longitude_deg,
+            when=datetime.now(timezone.utc),
+            horizon_alt=horizon_alt,
+        )
+
+    def render_files() -> None:
+        try:
+            file_box.clear()
+        except RuntimeError:
+            return
+        paths = images_fn()
+        with file_box:
+            if not paths:
+                ui.label("Keine JPG in media/.").classes("text-caption")
+                return
+            for path in paths:
+                selected = state.image_path is not None and path == state.image_path
+                extra = " bg-blue-1" if selected else ""
+                ui.button(
+                    on_click=lambda name=path.name: on_select_image(name),
+                ).props("flat no-caps align=left").classes("w-full" + extra).set_text(path.name)
+
+    def render_image() -> None:
+        url = preview_url_fn()
+        try:
+            image_box.clear()
+        except RuntimeError:
+            return
+        interactive["image"] = None
+        with image_box:
+            if not url or not state.preview_width:
+                ui.label("Panorama waehlen.").classes("text-caption")
+                return
+            disp_w, disp_h = _display_size()
+
+            def on_mouse(event) -> None:
+                px = float(event.image_x)
+                py = float(event.image_y)
+                event_type = getattr(event, "type", "")
+                buttons = int(getattr(event, "buttons", 0) or 0)
+                if event_type in {"click", "mousedown", "mousemove", "mouseup"}:
+                    on_pointer(
+                        px,
+                        py,
+                        is_click=event_type == "click",
+                        buttons=buttons,
+                        event_type=event_type,
+                    )
+                _update_pointer(px, py)
+
+            image = ui.interactive_image(
+                url,
+                content=_overlay(),
+                size=(disp_w, disp_h),
+                on_mouse=on_mouse,
+                events=["click", "mousemove", "mousedown", "mouseup"],
+                cross="#22c55e",
+                sanitize=False,
+            ).classes("w-full rounded")
+            interactive["image"] = image
+
+    def render_method_panel() -> None:
+        try:
+            method_box.clear()
+        except RuntimeError:
+            return
+        with method_box:
+            if state.method == "picker":
+                ui.label("Klick setzt je nach Rolle: Himmel, Sonne oder Hauswand.").classes("text-caption")
+                def on_picker_role(event) -> None:
+                    state.picker_role = str(event.value or "sky")
+                    render_status()
+
+                ui.toggle(
+                    {"sky": "Himmel", "sun": "Sonne ausnehmen", "reject": "Kein Himmel"},
+                    value=state.picker_role,
+                    on_change=on_picker_role,
+                )
+                ui.label(
+                    f"{len(state.sky_samples)} Himmel (cyan), "
+                    f"{len(state.reject_samples)} Ausschluss (rosa), "
+                    f"{len(state.sun_excludes)} Sonne (orange)."
+                ).classes("text-caption")
+                with ui.row().classes("flex-wrap q-gutter-xs"):
+                    for sample in state.sky_samples:
+                        ui.element("div").style(
+                            f"width:18px;height:18px;border-radius:3px;"
+                            f"background:rgb({sample.r},{sample.g},{sample.b});"
+                            f"border:1px solid #334155;"
+                        )
+                    for sample in state.reject_samples:
+                        ui.element("div").style(
+                            f"width:18px;height:18px;border-radius:3px;"
+                            f"background:rgb({sample.r},{sample.g},{sample.b});"
+                            f"border:2px solid #fb7185;"
+                        )
+                ui.label("Hue-Toleranz (Grad)").classes("text-caption")
+                ui.slider(min=0, max=40, step=1, value=state.hue_pad).on_value_change(
+                    lambda e: setattr(state, "hue_pad", float(e.value))
+                )
+                ui.label("Saettigungs-Toleranz").classes("text-caption")
+                ui.slider(min=0.02, max=0.5, step=0.02, value=state.sat_pad).on_value_change(
+                    lambda e: setattr(state, "sat_pad", float(e.value))
+                )
+                ui.label("Helligkeits-Toleranz").classes("text-caption")
+                ui.slider(min=0.02, max=0.5, step=0.02, value=state.val_pad).on_value_change(
+                    lambda e: setattr(state, "val_pad", float(e.value))
+                )
+                ui.label("Sonnen-Radius").classes("text-caption")
+                ui.slider(min=8, max=80, step=1, value=state.sun_radius_preview).on_value_change(
+                    lambda e: setattr(state, "sun_radius_preview", float(e.value))
+                )
+                ui.button("Sonne automatisch", on_click=on_find_sun).props("flat dense")
+                ui.button("Himmel loeschen", on_click=on_clear_samples).props("flat dense")
+                ui.button("Ausschluss loeschen", on_click=on_clear_rejects).props("flat dense")
+                ui.button("Sonne loeschen", on_click=on_clear_suns).props("flat dense")
+            elif state.method == "draw":
+                ui.label(
+                    f"{len(state.manual_points)} Stuetzpunkte (gelb). "
+                    "Klick setzt, Klick auf Punkt loescht."
+                ).classes("text-caption")
+                ui.button("Letzten Punkt loeschen", on_click=on_undo_point).props("flat dense")
+                ui.button("Zeichnung loeschen", on_click=on_clear_points).props("flat dense")
+            elif state.method == "brush":
+                ui.label("Pinsel = Himmel transparent, Radierer = Boden halten.").classes("text-caption")
+                ui.switch(
+                    "Radierer",
+                    value=state.brush_erase,
+                    on_change=lambda e: setattr(state, "brush_erase", bool(e.value)),
+                )
+                ui.label("Pinselgroesse").classes("text-caption")
+                ui.slider(min=4, max=80, step=1, value=state.brush_radius).on_value_change(
+                    lambda e: setattr(state, "brush_radius", float(e.value))
+                )
+                ui.button("Maske loeschen", on_click=on_clear_mask).props("flat dense")
+
+    def render_meta() -> None:
+        if state.method in {"draw", "brush"}:
+            detect_btn.set_text("Nur Auto / Picker")
+            detect_btn.disable()
+        else:
+            detect_btn.set_text("Erkenne ..." if state.detecting else "Horizont erkennen")
+            if state.detecting:
+                detect_btn.disable()
+            else:
+                detect_btn.enable()
+        profile = _profile()
+        if profile is None and state.mask is None:
+            save_btn.disable()
+        else:
+            save_btn.enable()
+        current = state.image_path.name if state.image_path else "kein Foto"
+        north_label.text = f"{current}  |  Norden x = {state.north_x:.0f} px"
+        if profile and profile.points:
+            alts = [point.alt_deg for point in profile.points]
+            blocked, free = sky_obstruction(profile)
+            range_label.text = (
+                f"{len(profile.points)} Punkte  |  h(Az) {min(alts):.1f} ... {max(alts):.1f} deg"
+            )
+            sky_cover_label.text = f"Himmel frei {free:.1f} %  ·  verdeckt {blocked:.1f} %"
+        else:
+            range_label.text = "Noch kein Horizont fuer dieses Foto."
+            sky_cover_label.text = "Himmel: —"
+        if state.latitude_deg is None or state.longitude_deg is None:
+            site_label.text = "Standort fehlt (Osmo-GPS ungueltig — configs/mele.yaml)."
+        else:
+            src = {
+                "exif": "EXIF",
+                "config": "yaml",
+                "saved": "sites.json",
+                "pano": "360-Ansicht",
+            }.get(state.site_src, state.site_src)
+            site_label.text = (
+                f"Standort  {state.latitude_deg:.4f}°, {state.longitude_deg:.4f}°  ({src})"
+            )
+        if state.photo_when is not None:
+            site_label.text += state.photo_when.astimezone().strftime("  ·  Pano %Y-%m-%d %H:%M")
+        sync_site = state.refs.get("sync_site_inputs")
+        if sync_site is not None:
+            try:
+                sync_site()
+            except RuntimeError:
+                pass
+        fill_sites = state.refs.get("fill_site_select")
+        if fill_sites is not None:
+            try:
+                fill_sites()
+            except RuntimeError:
+                pass
+        render_method_panel()
+        try:
+            table_box.clear()
+        except RuntimeError:
+            return
+        with table_box:
+            if profile and profile.points:
+                rows = [{"az": f"{az:.0f}", "alt": f"{alt:.1f}"} for az, alt in sample_profile(profile, 10.0)]
+                ui.table(
+                    columns=[
+                        {"name": "az", "label": "Az", "field": "az"},
+                        {"name": "alt", "label": "h / deg", "field": "alt"},
+                    ],
+                    rows=rows,
+                ).classes("w-full")
+        _set_svg()
+
+    def render_status() -> None:
+        status_label.text = state.status or f"Medien: {media_dir}"
+        if state.click_mode == "north":
+            hint.text = "Naechster Klick setzt Norden (gruene Linie) auf dem gewaehlten Foto."
+        elif state.method == "picker":
+            if state.picker_role == "sun":
+                hint.text = "Klick auf die Sonne setzt einen Exclude-Kreis (kein Hindernis)."
+            elif state.picker_role == "reject":
+                hint.text = "Klick auf Hauswand/Fenster: diese Farbe ist kein Himmel."
+            else:
+                hint.text = "Klick ins Blau. Sonne extra ausnehmen, Wände als 'Kein Himmel'."
+        elif state.method == "draw":
+            hint.text = "Klick setzt einen Horizontpunkt. Klick auf einen gelben Punkt entfernt ihn."
+        elif state.method == "brush":
+            hint.text = "Ziehen mit gedrueckter Taste malt. Cyan = Himmel (wird transparent)."
+        else:
+            hint.text = "Automatisch: Klick setzt Norden auf diesem Foto. Dann Horizont erkennen."
+
+    def render() -> None:
+        render_status()
+        render_files()
+        render_image()
+        render_meta()
+
+    def render_overlay_only() -> None:
+        render_status()
+        render_meta()
+
+    state.refs["refresh"] = render
+    state.refs["refresh_files"] = render_files
+    state.refs["refresh_image"] = render_image
+    state.refs["refresh_meta"] = render_overlay_only
+    state.refs["refresh_overlay"] = _set_svg
+    render()

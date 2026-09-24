@@ -47,9 +47,21 @@ def main(argv: list[str] | None = None) -> int:
     horizon.add_argument("--north-x", type=float, default=0.0, help="x-Pixel fuer Norden im Original")
     horizon.add_argument("--width", type=int, default=DEFAULT_PROCESS_WIDTH, help="Arbeitsspalten")
     horizon.add_argument("--median", type=int, default=9, help="Medianfenster in Spalten")
+    catalog = sub.add_parser("catalog", help="Sternkatalog importieren oder anzeigen")
+    catalog.add_argument("action", choices=["import", "info"])
+    catalog.add_argument("--src", help="bereits heruntergeladene Katalogdateien")
+    catalog.add_argument("--no-download", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "horizon":
         return _cmd_horizon(args)
+    if args.command == "catalog":
+        from mele.catalog import main as catalog_main
+        extra = [args.action]
+        if args.src:
+            extra.extend(["--src", args.src])
+        if args.no_download:
+            extra.append("--no-download")
+        return catalog_main(extra)
     return 1
 
 

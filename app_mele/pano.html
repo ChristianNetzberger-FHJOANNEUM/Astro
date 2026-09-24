@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE 360</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1220; color: #e2e8f0;
+                 font-family: sans-serif; user-select: none; }
+    #bar, #skybar { position: absolute; z-index: 2; left: 0; right: 0; padding: 8px 12px;
+           display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+           background: rgba(15,23,42,.88); }
+    #bar { top: 0; }
+    #skybar { top: 46px; font-size: 13px; }
+    #prefs { position: absolute; z-index: 2; left: 12px; top: 96px; max-width: 280px;
+             background: rgba(15,23,42,.9); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+    #prefs summary { cursor: pointer; font-weight: 600; }
+    #prefs label { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    #prefs select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+                    border-radius: 4px; padding: 2px 6px; }
+    #info { position: absolute; z-index: 3; right: 12px; top: 96px; width: 280px;
+            background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
+            font-size: 13px; display: none; }
+    #info h3 { margin: 0 0 8px; font-size: 15px; }
+    #info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+    #info dt { opacity: .7; }
+    #info dd { margin: 0; }
+    #info-close { float: right; }
+    #bar a, #bar button, #skybar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+           padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px; }
+    #bar button.on, #skybar button.on { background: #38bdf8; color: #0f172a; font-weight: 600; }
+    #bar button:disabled { opacity: .38; cursor: not-allowed; }
+    #hint, #sky-status { font-size: 12px; opacity: .92; }
+    #hint { flex: 1 1 200px; }
+    #skybar label, #info label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+    #prefs .hint-mini, #info-windows { font-size: 12px; opacity: .85; margin: 8px 0 0; white-space: pre-wrap; }
+    #info-legend { font-size: 12px; opacity: .9; margin: 8px 0 0; display: none; line-height: 1.45; }
+    #info-legend .sw { display: inline-block; width: 22px; letter-spacing: -1px; font-weight: 700; }
+    #info-legend .night { color: #5eead4; }
+    #info-legend .twilight { color: #fbbf24; }
+    #info-legend .day { color: #fb923c; }
+    #mag-val { min-width: 2.4em; font-variant-numeric: tabular-nums; font-weight: 600; }
+    #skybar input[type="datetime-local"] { background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+           border-radius: 4px; padding: 4px 6px; }
+    #skybar input[type="number"] { width: 88px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+           border-radius: 4px; padding: 4px 6px; }
+    #labels, #track-labels { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+    #labels span { position: absolute; transform: translate(-50%, -130%);
+      font-size: 12px; color: #7dd3fc; text-shadow: 0 0 5px #020617; white-space: nowrap; }
+    #labels span.dso { color: #fbbf24; }
+    #labels span.planet { color: #fdba74; font-weight: 600; }
+    #track-labels span { position: absolute; transform: translate(-50%, 90%);
+      font-size: 11px; font-variant-numeric: tabular-nums; text-shadow: 0 0 5px #020617; white-space: nowrap; }
+    #track-labels span.night { color: #5eead4; }
+    #track-labels span.twilight { color: #fbbf24; }
+    #track-labels span.day { color: #fb923c; }
+    #track-labels span.below { opacity: .42; }
+    #grid-labels { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+    #grid-labels span { position: absolute; transform: translate(-50%, -50%);
+      font-size: 11px; font-variant-numeric: tabular-nums; color: #93c5fd;
+      text-shadow: 0 0 5px #020617; white-space: nowrap; opacity: .88; }
+    #grid-labels span.major { color: #bfdbfe; font-weight: 600; }
+    #grid-labels span.horizon { color: #fde68a; }
+    #grid-labels span.eq { color: #67e8f9; }
+    #grid-labels span.ecl { color: #f59e0b; font-weight: 600; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <a href="/">Zurueck</a>
+    <button data-tex="preview" type="button">1 Vorschau</button>
+    <button data-tex="png" type="button">2 Transparentes PNG</button>
+    <button data-tex="original" type="button">3 Original</button>
+    <span id="hint">Ziehen: umsehen · Mausrad: Zoom</span>
+  </div>
+  <div id="skybar">
+    <label><input id="chk-stars" type="checkbox" checked> Sterne</label>
+    <label><input id="chk-const" type="checkbox" checked> Sternbilder</label>
+    <label><input id="chk-messier" type="checkbox" checked> Messier</label>
+    <label><input id="chk-ngc" type="checkbox"> NGC</label>
+    <label><input id="chk-planets" type="checkbox" checked> Mond/Planeten</label>
+    <label>mag <input id="mag" type="range" min="0" max="9" step="0.5" value="5.5">
+      <span id="mag-val">5.5</span></label>
+    <input id="when" type="datetime-local">
+    <button id="btn-now" type="button">Jetzt</button>
+    <button id="btn-photo" type="button">Fotozeit</button>
+    <button data-step="-86400" type="button">-1d</button>
+    <button data-step="-3600" type="button">-1h</button>
+    <button data-step="3600" type="button">+1h</button>
+    <button data-step="86400" type="button">+1d</button>
+    <label><input id="chk-live" type="checkbox"> Live</label>
+    <label>lat <input id="lat" type="number" step="0.0001"></label>
+    <label>lon <input id="lon" type="number" step="0.0001"></label>
+    <span id="sky-status"></span>
+  </div>
+  <details id="prefs">
+    <summary>Anzeige</summary>
+    <label>Sterngroesse
+      <input id="star-scale" type="range" min="0.5" max="3" step="0.1" value="1">
+      <span id="star-scale-val">1.0</span>
+    </label>
+    <label><input id="chk-grid" type="checkbox"> Az/h-Gitter</label>
+    <label><input id="chk-eq" type="checkbox"> Aequatorraster</label>
+    <label><input id="chk-ecliptic" type="checkbox"> Ekliptik</label>
+    <label>Schritt
+      <select id="grid-step">
+        <option value="10">10°</option>
+        <option value="5">5°</option>
+      </select>
+    </label>
+    <p class="hint-mini">Gitter und Sterngroesse bleiben gespeichert. Aequator/Ekliptik folgen Zeit und Standort.</p>
+  </details>
+  <div id="info">
+    <button id="info-close" type="button">x</button>
+    <h3 id="info-title">Objekt</h3>
+    <dl id="info-dl"></dl>
+    <label><input id="chk-track" type="checkbox"> Bahn an diesem Tag</label>
+    <label><input id="chk-hours" type="checkbox"> Stunden</label>
+    <p id="info-legend">
+      <span class="sw night">━━</span> Nacht (dick, Beobachtung)<br>
+      <span class="sw twilight">- -</span> Daemmerung (±1 h)<br>
+      <span class="sw day">···</span> Tag (duenn, gepunktet)
+    </p>
+    <p id="info-windows"></p>
+  </div>
+  <div id="labels"></div>
+  <div id="track-labels"></div>
+  <div id="grid-labels"></div>
+  <!-- Three.js 0.170.0 lokal unter /mele-static — kein CDN. -->
+  <script type="module">
+    import * as THREE from "/mele-static/three/three.module.js";
+
+    const params = new URLSearchParams(location.search);
+    const stem = params.get("stem") || "";
+    let tex = params.get("tex") || "preview";
+    const urls = {
+      preview: params.get("preview") || "",
+      png: params.get("png") || "",
+      original: params.get("original") || "",
+    };
+    const labels = {
+      preview: "Vorschau",
+      png: "Transparentes PNG",
+      original: "Original",
+    };
+    const northOffset = (() => {
+      const north = Number(params.get("north") || 0);
+      const srcw = Number(params.get("srcw") || 0);
+      return srcw > 0 ? (360 * north / srcw) : 0;
+    })();
+    const photoWhen = params.get("photo") || "";
+
+    const latEl = document.getElementById("lat");
+    const lonEl = document.getElementById("lon");
+    const whenEl = document.getElementById("when");
+    if (params.get("lat")) latEl.value = params.get("lat");
+    if (params.get("lon")) lonEl.value = params.get("lon");
+
+    function pad(value) { return String(value).padStart(2, "0"); }
+    function toLocalInput(date) {
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+    function currentWhen() {
+      return whenEl.value ? new Date(whenEl.value) : new Date();
+    }
+    whenEl.value = toLocalInput(photoWhen ? new Date(photoWhen) : new Date());
+    if (!photoWhen) document.getElementById("btn-photo").disabled = true;
+
+    document.querySelectorAll("#bar button").forEach((btn) => {
+      const kind = btn.dataset.tex;
+      if (!urls[kind]) {
+        btn.disabled = true;
+        btn.title = kind === "png"
+          ? "Noch kein Export. In der MeLE-App zuerst PNG exportieren."
+          : "Datei nicht gefunden.";
+      }
+    });
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+    camera.position.set(0, 0, 0);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const geometry = new THREE.SphereGeometry(500, 96, 48);
+    geometry.scale(-1, 1, 1);
+    const material = new THREE.MeshBasicMaterial({ transparent: true });
+    scene.add(new THREE.Mesh(geometry, material));
+
+    const skyGroup = new THREE.Group();
+    scene.add(skyGroup);
+    const trackGroup = new THREE.Group();
+    scene.add(trackGroup);
+    const hourGroup = new THREE.Group();
+    scene.add(hourGroup);
+    const gridGroup = new THREE.Group();
+    scene.add(gridGroup);
+    const labelBox = document.getElementById("labels");
+    const trackLabelBox = document.getElementById("track-labels");
+    const gridLabelBox = document.getElementById("grid-labels");
+    let labelItems = [];
+    let hourItems = [];
+    let gridItems = [];
+    let lastTrack = null;
+    let pickables = [];
+    let lastSky = null;
+    let selected = null;
+    let starScale = 1;
+    let dragMoved = 0;
+
+    let lon = northOffset;
+    let lat = 18;
+    let fov = 75;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let liveTimer = 0;
+
+    function applyLook() {
+      lat = Math.max(-85, Math.min(85, lat));
+      const phi = THREE.MathUtils.degToRad(90 - lat);
+      const theta = THREE.MathUtils.degToRad(lon);
+      camera.lookAt(
+        Math.sin(phi) * Math.cos(theta),
+        Math.cos(phi),
+        Math.sin(phi) * Math.sin(theta),
+      );
+    }
+
+    function setFov(next) {
+      fov = THREE.MathUtils.clamp(next, 18, 100);
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+
+    function setHint(text) {
+      document.getElementById("hint").textContent = text;
+    }
+
+    function azAltToVec(az, alt, radius) {
+      const viewLon = (az + northOffset) % 360;
+      const phi = THREE.MathUtils.degToRad(90 - alt);
+      const theta = THREE.MathUtils.degToRad(viewLon);
+      return new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta) * radius,
+        Math.cos(phi) * radius,
+        Math.sin(phi) * Math.sin(theta) * radius,
+      );
+    }
+
+    function wrap360(deg) {
+      return ((deg % 360) + 360) % 360;
+    }
+
+    function julianDate(date) {
+      let year = date.getUTCFullYear();
+      let month = date.getUTCMonth() + 1;
+      const day = date.getUTCDate();
+      const frac = (
+        date.getUTCHours()
+        + date.getUTCMinutes() / 60
+        + date.getUTCSeconds() / 3600
+        + date.getUTCMilliseconds() / 3.6e6
+      ) / 24;
+      if (month <= 2) {
+        year -= 1;
+        month += 12;
+      }
+      const century = Math.floor(year / 100);
+      const b = 2 - century + Math.floor(century / 4);
+      return Math.floor(365.25 * (year + 4716)) + Math.floor(30.6001 * (month + 1)) + day + b - 1524.5 + frac;
+    }
+
+    function gmstDeg(date) {
+      const jd = julianDate(date);
+      const t = (jd - 2451545.0) / 36525.0;
+      return wrap360(
+        280.46061837
+        + 360.98564736629 * (jd - 2451545.0)
+        + 0.000387933 * t * t
+        - (t * t * t) / 38710000.0,
+      );
+    }
+
+    function radecToAzAlt(ra, dec, lat, lon, date) {
+      const ha = THREE.MathUtils.degToRad(wrap360(gmstDeg(date) + lon - ra));
+      const decR = THREE.MathUtils.degToRad(dec);
+      const latR = THREE.MathUtils.degToRad(lat);
+      let sinAlt = Math.sin(latR) * Math.sin(decR) + Math.cos(latR) * Math.cos(decR) * Math.cos(ha);
+      sinAlt = Math.max(-1, Math.min(1, sinAlt));
+      const alt = Math.asin(sinAlt);
+      const cosAlt = Math.cos(alt);
+      let az = 0;
+      if (Math.abs(cosAlt) >= 1e-12 && Math.abs(Math.cos(latR)) >= 1e-12) {
+        const sinAz = -Math.sin(ha) * Math.cos(decR) / cosAlt;
+        const cosAz = (Math.sin(decR) - Math.sin(latR) * sinAlt) / (Math.cos(latR) * cosAlt);
+        az = Math.atan2(sinAz, cosAz);
+      }
+      return { az: wrap360(THREE.MathUtils.radToDeg(az)), alt: THREE.MathUtils.radToDeg(alt) };
+    }
+
+    function eclipticToRaDec(lonDeg, latDeg, t) {
+      const eps = THREE.MathUtils.degToRad(23.439291 - 0.0130042 * t);
+      const lon = THREE.MathUtils.degToRad(lonDeg);
+      const beta = THREE.MathUtils.degToRad(latDeg);
+      const sinDec = Math.sin(beta) * Math.cos(eps) + Math.cos(beta) * Math.sin(eps) * Math.sin(lon);
+      const dec = Math.asin(Math.max(-1, Math.min(1, sinDec)));
+      const y = Math.sin(lon) * Math.cos(eps) - Math.tan(beta) * Math.sin(eps);
+      return {
+        ra: wrap360(THREE.MathUtils.radToDeg(Math.atan2(y, Math.cos(lon)))),
+        dec: THREE.MathUtils.radToDeg(dec),
+      };
+    }
+
+    function observerSite() {
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || latEl.value === "" || lonEl.value === "") {
+        return null;
+      }
+      return { lat, lon, when: currentWhen() };
+    }
+
+    function raDecVec(ra, dec, site, radius) {
+      const horiz = radecToAzAlt(ra, dec, site.lat, site.lon, site.when);
+      return azAltToVec(horiz.az, horiz.alt, radius);
+    }
+
+    function clearSky() {
+      while (skyGroup.children.length) {
+        const child = skyGroup.children[0];
+        skyGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      }
+      labelBox.innerHTML = "";
+      labelItems = [];
+    }
+
+    const discShader = {
+      uniforms: { uPixelRatio: { value: Math.min(devicePixelRatio, 2) } },
+      vertexShader: `
+        attribute float aSize;
+        attribute vec3 aColor;
+        uniform float uPixelRatio;
+        varying vec3 vColor;
+        void main() {
+          vColor = aColor;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = aSize * uPixelRatio;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        void main() {
+          vec2 p = gl_PointCoord - vec2(0.5);
+          float r = length(p);
+          if (r > 0.5) discard;
+          float edge = smoothstep(0.5, 0.22, r);
+          gl_FragColor = vec4(vColor, edge);
+        }
+      `,
+    };
+
+    function discMaterial() {
+      return new THREE.ShaderMaterial({
+        ...discShader,
+        transparent: true,
+        depthWrite: false,
+      });
+    }
+
+    function starDisc(mag) {
+      const m = Number.isFinite(mag) ? mag : 5;
+      const size = Math.max(1.8, 12 * starScale * Math.pow(2.512, -0.28 * (m + 0.3)));
+      const tone = THREE.MathUtils.clamp((7.2 - m) / 8.0, 0.22, 1);
+      const gray = 0.32 + 0.68 * tone;
+      return { size, gray };
+    }
+
+    function addDiscs(items, styleFn) {
+      if (!items.length) return;
+      const positions = new Float32Array(items.length * 3);
+      const colors = new Float32Array(items.length * 3);
+      const sizes = new Float32Array(items.length);
+      items.forEach((item, index) => {
+        const vec = azAltToVec(item.az, item.alt, 480);
+        const style = styleFn(item);
+        positions[index * 3] = vec.x;
+        positions[index * 3 + 1] = vec.y;
+        positions[index * 3 + 2] = vec.z;
+        colors[index * 3] = style.r;
+        colors[index * 3 + 1] = style.g;
+        colors[index * 3 + 2] = style.b;
+        sizes[index] = style.size;
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("aColor", new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+      skyGroup.add(new THREE.Points(geo, discMaterial()));
+    }
+
+    function tintStyle(hex, size) {
+      const tint = new THREE.Color(hex);
+      return () => ({ r: tint.r, g: tint.g, b: tint.b, size });
+    }
+
+    function addAngularDisc(az, alt, diamDeg, material) {
+      const radius = 478 * Math.tan(THREE.MathUtils.degToRad(diamDeg * 0.5));
+      const pos = azAltToVec(az, alt, 478);
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material);
+      mesh.position.copy(pos);
+      if (Math.abs(pos.y) > 0.95 * pos.length()) mesh.up.set(1, 0, 0);
+      mesh.lookAt(0, 0, 0);
+      skyGroup.add(mesh);
+      return mesh;
+    }
+
+    function addMoonDisc(moon) {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uLight: { value: new THREE.Vector3(0, 0, 1) } },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uLight;
+          varying vec2 vUv;
+          void main() {
+            vec2 p = vUv * 2.0 - 1.0;
+            float r2 = dot(p, p);
+            if (r2 > 1.0) discard;
+            float z = sqrt(max(0.0, 1.0 - r2));
+            float lit = max(dot(normalize(vec3(p, z)), normalize(uLight)), 0.0);
+            vec3 bright = vec3(0.96, 0.94, 0.86);
+            vec3 dark = vec3(0.10, 0.11, 0.14);
+            vec3 color = mix(dark, bright, smoothstep(0.0, 0.06, lit));
+            float edge = smoothstep(1.0, 0.88, sqrt(r2));
+            gl_FragColor = vec4(color, edge);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const mesh = addAngularDisc(moon.az, moon.alt, moon.diam_deg || 0.5, mat);
+      mesh.updateMatrixWorld(true);
+      const sunAz = Number.isFinite(moon.sun_az) ? moon.sun_az : moon.az + 90;
+      const sunAlt = Number.isFinite(moon.sun_alt) ? moon.sun_alt : 0;
+      const lightWorld = azAltToVec(sunAz, sunAlt, 1);
+      const inv = new THREE.Matrix4().copy(mesh.matrixWorld).invert();
+      mat.uniforms.uLight.value.copy(lightWorld).transformDirection(inv);
+    }
+
+    function addSunDisc(sun) {
+      addAngularDisc(sun.az, sun.alt, sun.diam_deg || 0.5, new THREE.MeshBasicMaterial({
+        color: 0xfde68a,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }));
+    }
+
+    function drawOverlay(data) {
+      lastSky = data;
+      clearSky();
+      pickables = [];
+      if (data.error) {
+        document.getElementById("sky-status").textContent = data.error;
+        return;
+      }
+      (data.stars || []).forEach((item) => pickables.push({ ...item, kind: "star" }));
+      (data.dso || []).forEach((item) => pickables.push(item));
+      (data.bodies || []).forEach((item) => pickables.push(item));
+      addDiscs(data.stars || [], (star) => {
+        const disc = starDisc(star.mag);
+        return { r: disc.gray, g: disc.gray, b: disc.gray, size: disc.size };
+      });
+      const segs = data.lines || [];
+      if (segs.length) {
+        const positions = new Float32Array(segs.length * 6);
+        segs.forEach((line, index) => {
+          const a = azAltToVec(line.az1, line.alt1, 478);
+          const b = azAltToVec(line.az2, line.alt2, 478);
+          positions.set([a.x, a.y, a.z, b.x, b.y, b.z], index * 6);
+        });
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+        skyGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+          color: 0x7dd3fc, transparent: true, opacity: 0.85, depthWrite: false,
+        })));
+      }
+      addDiscs((data.dso || []).filter((item) => item.kind === "messier"), tintStyle(0xfbbf24, 7));
+      addDiscs((data.dso || []).filter((item) => item.kind === "ngc"), tintStyle(0xc4b5fd, 5));
+      (data.bodies || []).filter((item) => item.kind === "moon").forEach(addMoonDisc);
+      (data.bodies || []).filter((item) => item.kind === "sun").forEach(addSunDisc);
+      addDiscs((data.bodies || []).filter((item) => item.kind === "planet"), tintStyle(0xfdba74, 8));
+      const named = [];
+      (data.labels || []).forEach((item) => named.push({ ...item, cls: "" }));
+      (data.dso || []).forEach((item) => named.push({
+        name: item.id, az: item.az, alt: item.alt, cls: "dso",
+      }));
+      (data.bodies || []).forEach((item) => named.push({
+        name: item.kind === "moon" && item.phase != null
+          ? `${item.name} ${Math.round(item.phase * 100)}%`
+          : item.name,
+        az: item.az, alt: item.alt, cls: "planet",
+      }));
+      named.forEach((item) => {
+        const span = document.createElement("span");
+        span.textContent = item.name;
+        if (item.cls) span.className = item.cls;
+        labelBox.appendChild(span);
+        labelItems.push({ el: span, az: item.az, alt: item.alt });
+      });
+      const stamp = data.when ? new Date(data.when) : currentWhen();
+      document.getElementById("sky-status").textContent =
+        `${stamp.toLocaleString()}  ·  ${data.stars.length} Sterne  ·  ${data.lines.length} Linien  ·  ${data.dso.length} DSO  ·  ${(data.bodies || []).length} Gestirn`;
+      if (selected) {
+        const next = pickables.find((item) => sameObject(item, selected));
+        if (next) showInfo(next);
+        else if (document.getElementById("chk-track").checked) loadTrack();
+      }
+    }
+
+    function projectLabels(items) {
+      const view = new THREE.Vector3();
+      camera.getWorldDirection(view);
+      items.forEach((item) => {
+        const vec = azAltToVec(item.az, item.alt, 1);
+        if (vec.dot(view) < 0.15) {
+          item.el.style.display = "none";
+          return;
+        }
+        vec.project(camera);
+        item.el.style.display = "block";
+        item.el.style.left = `${(vec.x * 0.5 + 0.5) * innerWidth}px`;
+        item.el.style.top = `${(-vec.y * 0.5 + 0.5) * innerHeight}px`;
+      });
+    }
+
+    function updateLabels() {
+      projectLabels(labelItems);
+      projectLabels(hourItems);
+      projectLabels(gridItems);
+    }
+
+    function fmtRa(deg) {
+      const hours = (((deg % 360) + 360) % 360) / 15;
+      const h = Math.floor(hours);
+      const minutes = (hours - h) * 60;
+      const m = Math.floor(minutes);
+      const s = (minutes - m) * 60;
+      return `${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m ${s.toFixed(2).padStart(5, "0")}s`;
+    }
+
+    function fmtDec(deg) {
+      const sign = deg >= 0 ? "+" : "-";
+      const value = Math.abs(deg);
+      const d = Math.floor(value);
+      const minutes = (value - d) * 60;
+      const m = Math.floor(minutes);
+      const s = (minutes - m) * 60;
+      return `${sign}${String(d).padStart(2, "0")}° ${String(m).padStart(2, "0")}' ${s.toFixed(1)}"`;
+    }
+
+    function fmtAlt(deg) {
+      return `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}°`;
+    }
+
+    function disposeGroup(group) {
+      while (group.children.length) {
+        const child = group.children[0];
+        group.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      }
+    }
+
+    function pushPolyline(target, vectors) {
+      for (let i = 0; i < vectors.length - 1; i += 1) {
+        const a = vectors[i];
+        const b = vectors[i + 1];
+        target.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+
+    function addLineSet(positions, color, opacity) {
+      if (positions.length < 6) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      gridGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false,
+      })));
+    }
+
+    function addGridLabel(az, alt, text, cls) {
+      const span = document.createElement("span");
+      if (cls) span.className = cls;
+      span.textContent = text;
+      gridLabelBox.appendChild(span);
+      gridItems.push({ el: span, az, alt });
+    }
+
+    function azCardinal(az) {
+      const names = { 0: "N", 90: "O", 180: "S", 270: "W" };
+      const key = ((az % 360) + 360) % 360;
+      return names[key] ? `${names[key]} ${key}°` : `${key}°`;
+    }
+
+    function drawHorizontalGrid(step) {
+      const radius = 486;
+      const sample = step === 5 ? 2 : 3;
+      const minor = [];
+      const major = [];
+      const horizon = [];
+      for (let az = 0; az < 360; az += step) {
+        const pts = [];
+        for (let alt = -90; alt <= 90; alt += sample) {
+          pts.push(azAltToVec(az, alt, radius));
+        }
+        pushPolyline(az % 90 === 0 ? major : minor, pts);
+      }
+      for (let alt = -90 + step; alt <= 90 - step; alt += step) {
+        if (alt === 0) continue;
+        const pts = [];
+        for (let az = 0; az <= 360; az += sample) {
+          pts.push(azAltToVec(az, alt, radius));
+        }
+        pushPolyline(minor, pts);
+      }
+      const hz = [];
+      for (let az = 0; az <= 360; az += sample) {
+        hz.push(azAltToVec(az, 0, radius));
+      }
+      pushPolyline(horizon, hz);
+      addLineSet(minor, 0x64748b, 0.38);
+      addLineSet(major, 0x93c5fd, 0.62);
+      addLineSet(horizon, 0xfde68a, 0.78);
+      for (let az = 0; az < 360; az += 30) {
+        addGridLabel(az, 8, azCardinal(az), az % 90 === 0 ? "major" : "");
+      }
+      for (let alt = -80; alt <= 80; alt += 10) {
+        addGridLabel(15, alt, alt === 0 ? "h 0°" : `h ${alt}°`, alt === 0 ? "horizon" : "");
+      }
+    }
+
+    function drawEquatorialGrid(step, site) {
+      const radius = 484;
+      const sample = 3;
+      const minor = [];
+      const equator = [];
+      const raStep = 15;
+      for (let ra = 0; ra < 360; ra += raStep) {
+        const pts = [];
+        for (let dec = -80; dec <= 80; dec += sample) {
+          pts.push(raDecVec(ra, dec, site, radius));
+        }
+        pushPolyline(ra % 90 === 0 ? equator : minor, pts);
+      }
+      for (let dec = -80; dec <= 80; dec += step) {
+        const pts = [];
+        for (let ra = 0; ra <= 360; ra += sample) {
+          pts.push(raDecVec(ra, dec, site, radius));
+        }
+        pushPolyline(dec === 0 ? equator : minor, pts);
+      }
+      addLineSet(minor, 0x22d3ee, 0.36);
+      addLineSet(equator, 0x67e8f9, 0.72);
+      for (let ra = 0; ra < 360; ra += 30) {
+        const mark = radecToAzAlt(ra, 8, site.lat, site.lon, site.when);
+        addGridLabel(mark.az, mark.alt, `${ra / 15}h`, "eq");
+      }
+      for (let dec = -60; dec <= 60; dec += 20) {
+        if (dec === 0) continue;
+        const mark = radecToAzAlt(0, dec, site.lat, site.lon, site.when);
+        addGridLabel(mark.az, mark.alt, `δ ${dec > 0 ? "+" : ""}${dec}°`, "eq");
+      }
+      const eq = radecToAzAlt(0, 0, site.lat, site.lon, site.when);
+      addGridLabel(eq.az, eq.alt, "Aequator", "eq");
+      const ncp = radecToAzAlt(0, 90, site.lat, site.lon, site.when);
+      addGridLabel(ncp.az, ncp.alt, "PZN", "eq");
+    }
+
+    function drawEcliptic(site) {
+      const radius = 482;
+      const t = (julianDate(site.when) - 2451545.0) / 36525.0;
+      const pts = [];
+      for (let lon = 0; lon <= 360; lon += 2) {
+        const eq = eclipticToRaDec(lon, 0, t);
+        pts.push(raDecVec(eq.ra, eq.dec, site, radius));
+      }
+      const positions = [];
+      pushPolyline(positions, pts);
+      addLineSet(positions, 0xf59e0b, 0.88);
+      const labels = [
+        [0, "Ekliptik γ"],
+        [90, "λ 90°"],
+        [180, "λ 180°"],
+        [270, "λ 270°"],
+      ];
+      labels.forEach(([lon, text]) => {
+        const eq = eclipticToRaDec(lon, 0, t);
+        const mark = radecToAzAlt(eq.ra, eq.dec, site.lat, site.lon, site.when);
+        addGridLabel(mark.az, mark.alt, text, "ecl");
+      });
+    }
+
+    function drawGrid() {
+      disposeGroup(gridGroup);
+      gridLabelBox.innerHTML = "";
+      gridItems = [];
+      const step = Number(document.getElementById("grid-step").value) === 5 ? 5 : 10;
+      if (document.getElementById("chk-grid").checked) drawHorizontalGrid(step);
+      const site = observerSite();
+      if (site && document.getElementById("chk-eq").checked) drawEquatorialGrid(step, site);
+      if (site && document.getElementById("chk-ecliptic").checked) drawEcliptic(site);
+    }
+
+    function clearHours() {
+      disposeGroup(hourGroup);
+      trackLabelBox.innerHTML = "";
+      hourItems = [];
+    }
+
+    function clearTrack() {
+      disposeGroup(trackGroup);
+      clearHours();
+    }
+
+    function addHourMarks(pts) {
+      clearHours();
+      if (!document.getElementById("chk-hours").checked) return;
+      (pts || []).forEach((item) => {
+        if (!item.when) return;
+        const stamp = new Date(item.when);
+        if (stamp.getMinutes() !== 0 || stamp.getSeconds() !== 0) return;
+        const style = trackStyle(item.light || "night", item.above);
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(item.above ? 1.9 : 1.15, 10, 8),
+          new THREE.MeshBasicMaterial({
+            color: style.color,
+            transparent: true,
+            opacity: item.above ? 0.95 : 0.4,
+            depthWrite: false,
+          }),
+        );
+        mesh.position.copy(azAltToVec(item.az, item.alt, 468));
+        hourGroup.add(mesh);
+        const span = document.createElement("span");
+        span.className = `${item.light || "night"}${item.above ? "" : " below"}`;
+        span.textContent = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        trackLabelBox.appendChild(span);
+        hourItems.push({ el: span, az: item.az, alt: item.alt });
+      });
+    }
+
+    function sameObject(a, b) {
+      if (!a || !b) return false;
+      if (a.id && b.id) return a.id === b.id;
+      if (a.hip && b.hip) return a.hip === b.hip;
+      if (a.ra != null && b.ra != null) {
+        return Math.abs(a.ra - b.ra) < 1e-4 && Math.abs(a.dec - b.dec) < 1e-4;
+      }
+      return false;
+    }
+
+    function objectTitle(item) {
+      if (item.name) return item.name;
+      if (item.id) return item.id;
+      if (item.hip) return `HIP ${item.hip}`;
+      return "Objekt";
+    }
+
+    function showInfo(item) {
+      selected = item;
+      const box = document.getElementById("info");
+      document.getElementById("info-title").textContent = objectTitle(item);
+      const rows = [];
+      const kind = item.kind === "star" ? "Stern" : (item.kind === "moon" ? "Mond" : (item.kind === "sun" ? "Sonne" : (item.kind === "planet" ? "Planet" : (item.kind || "DSO"))));
+      rows.push(["Art", kind]);
+      if (item.mag != null) rows.push(["Groesse", Number(item.mag).toFixed(2) + " mag"]);
+      if (item.con) rows.push(["Sternbild", item.con]);
+      if (item.type) rows.push(["Typ", item.type]);
+      if (item.hip) rows.push(["HIP", String(item.hip)]);
+      if (item.id && item.id !== item.name) rows.push(["Katalog", item.id]);
+      if (item.ra != null) rows.push(["RA", fmtRa(item.ra)]);
+      if (item.dec != null) rows.push(["Dec", fmtDec(item.dec)]);
+      rows.push(["Az", `${item.az.toFixed(1)}°`]);
+      rows.push(["h", fmtAlt(item.alt)]);
+      if (item.phase != null) rows.push(["Phase", `${Math.round(item.phase * 100)}%`]);
+      const dl = document.getElementById("info-dl");
+      dl.innerHTML = "";
+      rows.forEach(([key, value]) => {
+        const dt = document.createElement("dt");
+        dt.textContent = key;
+        const dd = document.createElement("dd");
+        dd.textContent = value;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+      box.style.display = "block";
+      if (document.getElementById("chk-track").checked) {
+        loadTrack();
+      } else {
+        clearTrack();
+        document.getElementById("info-windows").textContent = "";
+        document.getElementById("info-legend").style.display = "none";
+      }
+    }
+
+    function hideInfo() {
+      selected = null;
+      lastTrack = null;
+      document.getElementById("info").style.display = "none";
+      document.getElementById("chk-track").checked = false;
+      document.getElementById("info-windows").textContent = "";
+      document.getElementById("info-legend").style.display = "none";
+      clearTrack();
+    }
+
+    function pickAt(clientX, clientY) {
+      let best = null;
+      let bestD = Infinity;
+      const view = new THREE.Vector3();
+      camera.getWorldDirection(view);
+      pickables.forEach((item) => {
+        const vec = azAltToVec(item.az, item.alt, 1);
+        if (vec.dot(view) < 0.12) return;
+        vec.project(camera);
+        const x = (vec.x * 0.5 + 0.5) * innerWidth;
+        const y = (-vec.y * 0.5 + 0.5) * innerHeight;
+        const d = Math.hypot(clientX - x, clientY - y);
+        const disc = item.mag != null ? starDisc(item.mag).size : 8;
+        const thresh = Math.max(14, disc * 1.6);
+        if (d <= thresh && d < bestD) {
+          bestD = d;
+          best = item;
+        }
+      });
+      return best;
+    }
+
+    function trackStyle(light, above) {
+      if (light === "night") {
+        return above
+          ? { kind: "solid", color: 0x5eead4, radius: 1.45, opacity: 0.95 }
+          : { kind: "solid", color: 0x64748b, radius: 0.4, opacity: 0.32 };
+      }
+      if (light === "twilight") {
+        return above
+          ? { kind: "dash", color: 0xfbbf24, radius: 0.85, opacity: 0.92, on: 2, off: 1 }
+          : { kind: "dash", color: 0x78716c, radius: 0.35, opacity: 0.28, on: 2, off: 1 };
+      }
+      return above
+        ? { kind: "dot", color: 0xfb923c, radius: 0.38, opacity: 0.72, on: 1, off: 2 }
+        : { kind: "dot", color: 0x57534e, radius: 0.28, opacity: 0.22, on: 1, off: 2 };
+    }
+
+    function addTubeRun(vectors, radius, color, opacity) {
+      if (vectors.length < 2) return;
+      const curve = new THREE.CatmullRomCurve3(vectors);
+      const segs = Math.max(6, (vectors.length - 1) * 4);
+      const geo = new THREE.TubeGeometry(curve, segs, radius, 6, false);
+      trackGroup.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false,
+      })));
+    }
+
+    function addStyledRun(points) {
+      const light = points[0].light || "night";
+      const above = points[0].above;
+      const style = trackStyle(light, above);
+      const vectors = points.map((item) => azAltToVec(item.az, item.alt, 470));
+      if (style.kind === "solid") {
+        addTubeRun(vectors, style.radius, style.color, style.opacity);
+        return;
+      }
+      let index = 0;
+      while (index < vectors.length - 1) {
+        const chunk = vectors.slice(index, index + style.on + 1);
+        if (chunk.length >= 2) addTubeRun(chunk, style.radius, style.color, style.opacity);
+        index += style.on + style.off;
+      }
+    }
+
+    function drawTrackPoints(pts) {
+      if (pts.length < 2) return;
+      let run = [pts[0]];
+      for (let i = 1; i < pts.length; i += 1) {
+        const prev = pts[i - 1];
+        const item = pts[i];
+        if (item.light === prev.light && item.above === prev.above) {
+          run.push(item);
+          continue;
+        }
+        run.push(item);
+        addStyledRun(run);
+        run = [item];
+      }
+      if (run.length >= 2) addStyledRun(run);
+    }
+
+    function lightLabel(light) {
+      if (light === "night") return "Nacht";
+      if (light === "twilight") return "Daemmerung";
+      if (light === "day") return "Tag";
+      return light || "";
+    }
+
+    async function loadTrack() {
+      const win = document.getElementById("info-windows");
+      const legend = document.getElementById("info-legend");
+      clearTrack();
+      lastTrack = null;
+      legend.style.display = "none";
+      if (!selected || selected.ra == null || selected.dec == null) {
+        win.textContent = "Keine RA/Dec fuer die Bahn.";
+        return;
+      }
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        win.textContent = "Standort fehlt.";
+        return;
+      }
+      win.textContent = "Lade Bahn …";
+      const query = new URLSearchParams({
+        ra: String(selected.ra),
+        dec: String(selected.dec),
+        lat: String(lat),
+        lon: String(lon),
+        when: currentWhen().toISOString(),
+        stem,
+      });
+      try {
+        const response = await fetch(`/sky-track?${query}`);
+        const data = await response.json();
+        if (data.error) {
+          win.textContent = data.error;
+          return;
+        }
+        lastTrack = data;
+        drawTrackPoints(data.points || []);
+        addHourMarks(data.points || []);
+        legend.style.display = "block";
+        const lines = [];
+        if (data.sunrise || data.sunset) {
+          const rise = data.sunrise ? new Date(data.sunrise).toLocaleTimeString() : "—";
+          const set = data.sunset ? new Date(data.sunset).toLocaleTimeString() : "—";
+          lines.push(`Sonne ${rise}–${set}  (Daemmerung ±${data.twilight_min || 60} min)`);
+        } else {
+          lines.push("Sonne bleibt unter/ueber dem Horizont (keine Auf-/Untergaenge).");
+        }
+        const windows = data.windows || [];
+        if (!windows.length) {
+          lines.push("An diesem Tag nicht ueber dem Horizont / der Maske.");
+        } else {
+          windows.forEach((slot) => {
+            const a = new Date(slot.start);
+            const b = new Date(slot.end);
+            lines.push(
+              `${lightLabel(slot.light)} ${a.toLocaleTimeString()}–${b.toLocaleTimeString()}  max h ${slot.max_alt}°`,
+            );
+          });
+        }
+        win.textContent = lines.join("\n");
+      } catch (_err) {
+        win.textContent = "Bahn konnte nicht geladen werden.";
+      }
+    }
+
+    function applyStarScale(value, redraw) {
+      starScale = Math.max(0.5, Math.min(3, Number(value) || 1));
+      document.getElementById("star-scale").value = String(starScale);
+      document.getElementById("star-scale-val").textContent = starScale.toFixed(1);
+      if (redraw && lastSky) drawOverlay(lastSky);
+    }
+
+    let prefsTimer = 0;
+    function persistPrefs() {
+      const payload = {
+        star_scale: starScale,
+        mag_limit: Number(document.getElementById("mag").value),
+        track_hours: document.getElementById("chk-hours").checked,
+        grid: document.getElementById("chk-grid").checked,
+        grid_step: Number(document.getElementById("grid-step").value) === 5 ? 5 : 10,
+        grid_eq: document.getElementById("chk-eq").checked,
+        grid_ecliptic: document.getElementById("chk-ecliptic").checked,
+      };
+      try {
+        localStorage.setItem("mele-ui-prefs", JSON.stringify(payload));
+      } catch (_err) {
+        /* private mode */
+      }
+      clearTimeout(prefsTimer);
+      prefsTimer = setTimeout(async () => {
+        try {
+          const query = new URLSearchParams({
+            star_scale: String(payload.star_scale),
+            mag_limit: String(payload.mag_limit),
+            track_hours: payload.track_hours ? "1" : "0",
+            grid: payload.grid ? "1" : "0",
+            grid_step: String(payload.grid_step),
+            grid_eq: payload.grid_eq ? "1" : "0",
+            grid_ecliptic: payload.grid_ecliptic ? "1" : "0",
+          });
+          await fetch(`/ui-prefs?${query}`, { method: "POST" });
+        } catch (_err) {
+          /* best-effort */
+        }
+      }, 250);
+    }
+
+    async function restorePrefs() {
+      let data = {};
+      try {
+        const raw = localStorage.getItem("mele-ui-prefs");
+        if (raw) data = { ...data, ...JSON.parse(raw) };
+      } catch (_err) {
+        /* ignore */
+      }
+      try {
+        const response = await fetch("/ui-prefs");
+        const server = await response.json();
+        data = { ...data, ...server };
+      } catch (_err) {
+        /* bleibt lokal */
+      }
+      if (data.star_scale != null) applyStarScale(data.star_scale, false);
+      if (data.mag_limit != null) {
+        magEl.value = String(data.mag_limit);
+        syncMagLabel();
+      }
+      if (data.track_hours != null) {
+        document.getElementById("chk-hours").checked = Boolean(data.track_hours);
+      }
+      if (data.grid != null) {
+        document.getElementById("chk-grid").checked = Boolean(data.grid);
+      }
+      if (data.grid_step != null) {
+        document.getElementById("grid-step").value = Number(data.grid_step) === 5 ? "5" : "10";
+      }
+      if (data.grid_eq != null) {
+        document.getElementById("chk-eq").checked = Boolean(data.grid_eq);
+      }
+      if (data.grid_ecliptic != null) {
+        document.getElementById("chk-ecliptic").checked = Boolean(data.grid_ecliptic);
+      }
+      drawGrid();
+    }
+
+    async function persistSite() {
+      if (!stem) return;
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || latEl.value === "" || !Number.isFinite(lon) || lonEl.value === "") {
+        return;
+      }
+      try {
+        await fetch(
+          `/site-coords?stem=${encodeURIComponent(stem)}&lat=${lat}&lon=${lon}&source=pano`,
+          { method: "POST" },
+        );
+      } catch (_err) {
+        /* Speichern best-effort */
+      }
+    }
+
+    async function restoreSite() {
+      if ((latEl.value !== "" && lonEl.value !== "") || !stem) return;
+      try {
+        const response = await fetch(`/site-coords?stem=${encodeURIComponent(stem)}`);
+        const data = await response.json();
+        if (data.found) {
+          latEl.value = data.latitude_deg;
+          lonEl.value = data.longitude_deg;
+        }
+      } catch (_err) {
+        /* bleibt leer */
+      }
+    }
+
+    async function loadSky() {
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      const status = document.getElementById("sky-status");
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || latEl.value === "" || lonEl.value === "") {
+        status.textContent = "Standort setzen (lat/lon) oder configs/mele.yaml.";
+        clearSky();
+        drawGrid();
+        return;
+      }
+      const query = new URLSearchParams({
+        when: currentWhen().toISOString(),
+        lat: String(lat),
+        lon: String(lon),
+        mag: document.getElementById("mag").value,
+        stars: document.getElementById("chk-stars").checked ? "1" : "0",
+        const: document.getElementById("chk-const").checked ? "1" : "0",
+        messier: document.getElementById("chk-messier").checked ? "1" : "0",
+        ngc: document.getElementById("chk-ngc").checked ? "1" : "0",
+        planets: document.getElementById("chk-planets").checked ? "1" : "0",
+        stem,
+      });
+      status.textContent = "Lade Himmel …";
+      try {
+        const response = await fetch(`/sky-overlay?${query}`);
+        const data = await response.json();
+        drawOverlay(data);
+        drawGrid();
+      } catch (err) {
+        status.textContent = "Overlay fehlgeschlagen.";
+      }
+    }
+
+    function load(kind) {
+      tex = kind;
+      document.querySelectorAll("#bar button").forEach((btn) => {
+        btn.classList.toggle("on", btn.dataset.tex === kind);
+      });
+      const url = urls[kind];
+      if (!url) {
+        setHint(kind === "png"
+          ? "Transparentes PNG fehlt. In der MeLE-App zuerst PNG oder Vollaufloesung exportieren."
+          : labels[kind] + " fehlt.");
+        return;
+      }
+      setHint("Lade " + labels[kind] + " …");
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        url,
+        (texture) => {
+          const old = material.map;
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.minFilter = THREE.LinearFilter;
+          texture.generateMipmaps = false;
+          material.map = texture;
+          material.needsUpdate = true;
+          if (old) old.dispose();
+          setHint(labels[kind] + "  ·  Ziehen: umsehen  ·  Klick: Objekt  ·  Mausrad: Zoom");
+        },
+        undefined,
+        () => {
+          setHint(labels[kind] + " konnte nicht geladen werden"
+            + (kind === "original" ? " (oft zu gross fuer die Grafikkarte — Vorschau nutzen)." : "."));
+        },
+      );
+    }
+
+    function switchTo(kind) {
+      const next = new URL(location.href);
+      next.searchParams.set("tex", kind);
+      if (stem) next.searchParams.set("stem", stem);
+      history.replaceState({}, "", next);
+      load(kind);
+    }
+
+    document.querySelectorAll("#bar button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.disabled) return;
+        switchTo(btn.dataset.tex);
+      });
+    });
+
+    document.getElementById("btn-now").addEventListener("click", () => {
+      document.getElementById("chk-live").checked = false;
+      whenEl.value = toLocalInput(new Date());
+      loadSky();
+    });
+    document.getElementById("btn-photo").addEventListener("click", () => {
+      if (!photoWhen) return;
+      document.getElementById("chk-live").checked = false;
+      whenEl.value = toLocalInput(new Date(photoWhen));
+      loadSky();
+    });
+    document.querySelectorAll("#skybar [data-step]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.getElementById("chk-live").checked = false;
+        const next = new Date(currentWhen().getTime() + Number(btn.dataset.step) * 1000);
+        whenEl.value = toLocalInput(next);
+        loadSky();
+      });
+    });
+    document.getElementById("chk-live").addEventListener("change", (event) => {
+      clearInterval(liveTimer);
+      if (event.target.checked) {
+        whenEl.value = toLocalInput(new Date());
+        loadSky();
+        liveTimer = setInterval(() => {
+          whenEl.value = toLocalInput(new Date());
+          loadSky();
+        }, 15000);
+      }
+    });
+    const magEl = document.getElementById("mag");
+    const magVal = document.getElementById("mag-val");
+    function syncMagLabel() {
+      magVal.textContent = Number(magEl.value).toFixed(1);
+    }
+    magEl.addEventListener("input", syncMagLabel);
+    magEl.addEventListener("change", persistPrefs);
+    syncMagLabel();
+    document.getElementById("star-scale").addEventListener("input", (event) => {
+      applyStarScale(event.target.value, true);
+    });
+    document.getElementById("star-scale").addEventListener("change", persistPrefs);
+    ["chk-grid", "chk-eq", "chk-ecliptic", "grid-step"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", () => {
+        drawGrid();
+        persistPrefs();
+      });
+    });
+    document.getElementById("info-close").addEventListener("click", hideInfo);
+    document.getElementById("chk-track").addEventListener("change", (event) => {
+      if (event.target.checked) loadTrack();
+      else {
+        lastTrack = null;
+        clearTrack();
+        document.getElementById("info-windows").textContent = "";
+        document.getElementById("info-legend").style.display = "none";
+      }
+    });
+    document.getElementById("chk-hours").addEventListener("change", () => {
+      persistPrefs();
+      if (lastTrack) addHourMarks(lastTrack.points || []);
+    });
+    ["chk-stars", "chk-const", "chk-messier", "chk-ngc", "chk-planets", "mag", "when"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", loadSky);
+    });
+    ["lat", "lon"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", () => {
+        persistSite();
+        loadSky();
+      });
+    });
+
+    const canvas = renderer.domElement;
+    canvas.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      dragMoved = 0;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const dx = event.clientX - lastX;
+      const dy = event.clientY - lastY;
+      dragMoved += Math.hypot(dx, dy);
+      lon += dx * 0.12 * (fov / 75);
+      lat -= dy * 0.12 * (fov / 75);
+      lastX = event.clientX;
+      lastY = event.clientY;
+      applyLook();
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      dragging = false;
+      if (dragMoved < 6) {
+        const hit = pickAt(event.clientX, event.clientY);
+        if (hit) showInfo(hit);
+      }
+    });
+    canvas.addEventListener("pointercancel", () => { dragging = false; });
+    canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      setFov(fov + Math.sign(event.deltaY) * 5);
+    }, { passive: false });
+    addEventListener("keydown", (event) => {
+      if (event.key === "1" && urls.preview) switchTo("preview");
+      if (event.key === "2" && urls.png) switchTo("png");
+      if (event.key === "3" && urls.original) switchTo("original");
+      if (event.key === "+" || event.key === "=") setFov(fov - 5);
+      if (event.key === "-" || event.key === "_") setFov(fov + 5);
+    });
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    applyLook();
+    load(urls[tex] ? tex : (urls.preview ? "preview" : "original"));
+    restorePrefs().then(restoreSite).then(loadSky);
+    function tick() {
+      requestAnimationFrame(tick);
+      updateLabels();
+      renderer.render(scene, camera);
+    }
+    tick();
+  </script>
+</body>
+</html>

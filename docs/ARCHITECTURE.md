@@ -13,7 +13,8 @@ Gruppen wie "Burst 17 rund um C2" - das macht `core/`.
 ```
 app_astro/     Foto-Katalog, NiceGUI, Port 8081
 core/          Scan, EXIF, Burst, Eclipse, SQLite (kein NiceGUI)
-mele/          Astro-Computer (MeLE): Horizont, spaeter Sichtbarkeit
+mele/          Astro-Computer: Horizont, spaeter Sichtbarkeit
+app_mele/      NiceGUI dafuer, Port 8082 (nur LAN/localhost)
 N:\Astro       Originale: niemals umbenennen oder verschieben
 ```
 

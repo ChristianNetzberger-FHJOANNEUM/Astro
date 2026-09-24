@@ -41,12 +41,27 @@ Browser: http://localhost:8081
 
 ## MeLE Astro-Computer
 
-Separates Paket mele/ fuer den Garten-Mini-PC (Horizont, spaeter Sichtbarkeit).
+Separates Paket mele/ plus NiceGUI pp_mele (Port 8082).
 Nicht Teil der Foto-GUI.
 
 `powershell
-python -m mele horizon media\CAM_20260923151419_0942_D.JPG
+python -m app_mele
 `
 
-Ergebnis unter data/horizon/ (CSV, JSON, Overlay). Norden mit --north-x setzen.
+Browser: http://127.0.0.1:8082
 
+- Links: Panoramas aus media/
+- Mitte: Vorschau, rote Horizontlinie, gruener Norden
+- Klick ins Foto setzt die Nordrichtung
+- Rechts: Erkennung, Speichern, h(Az) alle 10 deg
+- 360-Ansicht: Klick auf Sterne (Eigenschaften + Bahn), Anzeige-Prefs bleiben gespeichert
+- Wetter: GeoSphere NWP (Bewoelkung/Wind/Feuchte, ~60 h), Cache in data/weather/
+
+CLI ohne GUI:
+
+`powershell
+python -m mele horizon media\CAM_20260923151419_0942_D.JPG
+python -m mele.catalog import
+`
+
+Ergebnis unter data/horizon/. Sternkatalog (einmal, braucht Internet) landet in data/catalogs/sky.sqlite und laeuft danach offline.

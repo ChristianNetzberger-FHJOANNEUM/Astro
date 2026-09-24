@@ -1,0 +1,13 @@
+ui_port: 8082
+media_dir: media
+# Handyfotos mit GPS-EXIF, getrennt von den 360-Panos in media/.
+gps_dir: media/GPS-locations
+horizon_dir: data/horizon
+preview_width: 2000
+# Beobachterstandort fuer RA/Dec (Ost positiv). Osmo-GPS ist ungueltig.
+# Handyfoto mit Ortung nach media/GPS-locations legen, in der UI waehlen.
+# Zeitzone fuer naive EXIF-Aufnahmezeit (sonst lokale PC-Zeit).
+latitude_deg:
+longitude_deg:
+timezone: Europe/Vienna
+catalog_dir: data/catalogs

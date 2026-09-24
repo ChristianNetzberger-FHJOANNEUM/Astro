@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE Wetter</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #0b1220; color: #e2e8f0;
+                 font-family: sans-serif; }
+    #bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center;
+           flex-wrap: wrap; padding: 10px 14px; background: rgba(15,23,42,.94); }
+    #bar a, #bar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+           padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px; }
+    #bar button:disabled { opacity: .4; cursor: wait; }
+    main { padding: 16px 18px 40px; max-width: 1100px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .meta, .attr { font-size: 13px; opacity: .85; }
+    .attr { margin-top: 28px; }
+    #summary { font-size: 18px; margin: 14px 0 8px; }
+    #status { font-size: 13px; opacity: .8; min-height: 1.3em; }
+    .chart-block { margin: 22px 0; }
+    .chart-block h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
+    .chart { display: flex; align-items: flex-end; gap: 3px; height: 140px;
+             overflow-x: auto; padding-bottom: 4px; }
+    .col { flex: 0 0 14px; display: flex; flex-direction: column; align-items: center;
+           height: 100%; justify-content: flex-end; }
+    .col .bar { width: 11px; border-radius: 2px 2px 0 0; min-height: 2px; }
+    .col.night .bar { outline: 1px solid rgba(226,232,240,.18); }
+    .col span { font-size: 9px; opacity: .7; margin-top: 3px; writing-mode: vertical-rl;
+                transform: rotate(180deg); height: 28px; }
+    .cloud { background: #94a3b8; }
+    .wind { background: #38bdf8; }
+    .hum { background: #34d399; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #1e293b; }
+    th { opacity: .7; font-weight: 600; }
+    tr.night td { background: rgba(15,23,42,.55); }
+    .warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <a href="/">Zurueck</a>
+    <button id="btn-refresh" type="button">Aktualisieren</button>
+    <span id="hint">GeoSphere NWP v2, 1 km, ~60 h</span>
+  </div>
+  <main>
+    <h1>Beobachtungswetter</h1>
+    <p class="meta" id="site">Standort —</p>
+    <p id="summary">Lade …</p>
+    <p id="status"></p>
+    <div class="chart-block">
+      <h2>Bewoelkung (%)</h2>
+      <div class="chart" id="chart-cloud"></div>
+    </div>
+    <div class="chart-block">
+      <h2>Wind (m/s)</h2>
+      <div class="chart" id="chart-wind"></div>
+    </div>
+    <div class="chart-block">
+      <h2>Feuchte (%)</h2>
+      <div class="chart" id="chart-hum"></div>
+    </div>
+    <div class="chart-block">
+      <h2>Stunden</h2>
+      <table>
+        <thead>
+          <tr><th>Zeit</th><th>Wolken</th><th>Wind</th><th>Feuchte</th><th>Temp</th><th>Regen</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="attr" id="attr"></p>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const lat = params.get("lat") || "";
+    const lon = params.get("lon") || "";
+    const siteEl = document.getElementById("site");
+    const sumEl = document.getElementById("summary");
+    const statusEl = document.getElementById("status");
+    const btn = document.getElementById("btn-refresh");
+
+    function fmtTime(iso) {
+      const date = new Date(iso);
+      return date.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function isNight(iso) {
+      const hour = new Date(iso).getHours();
+      return hour >= 19 || hour < 7;
+    }
+
+    function barChart(id, hours, key, maxHint, cls) {
+      const box = document.getElementById(id);
+      box.innerHTML = "";
+      const values = hours.map((item) => Number(item[key])).filter((value) => Number.isFinite(value));
+      const max = Math.max(maxHint, ...values, 1);
+      hours.forEach((item) => {
+        const value = Number(item[key]);
+        const col = document.createElement("div");
+        col.className = "col" + (isNight(item.when) ? " night" : "");
+        const bar = document.createElement("div");
+        bar.className = "bar " + cls;
+        const pct = Number.isFinite(value) ? Math.max(2, (value / max) * 100) : 2;
+        bar.style.height = `${Math.min(100, pct)}%`;
+        bar.title = `${fmtTime(item.when)}  ${Number.isFinite(value) ? value.toFixed(1) : "—"}`;
+        const label = document.createElement("span");
+        label.textContent = new Date(item.when).getHours();
+        col.appendChild(bar);
+        col.appendChild(label);
+        box.appendChild(col);
+      });
+    }
+
+    function fillTable(hours) {
+      const body = document.getElementById("rows");
+      body.innerHTML = "";
+      hours.forEach((item) => {
+        const tr = document.createElement("tr");
+        if (isNight(item.when)) tr.className = "night";
+        const cells = [
+          fmtTime(item.when),
+          item.cloud_pct == null ? "—" : `${item.cloud_pct.toFixed(0)} %`,
+          item.wind_ms == null ? "—" : `${item.wind_ms.toFixed(1)} m/s`,
+          item.humidity_pct == null ? "—" : `${item.humidity_pct.toFixed(0)} %`,
+          item.temp_c == null ? "—" : `${item.temp_c.toFixed(1)} °C`,
+          item.precip_mm == null ? "—" : `${item.precip_mm.toFixed(1)} mm`,
+        ];
+        cells.forEach((text) => {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+    }
+
+    async function load(refresh) {
+      if (!lat || !lon) {
+        sumEl.textContent = "Standort fehlt.";
+        return;
+      }
+      siteEl.textContent = `Standort  ${Number(lat).toFixed(4)}°, ${Number(lon).toFixed(4)}°`;
+      btn.disabled = true;
+      statusEl.textContent = refresh ? "Frage GeoSphere …" : "Lade Cache …";
+      try {
+        const query = new URLSearchParams({ lat, lon, refresh: refresh ? "1" : "0" });
+        const response = await fetch(`/weather-data?${query}`);
+        const data = await response.json();
+        if (data.error) {
+          sumEl.textContent = data.error;
+          statusEl.textContent = "";
+          return;
+        }
+        sumEl.textContent = (data.summary && data.summary.text) || "—";
+        const notes = [];
+        if (data.offline) notes.push("ohne Netz — letzter Cache");
+        if (data.stale) notes.push("aelter als 3 h");
+        if (data.fetched_at) notes.push(`Abruf ${new Date(data.fetched_at).toLocaleString()}`);
+        if (data.reference_time) notes.push(`Modell ${new Date(data.reference_time).toLocaleString()}`);
+        statusEl.textContent = notes.join("  ·  ");
+        statusEl.className = data.offline || data.stale ? "warn" : "";
+        const hours = data.hours || [];
+        barChart("chart-cloud", hours, "cloud_pct", 100, "cloud");
+        barChart("chart-wind", hours, "wind_ms", 8, "wind");
+        barChart("chart-hum", hours, "humidity_pct", 100, "hum");
+        fillTable(hours);
+        document.getElementById("attr").textContent = data.attribution || "";
+      } catch (_err) {
+        sumEl.textContent = "Wetter konnte nicht geladen werden.";
+        statusEl.textContent = "";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", () => load(true));
+    load(false);
+  </script>
+</body>
+</html>
