@@ -11,3 +11,5 @@ latitude_deg:
 longitude_deg:
 timezone: Europe/Vienna
 catalog_dir: data/catalogs
+# NINA Advanced API (READ ONLY in Phase 1). Default lokal auf dem MeLE-PC.
+nina_base_url: http://localhost:1888/v2/api

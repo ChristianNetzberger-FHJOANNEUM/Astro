@@ -25,6 +25,31 @@
     #info { position: absolute; z-index: 3; right: 12px; top: 96px; width: 280px;
             background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
             font-size: 13px; display: none; }
+    #nina { position: absolute; z-index: 3; right: 12px; bottom: 12px; width: 280px;
+            background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
+            font-size: 12px; line-height: 1.45; font-variant-numeric: tabular-nums; }
+    #nina strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    #nina .ok { color: #5eead4; }
+    #nina .warn { color: #fbbf24; }
+    #nina .bad { color: #fb7185; }
+    #nina dl { margin: 0; display: grid; grid-template-columns: 4.2em 1fr; gap: 2px 8px; }
+    #nina dt { opacity: .7; }
+    #nina dd { margin: 0; }
+    #nina .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    #nina button, #info .goto-row button {
+      color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+      padding: 7px 10px; cursor: pointer; font-size: 13px; }
+    #nina button.stop { background: #be123c; font-weight: 700; }
+    #nina button:disabled, #info .goto-row button:disabled { opacity: .38; cursor: not-allowed; }
+    #info .goto-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    #goto-confirm { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
+    #goto-confirm p { margin: 0 0 8px; white-space: pre-wrap; font-size: 12px; }
+    #labels span.mount { color: #f472b6; font-weight: 700; }
+    #labels span.mount-trail { color: #f9a8d4; font-size: 11px; font-weight: 500; opacity: .85; }
+    #labels span.mount-start { color: #38bdf8; font-weight: 700; }
+    #labels span.mount-end { color: #fde047; font-weight: 700; }
+    #labels span.target { color: #a3e635; font-weight: 700; }
+    #nina label.debug { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
     #info h3 { margin: 0 0 8px; font-size: 15px; }
     #info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
     #info dt { opacity: .7; }
@@ -161,6 +186,26 @@
       <span class="sw day">···</span> Tag (duenn, gepunktet)
     </p>
     <p id="info-windows"></p>
+    <div class="goto-row">
+      <button id="btn-goto" type="button" disabled>GoTo</button>
+    </div>
+    <div id="goto-confirm">
+      <p id="goto-summary"></p>
+      <div class="goto-row">
+        <button id="btn-goto-yes" type="button">GoTo</button>
+        <button id="btn-goto-no" type="button">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+  <div id="nina">
+    <strong id="nina-title">NINA</strong>
+    <dl id="nina-dl"></dl>
+    <p id="nina-goto-status" style="margin:8px 0 0;white-space:pre-wrap;"></p>
+    <label class="debug"><input id="chk-mount-trail" type="checkbox"> Mount-Spur (Debug)</label>
+    <div class="row">
+      <button id="btn-slew-stop" class="stop" type="button" disabled>STOP</button>
+      <button id="btn-mount-trail-clear" type="button" disabled>Spur loeschen</button>
+    </div>
   </div>
   <div id="labels"></div>
   <div id="track-labels"></div>
@@ -244,6 +289,10 @@
     scene.add(calibGroup);
     const horizonGroup = new THREE.Group();
     scene.add(horizonGroup);
+    const mountGroup = new THREE.Group();
+    scene.add(mountGroup);
+    const targetGroup = new THREE.Group();
+    scene.add(targetGroup);
     const raycaster = new THREE.Raycaster();
     const labelBox = document.getElementById("labels");
     const trackLabelBox = document.getElementById("track-labels");
@@ -273,6 +322,172 @@
     let lastX = 0;
     let lastY = 0;
     let liveTimer = 0;
+    let ninaTimer = 0;
+    let ninaBusy = false;
+    let mountLabelItem = null;
+    let mountTrailLabels = [];
+    let mountTrail = []; // {az, alt, kind, label}
+    const MOUNT_TRAIL_MAX = 80;
+    let targetLabelItem = null;
+    let lastNinaStatus = null;
+    let gotoPhase = "idle"; // idle | confirming | commanded | slewing | done | stopped | error
+    let gotoTarget = null;
+    let sawSlewing = false;
+    let stopArmed = false;
+    let gotoDiag = null; // Phase 2b Diagnosesession
+
+    function mountDiagSample(kind = "sample") {
+      const mount = lastNinaStatus && lastNinaStatus.mount;
+      if (!mount) return null;
+      return {
+        kind,
+        t: new Date().toISOString(),
+        az: mount.azimuth_deg,
+        alt: mount.altitude_deg,
+        ra_hours: mount.right_ascension_hours,
+        dec_deg: mount.declination_deg,
+        pier: mount.side_of_pier || "",
+        slewing: !!mount.slewing,
+      };
+    }
+
+    function pushDiagTrail(kind = "sample") {
+      if (!gotoDiag) return;
+      const sample = mountDiagSample(kind);
+      if (!sample) return;
+      const last = gotoDiag.trail[gotoDiag.trail.length - 1];
+      if (
+        last
+        && last.kind === kind
+        && kind === "sample"
+        && Math.abs((last.az ?? 0) - (sample.az ?? 0)) < 0.05
+        && Math.abs((last.alt ?? 0) - (sample.alt ?? 0)) < 0.05
+      ) {
+        return;
+      }
+      gotoDiag.trail.push(sample);
+    }
+
+    function beginGotoDiag(selectedItem, name) {
+      const pre = mountDiagSample("pre");
+      gotoDiag = {
+        request_id: `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 8)}`,
+        outcome: "started",
+        object: {
+          name,
+          type: selectedItem.kind === "star"
+            ? "star"
+            : (selectedItem.kind === "messier"
+              ? "messier"
+              : (selectedItem.kind || "object")),
+          source: selectedItem.kind === "messier" || selectedItem.kind === "ngc"
+            ? "catalog.dso"
+            : (selectedItem.kind === "star"
+              ? "catalog.stars"
+              : (selectedItem.kind === "planet" || selectedItem.kind === "moon" || selectedItem.kind === "sun"
+                ? "ephemeris"
+                : "viewer")),
+          kind: selectedItem.kind || "",
+          id: selectedItem.id || selectedItem.hip || "",
+          ra_deg: selectedItem.ra,
+          dec_deg: selectedItem.dec,
+          az_deg: selectedItem.az,
+          alt_deg: selectedItem.alt,
+          viewer_when: currentWhen().toISOString(),
+        },
+        request: {
+          endpoint: "/equipment/mount/slew",
+          method: "GET",
+          ra_deg: Number(selectedItem.ra),
+          dec_deg: Number(selectedItem.dec),
+          waitForResult: false,
+          center: false,
+          rotate: false,
+          epoch: "J2000",
+        },
+        pre_slew: pre && {
+          ra_hours: pre.ra_hours,
+          ra_string: lastNinaStatus.mount.right_ascension_string,
+          dec_deg: pre.dec_deg,
+          dec_string: lastNinaStatus.mount.declination_string,
+          az_deg: pre.az,
+          alt_deg: pre.alt,
+          pier: pre.pier,
+          tracking_enabled: lastNinaStatus.mount.tracking_enabled,
+          tracking_mode: lastNinaStatus.mount.tracking_mode,
+          slewing: pre.slewing,
+        },
+        api_response: null,
+        slew: {
+          start: new Date().toISOString(),
+          first_slewing_true: null,
+          end: null,
+          duration_s: null,
+        },
+        post_slew: null,
+        trail: pre ? [pre] : [],
+        error: "none",
+      };
+    }
+
+    async function finalizeGotoDiag(outcome, errorText = "none") {
+      if (!gotoDiag) return null;
+      const mount = lastNinaStatus && lastNinaStatus.mount;
+      gotoDiag.outcome = outcome;
+      gotoDiag.error = errorText || "none";
+      gotoDiag.slew.end = new Date().toISOString();
+      if (gotoDiag.slew.start) {
+        gotoDiag.slew.duration_s = Math.max(
+          0,
+          (Date.parse(gotoDiag.slew.end) - Date.parse(gotoDiag.slew.start)) / 1000,
+        );
+      }
+      if (mount) {
+        pushDiagTrail(outcome === "stopped" ? "stop" : "end");
+        gotoDiag.post_slew = {
+          ra_hours: mount.right_ascension_hours,
+          ra_string: mount.right_ascension_string,
+          dec_deg: mount.declination_deg,
+          dec_string: mount.declination_string,
+          az_deg: mount.azimuth_deg,
+          alt_deg: mount.altitude_deg,
+          pier: mount.side_of_pier || "",
+          slewing: !!mount.slewing,
+        };
+      }
+      const payload = gotoDiag;
+      gotoDiag = null;
+      try {
+        const response = await fetch("/nina/goto-log", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        return data;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function formatDiagStatus(base, metrics) {
+      if (!metrics) return base;
+      const parts = [base];
+      if (metrics.sep_deg != null && Number.isFinite(Number(metrics.sep_deg))) {
+        parts.push(`Soll/Ist-Abweichung: ${Number(metrics.sep_deg).toFixed(2)}°`);
+      }
+      if (metrics.duration_s != null && Number.isFinite(Number(metrics.duration_s))) {
+        parts.push(`Dauer: ${Number(metrics.duration_s).toFixed(1)} s`);
+      }
+      if (metrics.trail_samples != null) {
+        parts.push(`${metrics.trail_samples} Telemetriepunkte`);
+      }
+      const pier = metrics.pier_sequence || [];
+      if (pier.length) {
+        parts.push(`Pier: ${pier.join(" -> ")}`);
+      }
+      return parts.join("\n");
+    }
 
     function applyLook() {
       lat = Math.max(-85, Math.min(85, lat));
@@ -608,6 +823,9 @@
       projectLabels(hourItems);
       projectLabels(gridItems);
       projectLabels(guideItems);
+      if (mountLabelItem) projectLabels([mountLabelItem]);
+      if (mountTrailLabels.length) projectLabels(mountTrailLabels);
+      if (targetLabelItem) projectLabels([targetLabelItem]);
     }
 
     function fmtRa(deg) {
@@ -865,6 +1083,8 @@
         dl.appendChild(dd);
       });
       box.style.display = "block";
+      hideGotoConfirm();
+      syncGotoButton();
       if (document.getElementById("chk-track").checked) {
         loadTrack();
       } else {
@@ -881,6 +1101,8 @@
       document.getElementById("chk-track").checked = false;
       document.getElementById("info-windows").textContent = "";
       document.getElementById("info-legend").style.display = "none";
+      hideGotoConfirm();
+      syncGotoButton();
       clearTrack();
     }
 
@@ -1848,9 +2070,559 @@
       }
     });
 
+    function fmtMountRa(hours) {
+      if (hours == null || !Number.isFinite(hours)) return "—";
+      const wrapped = ((hours % 24) + 24) % 24;
+      const h = Math.floor(wrapped);
+      const minutes = (wrapped - h) * 60;
+      const m = Math.floor(minutes);
+      const s = Math.round((minutes - m) * 60);
+      const ss = s === 60 ? 0 : s;
+      const mm = s === 60 ? m + 1 : m;
+      const hh = mm === 60 ? h + 1 : h;
+      return `${String(hh % 24).padStart(2, "0")}:${String(mm % 60).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+    }
+
+    function fmtMountDec(deg) {
+      if (deg == null || !Number.isFinite(deg)) return "—";
+      const sign = deg >= 0 ? "+" : "-";
+      const value = Math.abs(deg);
+      const d = Math.floor(value);
+      const minutes = (value - d) * 60;
+      const m = Math.floor(minutes);
+      const s = Math.round((minutes - m) * 60);
+      const ss = s === 60 ? 0 : s;
+      const mm = s === 60 ? m + 1 : m;
+      const dd = mm === 60 ? d + 1 : d;
+      return `${sign}${dd}°${String(mm % 60).padStart(2, "0")}'${String(ss).padStart(2, "0")}"`;
+    }
+
+    function mountTrailEnabled() {
+      return document.getElementById("chk-mount-trail").checked;
+    }
+
+    function syncTrailClearButton() {
+      document.getElementById("btn-mount-trail-clear").disabled = mountTrail.length === 0;
+    }
+
+    function clearMountTrailLabels() {
+      mountTrailLabels.forEach((item) => item.el.remove());
+      mountTrailLabels = [];
+    }
+
+    function clearMountMarker() {
+      disposeGroup(mountGroup);
+      if (mountLabelItem) {
+        mountLabelItem.el.remove();
+        mountLabelItem = null;
+      }
+      clearMountTrailLabels();
+    }
+
+    function clearMountTrail() {
+      mountTrail = [];
+      redrawMountMarkers();
+      syncTrailClearButton();
+    }
+
+    function clearTargetMarker() {
+      disposeGroup(targetGroup);
+      if (targetLabelItem) {
+        targetLabelItem.el.remove();
+        targetLabelItem = null;
+      }
+    }
+
+    function addMountTrailPoint(az, alt, kind = "sample") {
+      if (az == null || alt == null || !Number.isFinite(az) || !Number.isFinite(alt)) return;
+      const last = mountTrail[mountTrail.length - 1];
+      const minStep = (gotoPhase === "slewing" || gotoPhase === "commanded") ? 0.05 : 0.25;
+      if (last && last.kind === kind && kind === "sample") {
+        const dAz = Math.abs(((az - last.az + 540) % 360) - 180);
+        const dAlt = Math.abs(alt - last.alt);
+        if (dAz < minStep && dAlt < minStep) return;
+      }
+      const index = mountTrail.filter((p) => p.kind === "sample").length + 1;
+      let label = `${index}`;
+      if (kind === "start") label = "Start";
+      if (kind === "end") label = "Ende";
+      if (kind === "stop") label = "STOP";
+      mountTrail.push({
+        az,
+        alt,
+        kind,
+        label: `${label} ${az.toFixed(1)}/${alt.toFixed(1)}`,
+      });
+      if (mountTrail.length > MOUNT_TRAIL_MAX) {
+        mountTrail = mountTrail.slice(-MOUNT_TRAIL_MAX);
+      }
+      syncTrailClearButton();
+    }
+
+    function paintMountPoint(az, alt, {
+      radius = 8,
+      color = 0xf472b6,
+      ring = false,
+      ringColor = 0xf9a8d4,
+      opacity = 0.95,
+      className = "mount",
+      text = "GTi",
+      depth = 465,
+      withLabel = true,
+    } = {}) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 14, 10),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      mesh.position.copy(azAltToVec(az, alt, depth));
+      mesh.renderOrder = 12;
+      mountGroup.add(mesh);
+      if (ring) {
+        const ringMesh = new THREE.Mesh(
+          new THREE.RingGeometry(radius + 2, radius + 6, 32),
+          new THREE.MeshBasicMaterial({
+            color: ringColor,
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide,
+            depthTest: false,
+            depthWrite: false,
+          }),
+        );
+        ringMesh.position.copy(azAltToVec(az, alt, depth - 1));
+        ringMesh.lookAt(0, 0, 0);
+        ringMesh.renderOrder = 12;
+        mountGroup.add(ringMesh);
+      }
+      if (!withLabel) return null;
+      const span = document.createElement("span");
+      span.className = className;
+      span.textContent = text;
+      labelBox.appendChild(span);
+      return { el: span, az, alt };
+    }
+
+    function interpolateTrailSegment(a, b, steps = 8) {
+      const points = [];
+      let dAz = ((b.az - a.az + 540) % 360) - 180;
+      const dAlt = b.alt - a.alt;
+      for (let step = 0; step <= steps; step += 1) {
+        const t = step / steps;
+        points.push({
+          az: (a.az + dAz * t + 360) % 360,
+          alt: a.alt + dAlt * t,
+        });
+      }
+      return points;
+    }
+
+    function drawMountTrailLine(current = null) {
+      if (!mountTrailEnabled()) return;
+      const path = mountTrail.map((p) => ({ az: p.az, alt: p.alt }));
+      if (current && Number.isFinite(current.az) && Number.isFinite(current.alt)) {
+        const last = path[path.length - 1];
+        if (!last || Math.abs(last.az - current.az) > 1e-3 || Math.abs(last.alt - current.alt) > 1e-3) {
+          path.push({ az: current.az, alt: current.alt });
+        }
+      }
+      if (path.length < 2) return;
+      const vectors = [];
+      for (let index = 0; index < path.length - 1; index += 1) {
+        const segment = interpolateTrailSegment(path[index], path[index + 1], 10);
+        segment.forEach((point, segIndex) => {
+          if (index > 0 && segIndex === 0) return;
+          vectors.push(azAltToVec(point.az, point.alt, 461));
+        });
+      }
+      if (vectors.length < 2) return;
+      const geo = new THREE.BufferGeometry().setFromPoints(vectors);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+        linewidth: 2,
+      }));
+      line.renderOrder = 13;
+      mountGroup.add(line);
+    }
+
+    function redrawMountMarkers(current = null) {
+      clearMountMarker();
+      if (mountTrailEnabled()) {
+        drawMountTrailLine(current);
+        mountTrail.forEach((point) => {
+          let color = 0xf9a8d4;
+          let className = "mount-trail";
+          let radius = 3.5;
+          let withLabel = false;
+          if (point.kind === "start") {
+            color = 0x38bdf8;
+            className = "mount-start";
+            radius = 6;
+            withLabel = true;
+          } else if (point.kind === "end") {
+            color = 0xfde047;
+            className = "mount-end";
+            radius = 6;
+            withLabel = true;
+          } else if (point.kind === "stop") {
+            color = 0xfb7185;
+            className = "mount-end";
+            radius = 6;
+            withLabel = true;
+          }
+          const item = paintMountPoint(point.az, point.alt, {
+            radius,
+            color,
+            opacity: point.kind === "sample" ? 0.7 : 0.95,
+            className,
+            text: point.label,
+            depth: 463,
+            ring: point.kind === "start" || point.kind === "end" || point.kind === "stop",
+            withLabel,
+          });
+          if (item) mountTrailLabels.push(item);
+        });
+      }
+      if (current && Number.isFinite(current.az) && Number.isFinite(current.alt)) {
+        mountLabelItem = paintMountPoint(current.az, current.alt, {
+          radius: 8,
+          color: 0xf472b6,
+          ring: true,
+          text: mountTrailEnabled() ? `GTi ${current.az.toFixed(1)}/${current.alt.toFixed(1)}` : "GTi",
+          depth: 465,
+        });
+      }
+    }
+
+    function drawMountMarker(az, alt, kind = "sample") {
+      if (az == null || alt == null || !Number.isFinite(az) || !Number.isFinite(alt)) {
+        if (!mountTrailEnabled()) clearMountMarker();
+        return;
+      }
+      if (mountTrailEnabled()) {
+        addMountTrailPoint(az, alt, kind);
+        redrawMountMarkers({ az, alt });
+        return;
+      }
+      redrawMountMarkers({ az, alt });
+    }
+
+    function drawTargetMarker(az, alt, name) {
+      clearTargetMarker();
+      if (az == null || alt == null || !Number.isFinite(az) || !Number.isFinite(alt)) return;
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(7, 12, 10),
+        new THREE.MeshBasicMaterial({
+          color: 0xa3e635,
+          transparent: true,
+          opacity: 0.95,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      mesh.position.copy(azAltToVec(az, alt, 462));
+      mesh.renderOrder = 11;
+      targetGroup.add(mesh);
+      const span = document.createElement("span");
+      span.className = "target";
+      span.textContent = name ? `Ziel ${name}` : "Ziel";
+      labelBox.appendChild(span);
+      targetLabelItem = { el: span, az, alt };
+    }
+
+    function mountConnected() {
+      return !!(lastNinaStatus && lastNinaStatus.api_online
+        && lastNinaStatus.mount && lastNinaStatus.mount.connected);
+    }
+
+    function syncGotoButton() {
+      const btn = document.getElementById("btn-goto");
+      const ok = selected
+        && selected.ra != null && Number.isFinite(selected.ra)
+        && selected.dec != null && Number.isFinite(selected.dec)
+        && mountConnected()
+        && gotoPhase !== "confirming"
+        && gotoPhase !== "commanded"
+        && gotoPhase !== "slewing";
+      btn.disabled = !ok;
+    }
+
+    function syncStopButton() {
+      const btn = document.getElementById("btn-slew-stop");
+      const slewing = !!(lastNinaStatus && lastNinaStatus.mount && lastNinaStatus.mount.slewing);
+      btn.disabled = !(stopArmed || slewing || gotoPhase === "commanded" || gotoPhase === "slewing");
+    }
+
+    function setGotoStatus(text) {
+      document.getElementById("nina-goto-status").textContent = text || "";
+    }
+
+    function hideGotoConfirm() {
+      document.getElementById("goto-confirm").style.display = "none";
+      if (gotoPhase === "confirming") gotoPhase = "idle";
+      syncGotoButton();
+    }
+
+    function showGotoConfirm() {
+      if (!selected || selected.ra == null || selected.dec == null) return;
+      if (!mountConnected()) {
+        setGotoStatus("GoTo gesperrt: Mount disconnected / NINA offline.");
+        return;
+      }
+      gotoPhase = "confirming";
+      const name = objectTitle(selected);
+      document.getElementById("goto-summary").textContent =
+        `${name}\nRA  ${fmtRa(selected.ra)}\nDec ${fmtDec(selected.dec)}\n`
+        + `(API: ra=${Number(selected.ra).toFixed(4)}°  dec=${Number(selected.dec).toFixed(4)}°  J2000)`;
+      document.getElementById("goto-confirm").style.display = "block";
+      syncGotoButton();
+    }
+
+    async function executeGoto() {
+      if (!selected || selected.ra == null || selected.dec == null) return;
+      if (!mountConnected()) {
+        setGotoStatus("GoTo abgebrochen: Mount nicht verbunden.");
+        hideGotoConfirm();
+        return;
+      }
+      const ra = Number(selected.ra);
+      const dec = Number(selected.dec);
+      const name = objectTitle(selected);
+      const az = selected.az;
+      const alt = selected.alt;
+      hideGotoConfirm();
+      gotoPhase = "commanded";
+      sawSlewing = false;
+      stopArmed = true;
+      gotoTarget = { name, ra, dec, az, alt };
+      beginGotoDiag(selected, name);
+      drawTargetMarker(az, alt, name);
+      const mount = lastNinaStatus && lastNinaStatus.mount;
+      if (mountTrailEnabled() && mount) {
+        drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "start");
+      }
+      const viewerWhen = currentWhen();
+      setGotoStatus(
+        `GoTo gestartet: ${name} …\n`
+        + `Viewer-Zeit: ${viewerWhen.toLocaleString()} (Ziel-Az/h daran)\n`
+        + `GTi-Marker: Live-Az/h von NINA (Jetzt).`,
+      );
+      syncGotoButton();
+      syncStopButton();
+      try {
+        const query = new URLSearchParams({
+          ra: String(ra),
+          dec: String(dec),
+        });
+        const response = await fetch(`/nina/mount/slew?${query}`, { method: "POST" });
+        const data = await response.json();
+        if (gotoDiag) {
+          gotoDiag.api_response = {
+            status_code: response.status,
+            ok: !!data.ok,
+            message: data.message || "",
+            error: data.error || "",
+            request: data.request || null,
+          };
+        }
+        if (!data.ok) {
+          gotoPhase = "error";
+          stopArmed = false;
+          const err = data.error || data.message || "unbekannt";
+          const saved = await finalizeGotoDiag("api_error", err);
+          setGotoStatus(formatDiagStatus(`GoTo fehlgeschlagen: ${err}`, saved && saved.metrics));
+          syncGotoButton();
+          syncStopButton();
+          return;
+        }
+        setGotoStatus(
+          `Slew gestartet: ${name}\n${data.message || ""}\n`
+          + `Viewer-Zeit ${viewerWhen.toLocaleString()} vs. Live-GTi — Spur an fuer Debug.`,
+        );
+      } catch (err) {
+        gotoPhase = "error";
+        stopArmed = false;
+        const msg = err.message || String(err);
+        if (gotoDiag) {
+          gotoDiag.api_response = { status_code: null, ok: false, message: "", error: msg };
+        }
+        const saved = await finalizeGotoDiag("network_error", msg);
+        setGotoStatus(formatDiagStatus(`GoTo fehlgeschlagen: ${msg}`, saved && saved.metrics));
+        syncGotoButton();
+        syncStopButton();
+      }
+    }
+
+    async function executeStop() {
+      // Unabhaengig vom Polling / Slew-Request.
+      stopArmed = true;
+      syncStopButton();
+      setGotoStatus("STOP wird gesendet …");
+      try {
+        const response = await fetch("/nina/mount/slew/stop", { method: "POST" });
+        const data = await response.json();
+        if (!data.ok) {
+          setGotoStatus(`STOP fehlgeschlagen: ${data.error || data.message || "unbekannt"}`);
+          return;
+        }
+        gotoPhase = "stopped";
+        const mount = lastNinaStatus && lastNinaStatus.mount;
+        if (mountTrailEnabled() && mount) {
+          drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "stop");
+        }
+        const saved = await finalizeGotoDiag("stopped", "none");
+        setGotoStatus(formatDiagStatus(`STOP: ${data.message || "Stopped slew"}`, saved && saved.metrics));
+      } catch (err) {
+        setGotoStatus(`STOP fehlgeschlagen: ${err.message || err}`);
+      } finally {
+        syncStopButton();
+        syncGotoButton();
+      }
+    }
+
+    async function noteSlewFromTelemetry(mount) {
+      if (!mount) return;
+      if (gotoDiag && (gotoPhase === "commanded" || gotoPhase === "slewing")) {
+        pushDiagTrail("sample");
+      }
+      if (gotoPhase === "commanded" || gotoPhase === "slewing" || stopArmed) {
+        if (mount.slewing) {
+          sawSlewing = true;
+          gotoPhase = "slewing";
+          if (gotoDiag && !gotoDiag.slew.first_slewing_true) {
+            gotoDiag.slew.first_slewing_true = new Date().toISOString();
+          }
+          setGotoStatus(`Slewing…${gotoTarget ? ` Ziel ${gotoTarget.name}` : ""}`);
+        } else if (sawSlewing && !mount.slewing) {
+          if (gotoPhase !== "stopped") {
+            gotoPhase = "done";
+            if (mountTrailEnabled()) {
+              drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "end");
+            }
+            const saved = await finalizeGotoDiag("completed", "none");
+            const base =
+              `Slew beendet${gotoTarget ? ` (${gotoTarget.name})` : ""}. `
+              + "Nicht als exakte Zentrierung gewertet.";
+            setGotoStatus(formatDiagStatus(base, saved && saved.metrics));
+          }
+          stopArmed = false;
+          sawSlewing = false;
+        }
+      }
+      syncGotoButton();
+      syncStopButton();
+    }
+
+    function renderNinaStatus(data) {
+      lastNinaStatus = data;
+      const title = document.getElementById("nina-title");
+      const dl = document.getElementById("nina-dl");
+      dl.innerHTML = "";
+      const rows = [];
+      if (!data || !data.api_online) {
+        title.className = "bad";
+        title.textContent = "NINA: Offline";
+        if (data && data.error) rows.push(["Info", data.error]);
+        if (mountTrailEnabled()) redrawMountMarkers(null);
+        else clearMountMarker();
+      } else if (!data.mount || !data.mount.connected) {
+        title.className = "warn";
+        title.textContent = "NINA / GTi: Disconnected";
+        if (mountTrailEnabled()) redrawMountMarkers(null);
+        else clearMountMarker();
+      } else {
+        const mount = data.mount;
+        title.className = "ok";
+        title.textContent = "NINA / GTi: Connected";
+        const ra = mount.right_ascension_string || fmtMountRa(mount.right_ascension_hours);
+        const dec = mount.declination_string || fmtMountDec(mount.declination_deg);
+        rows.push(["RA", ra || "—"]);
+        rows.push(["Dec", dec || "—"]);
+        rows.push([
+          "Az",
+          mount.azimuth_deg != null ? `${Number(mount.azimuth_deg).toFixed(2)}°` : "—",
+        ]);
+        rows.push([
+          "Alt",
+          mount.altitude_deg != null
+            ? `${mount.altitude_deg >= 0 ? "+" : ""}${Number(mount.altitude_deg).toFixed(2)}°`
+            : "—",
+        ]);
+        const tracking = mount.tracking_enabled
+          ? (mount.tracking_mode || "On")
+          : "Off";
+        rows.push(["Track", tracking]);
+        rows.push(["Slew", mount.slewing ? "yes" : "no"]);
+        rows.push(["Pier", mount.side_of_pier || "—"]);
+        drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "sample");
+        noteSlewFromTelemetry(mount);
+      }
+      rows.forEach(([key, value]) => {
+        const dt = document.createElement("dt");
+        dt.textContent = key;
+        const dd = document.createElement("dd");
+        dd.textContent = value;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+      syncGotoButton();
+      syncStopButton();
+    }
+
+    async function pollNinaMount() {
+      if (ninaBusy) return;
+      ninaBusy = true;
+      try {
+        const response = await fetch("/nina/mount");
+        const data = await response.json();
+        renderNinaStatus(data);
+      } catch (_err) {
+        renderNinaStatus({ api_online: false, error: "Proxy nicht erreichbar", mount: null });
+      } finally {
+        ninaBusy = false;
+      }
+    }
+
+    function startNinaPolling() {
+      clearInterval(ninaTimer);
+      pollNinaMount();
+      ninaTimer = setInterval(pollNinaMount, 1000);
+    }
+
+    document.getElementById("btn-goto").addEventListener("click", showGotoConfirm);
+    document.getElementById("btn-goto-yes").addEventListener("click", executeGoto);
+    document.getElementById("btn-goto-no").addEventListener("click", hideGotoConfirm);
+    document.getElementById("btn-slew-stop").addEventListener("click", executeStop);
+    document.getElementById("chk-mount-trail").addEventListener("change", () => {
+      if (!mountTrailEnabled()) {
+        const mount = lastNinaStatus && lastNinaStatus.mount;
+        clearMountTrail();
+        if (mount && mount.connected) {
+          redrawMountMarkers({ az: mount.azimuth_deg, alt: mount.altitude_deg });
+        }
+      } else if (lastNinaStatus && lastNinaStatus.mount && lastNinaStatus.mount.connected) {
+        drawMountMarker(
+          lastNinaStatus.mount.azimuth_deg,
+          lastNinaStatus.mount.altitude_deg,
+          "sample",
+        );
+      }
+      syncTrailClearButton();
+    });
+    document.getElementById("btn-mount-trail-clear").addEventListener("click", clearMountTrail);
+
     applyLook();
     load(urls[tex] ? tex : (urls.preview ? "preview" : "original"));
-    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls);
+    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls).then(startNinaPolling);
     function tick() {
       requestAnimationFrame(tick);
       updateLabels();

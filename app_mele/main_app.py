@@ -28,6 +28,8 @@ from mele.shadow_calibration import (
 )
 from mele.sites import load_photo_site, save_photo_site, sites_path
 from mele.weather import WeatherError, load_forecast, weather_dir_for
+from mele.nina import NinaClient, validate_slew_radec_deg
+from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
     SunExclude,
     apply_north,
@@ -114,10 +116,154 @@ def run_app(port: int | None = None) -> None:
     app.add_static_files("/mele-source", settings.media_dir)
     app.add_static_files("/mele-static", Path(__file__).resolve().parent / "static")
     pano_html = (Path(__file__).resolve().parent / "pano.html").read_text(encoding="utf-8")
+    nina = NinaClient(settings.nina_base_url)
 
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
         return HTMLResponse(pano_html)
+
+    @app.get("/nina/mount")
+    def nina_mount() -> JSONResponse:
+        """Mount-Telemetrie via NINA Advanced API."""
+        try:
+            status = nina.get_mount_info()
+        except Exception as exc:  # noqa: BLE001 — UI darf nie crashen
+            return JSONResponse(
+                {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "mount": None}
+            )
+        return JSONResponse(status.to_dict())
+
+    @app.post("/nina/mount/slew")
+    def nina_mount_slew(ra: float | None = None, dec: float | None = None) -> JSONResponse:
+        """GoTo: RA/Dec in Grad (J2000), waitForResult=false, kein center/rotate.
+
+        Ruft NINA GET /equipment/mount/slew auf. Kein automatischer Retry.
+        """
+        problem = validate_slew_radec_deg(
+            float("nan") if ra is None else float(ra),
+            float("nan") if dec is None else float(dec),
+        )
+        if problem or ra is None or dec is None:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": True,
+                    "message": "",
+                    "error": problem or "RA/Dec fehlen.",
+                    "status_code": 400,
+                    "request": None,
+                },
+                status_code=400,
+            )
+        try:
+            status = nina.get_mount_info()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": False,
+                    "message": "",
+                    "error": str(exc) or "Mount-Status nicht lesbar",
+                    "status_code": None,
+                    "request": None,
+                },
+                status_code=502,
+            )
+        if not status.api_online:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": False,
+                    "message": "",
+                    "error": status.error or "NINA Offline",
+                    "status_code": None,
+                    "request": None,
+                },
+                status_code=502,
+            )
+        if status.mount is None or not status.mount.connected:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": True,
+                    "message": "",
+                    "error": "Mount disconnected",
+                    "status_code": 409,
+                    "request": None,
+                },
+                status_code=409,
+            )
+        if status.mount.at_park:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": True,
+                    "message": "",
+                    "error": "Mount parked",
+                    "status_code": 409,
+                    "request": None,
+                },
+                status_code=409,
+            )
+        try:
+            result = nina.slew_to_radec(float(ra), float(dec), wait_for_result=False)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": False,
+                    "message": "",
+                    "error": str(exc) or "Slew-Aufruf fehlgeschlagen",
+                    "status_code": None,
+                    "request": None,
+                },
+                status_code=502,
+            )
+        code = 200 if result.ok else (result.status_code or 502)
+        if code < 400:
+            code = 200 if result.ok else 502
+        return JSONResponse(result.to_dict(), status_code=code if not result.ok else 200)
+
+    @app.post("/nina/mount/slew/stop")
+    def nina_mount_slew_stop() -> JSONResponse:
+        """Abort: NINA GET /equipment/mount/slew/stop. Unabhaengig vom Slew-HTTP."""
+        try:
+            result = nina.abort_slew()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": False,
+                    "message": "",
+                    "error": str(exc) or "Stop fehlgeschlagen",
+                    "status_code": None,
+                    "request": None,
+                },
+                status_code=502,
+            )
+        return JSONResponse(result.to_dict(), status_code=200 if result.ok else (result.status_code or 502))
+
+    @app.post("/nina/goto-log")
+    async def nina_goto_log(request: Request) -> JSONResponse:
+        """Phase 2b: speichert einen GoTo-Diagnosesatz (JSON + Text + JSONL)."""
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet."}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet."}, status_code=400)
+        try:
+            saved = save_goto_record(settings.horizon_dir, payload)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc) or "Log fehlgeschlagen"}, status_code=500)
+        return JSONResponse(
+            {
+                "ok": True,
+                "request_id": saved.get("request_id"),
+                "metrics": saved.get("metrics"),
+                "paths": saved.get("paths"),
+            }
+        )
 
     @app.get("/weather-view")
     def weather_view() -> HTMLResponse:

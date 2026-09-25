@@ -28,6 +28,7 @@ class MeleSettings:
     longitude_deg: float | None = None
     timezone: str = ""
     catalog_dir: Path = REPO_ROOT / "data" / "catalogs"
+    nina_base_url: str = "http://localhost:1888/v2/api"
 
 
 def _optional_float(value: Any) -> float | None:
@@ -65,6 +66,7 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         longitude_deg=_optional_float(raw.get("longitude_deg")),
         timezone=str(raw.get("timezone") or "").strip(),
         catalog_dir=catalogs,
+        nina_base_url=str(raw.get("nina_base_url") or "http://localhost:1888/v2/api").strip().rstrip("/"),
     )
 
 
