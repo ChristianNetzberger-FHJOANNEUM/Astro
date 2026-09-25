@@ -105,6 +105,31 @@ def export_transparent(
     return dest
 
 
+def export_profile_views(
+    photo: Path,
+    profile: HorizonProfile,
+    directory: Path,
+    *,
+    preview_width: int,
+) -> dict[str, Path]:
+    """Ersetzt Maske und transparente PNGs durch die Linie aus dem Profil."""
+    src_w = profile.image_width or preview_width
+    src_h = profile.image_height or max(1, preview_width // 2)
+    prev_w = max(1, min(int(preview_width), int(src_w)))
+    prev_h = max(1, round(src_h * prev_w / src_w))
+    mask = mask_from_profile(profile, prev_w, prev_h)
+    stem = photo.stem
+    directory.mkdir(parents=True, exist_ok=True)
+    mask_path = directory / f"{stem}.horizon.mask.png"
+    png = directory / f"{stem}.horizon.png"
+    full = directory / f"{stem}.horizon.full.png"
+    save_mask_png(mask, mask_path)
+    export_transparent(photo, mask, png, max_width=preview_width)
+    export_transparent(photo, mask, full, max_width=None)
+    write_stellarium_landscape(directory / f"{stem}.landscape", stem, png)
+    return {"mask": mask_path, "png": png, "full": full}
+
+
 def write_stellarium_landscape(
     dest_dir: Path,
     name: str,

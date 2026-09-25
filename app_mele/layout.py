@@ -590,7 +590,10 @@ def build_ui(
             else:
                 hint.text = "Klick ins Blau. Sonne extra ausnehmen, Wände als 'Kein Himmel'."
         elif state.method == "draw":
-            hint.text = "Klick setzt einen Horizontpunkt. Klick auf einen gelben Punkt entfernt ihn."
+            hint.text = (
+                "Klick setzt einen Horizontpunkt. Profil speichern erzeugt die Linie. "
+                "Genauer geht das als Punktwolke in der 360-Ansicht."
+            )
         elif state.method == "brush":
             hint.text = "Ziehen mit gedrueckter Taste malt. Cyan = Himmel (wird transparent)."
         else:

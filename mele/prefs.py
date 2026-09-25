@@ -16,6 +16,7 @@ DEFAULTS = {
     "grid_step": 10,
     "grid_eq": False,
     "grid_ecliptic": False,
+    "horizon_points": True,
 }
 
 
@@ -40,6 +41,7 @@ def load_prefs(path: Path) -> dict[str, Any]:
         data["grid"] = data.get("grid", False) in (True, 1, "1", "true", "True")
         data["grid_eq"] = data.get("grid_eq", False) in (True, 1, "1", "true", "True")
         data["grid_ecliptic"] = data.get("grid_ecliptic", False) in (True, 1, "1", "true", "True")
+        data["horizon_points"] = data.get("horizon_points", True) in (True, 1, "1", "true", "True")
         step = int(data.get("grid_step", 10))
         data["grid_step"] = 5 if step == 5 else 10
     except (TypeError, ValueError):

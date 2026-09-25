@@ -14,6 +14,7 @@ def test_prefs_defaults_and_clamp(tmp_path: Path) -> None:
         "grid_step": 7,
         "grid_eq": True,
         "grid_ecliptic": 1,
+        "horizon_points": False,
     })
     assert saved["star_scale"] == 4.0
     assert saved["mag_limit"] == 0.0
@@ -21,12 +22,14 @@ def test_prefs_defaults_and_clamp(tmp_path: Path) -> None:
     assert saved["grid"] is True
     assert saved["grid_eq"] is True
     assert saved["grid_ecliptic"] is True
+    assert saved["horizon_points"] is False
     assert saved["grid_step"] == 10
     assert save_prefs(path, {"grid_step": 5})["grid_step"] == 5
     again = load_prefs(path)
     assert again["star_scale"] == 4.0
     assert again["mag_limit"] == 0.0
     assert again["grid_step"] == 5
+    assert again["horizon_points"] is False
 
 
 def test_prefs_keep_unknown_and_partial(tmp_path: Path) -> None:
@@ -40,4 +43,5 @@ def test_prefs_keep_unknown_and_partial(tmp_path: Path) -> None:
     assert data["grid"] is False
     assert data["grid_eq"] is False
     assert data["grid_ecliptic"] is False
+    assert data["horizon_points"] is True
     assert data["grid_step"] == 10

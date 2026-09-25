@@ -5,13 +5,19 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from mele.horizon import SkySample, detect_horizon_from_samples, profile_belongs_to
+from mele.horizon import (
+    SkySample,
+    detect_horizon_from_samples,
+    profile_belongs_to,
+    profile_from_manual_points,
+)
 from mele.mask import (
     GROUND,
     SKY,
     compose_rgba,
     crop_sky_preview,
     empty_mask,
+    export_profile_views,
     export_transparent,
     paint_disk,
     save_mask_png,
@@ -90,6 +96,25 @@ def test_picker_resamples_from_source_coords(tmp_path: Path) -> None:
     )
     assert profile_belongs_to(profile, path)
     assert abs(float(np.median([p.alt_deg for p in profile.points])) - 0.0) < 8.0
+
+
+def test_export_profile_replaces_transparent_png(tmp_path: Path) -> None:
+    image = Image.new("RGB", (64, 32), (20, 80, 200))
+    photo = tmp_path / "pano.jpg"
+    image.save(photo)
+    profile = profile_from_manual_points(
+        photo,
+        [(0, 16), (32, 16), (63, 16)],
+        image_width=64,
+        image_height=32,
+        process_width=64,
+    )
+    written = export_profile_views(photo, profile, tmp_path, preview_width=64)
+    rgba = np.asarray(Image.open(written["full"]).convert("RGBA"))
+    assert rgba[2, 10, 3] == 0
+    assert rgba[28, 10, 3] == 255
+    assert written["png"].is_file()
+    assert (tmp_path / "pano.horizon.mask.png").is_file()
 
 
 def test_save_mask_roundtrip(tmp_path: Path) -> None:

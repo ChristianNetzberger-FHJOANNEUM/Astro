@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
+from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from nicegui import app, run, ui
 
@@ -16,6 +19,13 @@ from mele.catalog import object_track, query_overlay
 from mele.prefs import load_prefs, prefs_path, save_prefs
 from mele.config import load_mele_settings, save_site
 from mele.observe import gps_from_jpeg, list_location_jpegs, resolve_observer
+from mele.shadow_calibration import (
+    ShadowCalibrationError,
+    calibrate_shadow,
+    north_x_from_offset,
+    parse_capture_time,
+    store_calibration,
+)
 from mele.sites import load_photo_site, save_photo_site, sites_path
 from mele.weather import WeatherError, load_forecast, weather_dir_for
 from mele.horizon import (
@@ -28,6 +38,7 @@ from mele.horizon import (
     load_panorama,
     load_profile,
     profile_belongs_to,
+    store_horizon_controls,
     profile_from_manual_points,
     sample_from_preview,
     save_profile,
@@ -36,6 +47,7 @@ from mele.mask import (
     GROUND,
     SKY,
     crop_sky_preview,
+    export_profile_views,
     export_transparent,
     load_mask_png,
     mask_from_profile,
@@ -57,7 +69,36 @@ def _call(fn: Callable | None) -> None:
         return
 
 
+def _ignore_win_connection_reset(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    exc = context.get("exception")
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+        return
+    loop.default_exception_handler(context)
+
+
+def _install_win_reset_handler() -> None:
+    """Unterdrueckt WinError 10054/10053 in der Proactor-Loop.
+
+    Windows ruft bei einem hart geschlossenen Browser-Socket shutdown() auf
+    einem schon zurueckgesetzten Socket auf. Das ist kein Serverfehler.
+    """
+    if sys.platform != "win32":
+        return
+    policy_cls = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+    if policy_cls is None:
+        return
+
+    class _Policy(policy_cls):
+        def new_event_loop(self) -> asyncio.AbstractEventLoop:
+            loop = super().new_event_loop()
+            loop.set_exception_handler(_ignore_win_connection_reset)
+            return loop
+
+    asyncio.set_event_loop_policy(_Policy())
+
+
 def run_app(port: int | None = None) -> None:
+    _install_win_reset_handler()
     settings = load_mele_settings()
     if port is None:
         port = settings.ui_port
@@ -189,6 +230,7 @@ def run_app(port: int | None = None) -> None:
         grid_step: int | None = None,
         grid_eq: int | None = None,
         grid_ecliptic: int | None = None,
+        horizon_points: int | None = None,
     ) -> JSONResponse:
         updates = {}
         if star_scale is not None:
@@ -205,6 +247,8 @@ def run_app(port: int | None = None) -> None:
             updates["grid_eq"] = bool(grid_eq)
         if grid_ecliptic is not None:
             updates["grid_ecliptic"] = bool(grid_ecliptic)
+        if horizon_points is not None:
+            updates["horizon_points"] = bool(horizon_points)
         return JSONResponse(save_prefs(prefs_path(settings.horizon_dir), updates))
 
     @app.get("/site-coords")
@@ -248,6 +292,188 @@ def run_app(port: int | None = None) -> None:
                 "stem": record.stem,
                 "latitude_deg": record.latitude_deg,
                 "longitude_deg": record.longitude_deg,
+            }
+        )
+
+    def _media_for_stem(stem: str) -> Path | None:
+        if not stem or any(part in stem for part in ("/", "\\", "..")):
+            return None
+        if not settings.media_dir.is_dir():
+            return None
+        matches = [
+            path
+            for path in settings.media_dir.iterdir()
+            if path.is_file() and path.stem == stem and path.suffix.lower() in {".jpg", ".jpeg"}
+        ]
+        return matches[0] if matches else None
+
+    def _ray(payload: dict, name: str) -> tuple[float, float, float]:
+        value = payload.get(name)
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ShadowCalibrationError(f"{name} braucht drei Koordinaten.")
+        return float(value[0]), float(value[1]), float(value[2])
+
+    @app.post("/shadow-calibration")
+    async def shadow_calibration(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON erwartet."}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "JSON erwartet."}, status_code=400)
+        try:
+            ray1 = _ray(payload, "ray1")
+            ray2 = _ray(payload, "ray2")
+            when = parse_capture_time(str(payload.get("when") or ""))
+            latitude = float(payload["latitude_deg"])
+            longitude = float(payload["longitude_deg"])
+            north_offset = float(payload.get("north_offset_deg") or 0.0)
+            result = calibrate_shadow(
+                ray1=ray1,
+                ray2=ray2,
+                when=when,
+                latitude_deg=latitude,
+                longitude_deg=longitude,
+                north_offset_deg=north_offset,
+            )
+        except KeyError:
+            return JSONResponse({"error": "Standort fehlt."}, status_code=400)
+        except (ShadowCalibrationError, TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc) or "Kalibrierung ungueltig."}, status_code=400)
+
+        image_width = int(float(payload.get("image_width") or 0))
+        north_x = north_x_from_offset(result.north_offset_deg, image_width) if image_width > 0 else None
+        body = {
+            "sun_azimuth_deg": result.sun_azimuth_deg,
+            "sun_altitude_deg": result.sun_altitude_deg,
+            "shadow_azimuth_true_deg": result.shadow_azimuth_true_deg,
+            "shadow_azimuth_measured_deg": result.shadow_azimuth_measured_deg,
+            "panorama_azimuth_offset_deg": result.panorama_azimuth_offset_deg,
+            "north_offset_deg": result.north_offset_deg,
+            "north_x": north_x,
+            "quality": result.quality,
+            "warning": result.warning,
+            "applied": False,
+        }
+        if not payload.get("apply"):
+            return JSONResponse(body)
+
+        image = _media_for_stem(str(payload.get("stem") or ""))
+        if image is None:
+            return JSONResponse({"error": "Panorama nicht gefunden."}, status_code=404)
+        from PIL import Image
+
+        with Image.open(image) as picture:
+            width, height = picture.size
+        north_x = north_x_from_offset(result.north_offset_deg, width)
+        record = result.as_record(
+            latitude_deg=latitude,
+            longitude_deg=longitude,
+            when=when,
+            timezone_name=str(payload.get("timezone") or ""),
+            ray1=ray1,
+            ray2=ray2,
+            north_x=north_x,
+        )
+        store_calibration(
+            settings.horizon_dir,
+            image,
+            image_width=width,
+            image_height=height,
+            north_x=north_x,
+            record=record,
+        )
+        body["north_x"] = north_x
+        body["applied"] = True
+        return JSONResponse(body)
+
+    def _jpeg_size(path: Path) -> tuple[int, int]:
+        from PIL import Image
+
+        with Image.open(path) as picture:
+            return picture.size
+
+    @app.get("/horizon-controls")
+    def get_horizon_controls(stem: str = "") -> JSONResponse:
+        image = _media_for_stem(stem)
+        if image is None:
+            return JSONResponse({"error": "Panorama nicht gefunden."}, status_code=404)
+        json_path = settings.horizon_dir / f"{image.stem}.horizon.json"
+        if not json_path.is_file():
+            width, height = _jpeg_size(image)
+            return JSONResponse(
+                {"stem": image.stem, "points": [], "image_width": width, "image_height": height}
+            )
+        profile = load_profile(json_path)
+        return JSONResponse(
+            {
+                "stem": image.stem,
+                "points": profile.control_points or [],
+                "image_width": profile.image_width,
+                "image_height": profile.image_height,
+                "profile_points": len(profile.points),
+            }
+        )
+
+    @app.post("/horizon-controls")
+    async def post_horizon_controls(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON erwartet."}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "JSON erwartet."}, status_code=400)
+        image = _media_for_stem(str(payload.get("stem") or ""))
+        if image is None:
+            return JSONResponse({"error": "Panorama nicht gefunden."}, status_code=404)
+        raw_points = payload.get("points")
+        if not isinstance(raw_points, list):
+            return JSONResponse({"error": "Punkte fehlen."}, status_code=400)
+        points: list[tuple[float, float]] = []
+        for item in raw_points:
+            if not isinstance(item, dict):
+                return JSONResponse({"error": "Punkt ist ungueltig."}, status_code=400)
+            try:
+                points.append((float(item["x"]), float(item["y"])))
+            except (KeyError, TypeError, ValueError):
+                return JSONResponse({"error": "Punkt ist ungueltig."}, status_code=400)
+        generate = bool(payload.get("generate"))
+        if generate and not points:
+            return JSONResponse({"error": "Mindestens einen Horizontpunkt setzen."}, status_code=400)
+        width, height = _jpeg_size(image)
+        try:
+            north_x = float(payload.get("north_x") or 0.0)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "north_x ist ungueltig."}, status_code=400)
+        try:
+            profile = store_horizon_controls(
+                settings.horizon_dir,
+                image,
+                points,
+                image_width=width,
+                image_height=height,
+                north_x=north_x,
+                generate=generate,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        png_url = ""
+        if generate and profile.points:
+            written = export_profile_views(
+                image,
+                profile,
+                settings.horizon_dir,
+                preview_width=settings.preview_width,
+            )
+            stamp = int(written["full"].stat().st_mtime)
+            png_url = f"/mele-export/{written['full'].name}?v={stamp}"
+        return JSONResponse(
+            {
+                "stem": image.stem,
+                "saved": len(points),
+                "generated": generate,
+                "profile_points": len(profile.points),
+                "png": png_url,
             }
         )
 
@@ -451,9 +677,12 @@ def run_app(port: int | None = None) -> None:
             if json_path.is_file():
                 loaded = load_profile(json_path)
                 if profile_belongs_to(loaded, path):
-                    state.profile = loaded
                     state.north_x = loaded.north_x
-                    state.status = f"{name}  |  Profil geladen"
+                    if loaded.points:
+                        state.profile = loaded
+                        state.status = f"{name}  |  Profil geladen"
+                    else:
+                        state.status = f"{name}  |  Nordkalibrierung geladen"
                 else:
                     state.north_x = 0.0
                     state.status = f"{name}  |  {width} x {height} Vorschau"
@@ -511,6 +740,12 @@ def run_app(port: int | None = None) -> None:
         def on_save() -> None:
             if state.image_path is None:
                 return
+            if state.method == "draw" and state.manual_points:
+                try:
+                    _rebuild_manual()
+                except ValueError as exc:
+                    ui.notify(str(exc), type="negative")
+                    return
             if _active_profile() is None and state.mask is None:
                 ui.notify("Zuerst Horizont erkennen, zeichnen oder malen.", type="warning")
                 return
@@ -635,12 +870,12 @@ def run_app(port: int | None = None) -> None:
                 for index, (px, py) in enumerate(state.manual_points):
                     if (px - src_x) ** 2 + (py - src_y) ** 2 <= radius ** 2:
                         state.manual_points.pop(index)
-                        _rebuild_manual()
+                        state.profile = None
                         state.status = f"Punkt entfernt, noch {len(state.manual_points)}"
                         refresh_meta()
                         return
                 state.manual_points.append((src_x, src_y))
-                _rebuild_manual()
+                state.profile = None
                 state.status = f"{len(state.manual_points)} Horizontpunkte"
                 refresh_meta()
                 return
@@ -702,14 +937,13 @@ def run_app(port: int | None = None) -> None:
         def on_undo_point() -> None:
             if state.manual_points:
                 state.manual_points.pop()
-            _rebuild_manual()
+            state.profile = None
             state.status = f"{len(state.manual_points)} Horizontpunkte"
             refresh_meta()
 
         def on_clear_points() -> None:
             state.manual_points.clear()
-            if profile_belongs_to(state.profile, state.image_path):
-                state.profile = None
+            state.profile = None
             state.status = "Zeichnung geloescht."
             refresh_meta()
 
@@ -736,10 +970,9 @@ def run_app(port: int | None = None) -> None:
             full = settings.horizon_dir / f"{stem}.horizon.full.png"
             small = settings.horizon_dir / f"{stem}.horizon.png"
             png = ""
-            if full.is_file():
-                png = f"/mele-export/{full.name}"
-            elif small.is_file():
-                png = f"/mele-export/{small.name}"
+            chosen = full if full.is_file() else small
+            if chosen.is_file():
+                png = f"/mele-export/{chosen.name}?v={int(chosen.stat().st_mtime)}"
             original = f"/mele-source/{state.image_path.name}"
             stored = load_photo_site(sites_path(settings.horizon_dir), stem)
             if stored is not None:
@@ -748,12 +981,13 @@ def run_app(port: int | None = None) -> None:
                 state.site_src = stored.source or "saved"
             payload = {
                 "stem": stem,
-                "tex": "preview",
+                "tex": "png" if png else "preview",
                 "preview": preview,
                 "png": png,
                 "original": original,
                 "north": f"{state.north_x:.3f}",
                 "srcw": str(state.source_width),
+                "srch": str(state.source_height),
                 "site": state.site_src,
             }
             if state.latitude_deg is not None and state.longitude_deg is not None:

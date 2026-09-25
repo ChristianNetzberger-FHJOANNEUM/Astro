@@ -23,6 +23,7 @@ from mele.horizon import (
     profile_from_manual_points,
     rgb_to_hsv,
     save_profile,
+    store_horizon_controls,
     sky_mask,
     sky_mask_from_samples,
     sky_obstruction,
@@ -241,6 +242,41 @@ def test_manual_points_interpolate_and_wrap() -> None:
     assert abs(mid.y - 80) < 3
     left = next(p for p in profile.points if p.x <= 12)
     assert abs(left.y - 40) < 3
+
+
+def test_control_points_generate_same_profile(tmp_path: Path) -> None:
+    image = tmp_path / "pano.jpg"
+    image.write_bytes(b"")
+    points = [(10.0, 40.0), (200.0, 80.0), (350.0, 40.0)]
+    stored = store_horizon_controls(
+        tmp_path,
+        image,
+        points,
+        image_width=360,
+        image_height=180,
+        north_x=0,
+        generate=False,
+    )
+    assert stored.points == []
+    assert len(stored.control_points or []) == 3
+    generated = store_horizon_controls(
+        tmp_path,
+        image,
+        points,
+        image_width=360,
+        image_height=180,
+        north_x=0,
+        generate=True,
+    )
+    direct = profile_from_manual_points(
+        image, points, image_width=360, image_height=180, north_x=0, process_width=3600
+    )
+    assert len(generated.points) == len(direct.points)
+    assert generated.points[100].y == direct.points[100].y
+    loaded = load_profile(tmp_path / "pano.horizon.json")
+    assert loaded.control_points is not None
+    assert loaded.control_points[1]["x"] == 200.0
+    assert loaded.points
 
 
 def test_overlay_marks_samples_and_handles() -> None:

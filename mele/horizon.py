@@ -57,6 +57,8 @@ class HorizonProfile:
     projection: str = "equirectangular"
     created_at: str = ""
     points: list[HorizonPoint] = field(default_factory=list)
+    calibration: dict | None = None
+    control_points: list[dict[str, float]] | None = None
 
     def altitude_at(self, az_deg: float) -> float:
         if not self.points:
@@ -520,6 +522,20 @@ def save_profile(profile: HorizonProfile, directory: Path) -> dict[str, Path]:
     stem = Path(profile.source).stem
     json_path = directory / f"{stem}.horizon.json"
     csv_path = directory / f"{stem}.horizon.csv"
+    previous: dict = {}
+    if json_path.is_file() and (profile.calibration is None or profile.control_points is None):
+        try:
+            loaded = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            previous = loaded
+    calibration = profile.calibration
+    if calibration is None and isinstance(previous.get("calibration"), dict):
+        calibration = previous["calibration"]
+    control_points = profile.control_points
+    if control_points is None and isinstance(previous.get("control_points"), list):
+        control_points = previous["control_points"]
     payload = {
         "source": profile.source,
         "image_width": profile.image_width,
@@ -531,6 +547,10 @@ def save_profile(profile: HorizonProfile, directory: Path) -> dict[str, Path]:
         "created_at": profile.created_at,
         "points": [asdict(point) for point in profile.points],
     }
+    if calibration is not None:
+        payload["calibration"] = calibration
+    if control_points is not None:
+        payload["control_points"] = control_points
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
@@ -568,6 +588,71 @@ def apply_north(profile: HorizonProfile, north_x: float) -> HorizonProfile:
     return profile
 
 
+def _control_points(raw: object) -> list[dict[str, float]] | None:
+    if not isinstance(raw, list):
+        return None
+    points: list[dict[str, float]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            points.append({"x": float(item["x"]), "y": float(item["y"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return points
+
+
+def store_horizon_controls(
+    directory: Path,
+    image_path: Path,
+    points_xy: list[tuple[float, float]],
+    *,
+    image_width: int,
+    image_height: int,
+    north_x: float,
+    generate: bool,
+) -> HorizonProfile:
+    """Speichert die Stuetzpunkte. generate baut daraus das dichte Horizontprofil."""
+    json_path = directory / f"{image_path.stem}.horizon.json"
+    existing = load_profile(json_path) if json_path.is_file() else None
+    controls = [{"x": round(float(x), 2), "y": round(float(y), 2)} for x, y in points_xy]
+    width = image_width or (existing.image_width if existing else 0)
+    height = image_height or (existing.image_height if existing else 0)
+    used_north = float(north_x)
+    if generate:
+        profile = profile_from_manual_points(
+            image_path,
+            [(item["x"], item["y"]) for item in controls],
+            image_width=width,
+            image_height=height,
+            north_x=used_north,
+        )
+        if existing is not None and existing.calibration is not None:
+            profile.calibration = existing.calibration
+    elif existing is not None:
+        profile = existing
+        profile.north_x = used_north
+        if width > 0:
+            profile.image_width = width
+        if height > 0:
+            profile.image_height = height
+    else:
+        profile = HorizonProfile(
+            source=str(image_path),
+            image_width=width,
+            image_height=height,
+            process_width=0,
+            process_height=0,
+            north_x=used_north,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+        )
+    profile.control_points = controls
+    if not profile.source:
+        profile.source = str(image_path)
+    save_profile(profile, directory)
+    return profile
+
+
 def load_profile(path: Path) -> HorizonProfile:
     raw = json.loads(path.read_text(encoding="utf-8"))
     points = [HorizonPoint(**item) for item in raw.get("points") or []]
@@ -581,6 +666,8 @@ def load_profile(path: Path) -> HorizonProfile:
         projection=str(raw.get("projection") or "equirectangular"),
         created_at=str(raw.get("created_at") or ""),
         points=points,
+        calibration=raw.get("calibration") if isinstance(raw.get("calibration"), dict) else None,
+        control_points=_control_points(raw.get("control_points")),
     )
 
 

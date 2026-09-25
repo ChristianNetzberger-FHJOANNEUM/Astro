@@ -11,9 +11,14 @@
            background: rgba(15,23,42,.88); }
     #bar { top: 0; }
     #skybar { top: 46px; font-size: 13px; }
-    #prefs { position: absolute; z-index: 2; left: 12px; top: 96px; max-width: 280px;
-             background: rgba(15,23,42,.9); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
-    #prefs summary { cursor: pointer; font-weight: 600; }
+    #panels { position: absolute; z-index: 2; left: 12px; top: 96px; right: 12px;
+              display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px;
+              pointer-events: none; }
+    #panels > details { pointer-events: auto; background: rgba(15,23,42,.9);
+                        padding: 8px 12px; border-radius: 6px; font-size: 13px;
+                        max-width: 360px; align-self: flex-start; }
+    #panels summary { cursor: pointer; font-weight: 600; }
+    #prefs { max-width: 280px; }
     #prefs label { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
     #prefs select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
                     border-radius: 4px; padding: 2px 6px; }
@@ -54,14 +59,22 @@
     #track-labels span.twilight { color: #fbbf24; }
     #track-labels span.day { color: #fb923c; }
     #track-labels span.below { opacity: .42; }
-    #grid-labels { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
-    #grid-labels span { position: absolute; transform: translate(-50%, -50%);
+    #grid-labels, #guide-labels { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+    #grid-labels span, #guide-labels span { position: absolute; transform: translate(-50%, -50%);
       font-size: 11px; font-variant-numeric: tabular-nums; color: #93c5fd;
       text-shadow: 0 0 5px #020617; white-space: nowrap; opacity: .88; }
-    #grid-labels span.major { color: #bfdbfe; font-weight: 600; }
-    #grid-labels span.horizon { color: #fde68a; }
+    #grid-labels span.major, #guide-labels span.major { color: #bfdbfe; font-weight: 600; }
+    #grid-labels span.horizon, #guide-labels span.horizon { color: #fde68a; }
     #grid-labels span.eq { color: #67e8f9; }
-    #grid-labels span.ecl { color: #f59e0b; font-weight: 600; }
+    #grid-labels span.ecl, #guide-labels span.ecl { color: #f59e0b; font-weight: 600; }
+    #calib, #horizon { width: 320px; }
+    #calib p, #horizon p { margin: 8px 0 0; white-space: pre-wrap; }
+    #calib .row, #horizon .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    #horizon label { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    #calib button, #horizon button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+                    padding: 7px 10px; cursor: pointer; font-size: 13px; }
+    #calib button.on, #horizon button.on { background: #38bdf8; color: #0f172a; font-weight: 600; }
+    #calib button:disabled, #horizon button:disabled { opacity: .38; cursor: not-allowed; }
     canvas { display: block; }
   </style>
 </head>
@@ -93,23 +106,49 @@
     <label>lon <input id="lon" type="number" step="0.0001"></label>
     <span id="sky-status"></span>
   </div>
-  <details id="prefs">
-    <summary>Anzeige</summary>
-    <label>Sterngroesse
-      <input id="star-scale" type="range" min="0.5" max="3" step="0.1" value="1">
-      <span id="star-scale-val">1.0</span>
-    </label>
-    <label><input id="chk-grid" type="checkbox"> Az/h-Gitter</label>
-    <label><input id="chk-eq" type="checkbox"> Aequatorraster</label>
-    <label><input id="chk-ecliptic" type="checkbox"> Ekliptik</label>
-    <label>Schritt
-      <select id="grid-step">
-        <option value="10">10°</option>
-        <option value="5">5°</option>
-      </select>
-    </label>
-    <p class="hint-mini">Gitter und Sterngroesse bleiben gespeichert. Aequator/Ekliptik folgen Zeit und Standort.</p>
-  </details>
+  <div id="panels">
+    <details id="prefs">
+      <summary>Anzeige</summary>
+      <label>Sterngroesse
+        <input id="star-scale" type="range" min="0.5" max="3" step="0.1" value="1">
+        <span id="star-scale-val">1.0</span>
+      </label>
+      <label><input id="chk-grid" type="checkbox"> Az/h-Gitter</label>
+      <label><input id="chk-eq" type="checkbox"> Aequatorraster</label>
+      <label><input id="chk-ecliptic" type="checkbox"> Ekliptik</label>
+      <label>Schritt
+        <select id="grid-step">
+          <option value="10">10°</option>
+          <option value="5">5°</option>
+        </select>
+      </label>
+      <p class="hint-mini">Gitter und Sterngroesse bleiben gespeichert. Aequator/Ekliptik folgen Zeit und Standort.</p>
+    </details>
+    <details id="calib">
+      <summary>Panorama-Azimut kalibrieren</summary>
+      <p id="calib-tz"></p>
+      <p id="calib-hint">Zwei Klicks auf die Schattenlinie im Viewer, nicht im equirektangularen Bild.</p>
+      <p id="calib-result"></p>
+      <div class="row">
+        <button id="btn-calib" type="button">Schattenlinie markieren</button>
+        <button id="btn-calib-calc" type="button" disabled>Kalibrierung berechnen</button>
+        <button id="btn-calib-apply" type="button" disabled>Kalibrierung uebernehmen</button>
+        <button id="btn-calib-cancel" type="button">Abbrechen</button>
+      </div>
+    </details>
+    <details id="horizon">
+      <summary>Horizont-Punktwolke</summary>
+      <label><input id="chk-horizon-points" type="checkbox" checked> Punktwolke anzeigen</label>
+      <p id="horizon-hint">Starten, dann Klicks entlang des Horizonts. Ziehen verschiebt einen Punkt.</p>
+      <p id="horizon-result"></p>
+      <div class="row">
+        <button id="btn-horizon" type="button">Punktwolke starten</button>
+        <button id="btn-horizon-undo" type="button">Letzten Punkt</button>
+        <button id="btn-horizon-save" type="button">Speichern</button>
+        <button id="btn-horizon-gen" type="button">Horizontlinie generieren</button>
+      </div>
+    </details>
+  </div>
   <div id="info">
     <button id="info-close" type="button">x</button>
     <h3 id="info-title">Objekt</h3>
@@ -126,6 +165,7 @@
   <div id="labels"></div>
   <div id="track-labels"></div>
   <div id="grid-labels"></div>
+  <div id="guide-labels"></div>
   <!-- Three.js 0.170.0 lokal unter /mele-static — kein CDN. -->
   <script type="module">
     import * as THREE from "/mele-static/three/three.module.js";
@@ -143,11 +183,13 @@
       png: "Transparentes PNG",
       original: "Original",
     };
-    const northOffset = (() => {
+    let northOffset = (() => {
       const north = Number(params.get("north") || 0);
       const srcw = Number(params.get("srcw") || 0);
       return srcw > 0 ? (360 * north / srcw) : 0;
     })();
+    const srcW = Number(params.get("srcw") || 0);
+    const srcH = Number(params.get("srch") || (srcW > 0 ? srcW / 2 : 0));
     const photoWhen = params.get("photo") || "";
 
     const latEl = document.getElementById("lat");
@@ -198,6 +240,11 @@
     scene.add(hourGroup);
     const gridGroup = new THREE.Group();
     scene.add(gridGroup);
+    const calibGroup = new THREE.Group();
+    scene.add(calibGroup);
+    const horizonGroup = new THREE.Group();
+    scene.add(horizonGroup);
+    const raycaster = new THREE.Raycaster();
     const labelBox = document.getElementById("labels");
     const trackLabelBox = document.getElementById("track-labels");
     const gridLabelBox = document.getElementById("grid-labels");
@@ -214,6 +261,14 @@
     let lon = northOffset;
     let lat = 18;
     let fov = 75;
+    let calibActive = false;
+    let calibPoints = [];
+    let calibResult = null;
+    let guideItems = [];
+    let horizonActive = false;
+    let horizonPoints = [];
+    let horizonDrag = -1;
+    let horizonCursor = null;
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
@@ -552,6 +607,7 @@
       projectLabels(labelItems);
       projectLabels(hourItems);
       projectLabels(gridItems);
+      projectLabels(guideItems);
     }
 
     function fmtRa(deg) {
@@ -828,6 +884,357 @@
       clearTrack();
     }
 
+    function emptyGroup(group) {
+      while (group.children.length) {
+        const child = group.children[0];
+        group.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      }
+    }
+
+    function screenRay(clientX, clientY) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      camera.updateMatrixWorld();
+      raycaster.setFromCamera(ndc, camera);
+      return raycaster.ray.direction.clone().normalize();
+    }
+
+    function drawCalibMarks() {
+      emptyGroup(calibGroup);
+      calibPoints.forEach((dir, index) => {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(7, 12, 8),
+          new THREE.MeshBasicMaterial({
+            color: index === 0 ? 0xfacc15 : 0xfb923c,
+            depthTest: false,
+          }),
+        );
+        mesh.position.copy(dir).multiplyScalar(470);
+        mesh.renderOrder = 3;
+        calibGroup.add(mesh);
+      });
+      if (calibPoints.length === 2) {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          calibPoints[0].clone().multiplyScalar(470),
+          calibPoints[1].clone().multiplyScalar(470),
+        ]);
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+          color: 0xf97316, depthTest: false,
+        }));
+        line.renderOrder = 3;
+        calibGroup.add(line);
+      }
+    }
+
+    function setCalibHint(text) {
+      document.getElementById("calib-hint").textContent = text;
+    }
+
+    function fmt360(value) {
+      const wrapped = ((value % 360) + 360) % 360;
+      return `${wrapped.toFixed(1)}°`;
+    }
+
+    function fmtSigned(value) {
+      const sign = value > 0.05 ? "+" : "";
+      return `${sign}${value.toFixed(1)}°`;
+    }
+
+    function showGuides(sunAz, sunAlt, shadowAz) {
+      const box = document.getElementById("guide-labels");
+      box.innerHTML = "";
+      guideItems = [
+        { name: "N", az: 0, alt: 3, cls: "major" },
+        { name: "S", az: 180, alt: 3, cls: "major" },
+        { name: "Sonne", az: sunAz, alt: sunAlt, cls: "ecl" },
+        { name: "Schatten", az: shadowAz, alt: -8, cls: "horizon" },
+      ].map((item) => {
+        const span = document.createElement("span");
+        span.textContent = item.name;
+        span.className = item.cls;
+        box.appendChild(span);
+        return { el: span, az: item.az, alt: item.alt };
+      });
+    }
+
+    function clearGuides() {
+      guideItems = [];
+      document.getElementById("guide-labels").innerHTML = "";
+    }
+
+    function resetCalib(keepMode) {
+      calibPoints = [];
+      calibResult = null;
+      drawCalibMarks();
+      document.getElementById("calib-result").textContent = "";
+      document.getElementById("btn-calib-calc").disabled = true;
+      document.getElementById("btn-calib-apply").disabled = true;
+      if (!keepMode) {
+        calibActive = false;
+        document.getElementById("btn-calib").classList.remove("on");
+        setCalibHint("Zwei Klicks auf die Schattenlinie im Viewer, nicht im equirektangularen Bild.");
+      }
+    }
+
+    function addCalibPoint(clientX, clientY) {
+      if (calibPoints.length >= 2) calibPoints = [];
+      calibResult = null;
+      document.getElementById("btn-calib-apply").disabled = true;
+      document.getElementById("calib-result").textContent = "";
+      calibPoints.push(screenRay(clientX, clientY));
+      drawCalibMarks();
+      document.getElementById("btn-calib-calc").disabled = calibPoints.length < 2;
+      if (calibPoints.length === 1) {
+        setCalibHint("Punkt 1 (Fusspunkt) gesetzt. Jetzt einen weit entfernten Punkt auf dem Schatten.");
+      } else {
+        setCalibHint("Beide Punkte gesetzt. Kalibrierung berechnen, oder erneut klicken zum Neu-Setzen.");
+      }
+    }
+
+    function calibPayload(apply) {
+      return {
+        stem,
+        latitude_deg: Number(latEl.value),
+        longitude_deg: Number(lonEl.value),
+        when: currentWhen().toISOString(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+        north_offset_deg: northOffset,
+        image_width: Number(params.get("srcw") || 0),
+        ray1: calibPoints[0].toArray(),
+        ray2: calibPoints[1].toArray(),
+        apply,
+      };
+    }
+
+    function renderCalibResult(data) {
+      const lines = [
+        `Sonnenazimut  ${fmt360(data.sun_azimuth_deg)}    Hoehe  ${fmtSigned(data.sun_altitude_deg)}`,
+        `Schattenazimut (wahr)  ${fmt360(data.shadow_azimuth_true_deg)}`,
+        `Schatten im Panorama  ${fmt360(data.shadow_azimuth_measured_deg)}`,
+        `Azimut-Offset  ${fmtSigned(data.panorama_azimuth_offset_deg)}`,
+        `Qualitaet  ${data.quality}`,
+      ];
+      if (data.warning) lines.push(data.warning);
+      document.getElementById("calib-result").textContent = lines.join("\n");
+    }
+
+    async function postCalib(apply) {
+      const response = await fetch("/shadow-calibration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(calibPayload(apply)),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Kalibrierung fehlgeschlagen.");
+      return data;
+    }
+
+    function wrapX(x) {
+      if (!(srcW > 0)) return 0;
+      return ((x % srcW) + srcW) % srcW;
+    }
+
+    function pixelToVec(x, y, radius) {
+      const viewLon = 360 * wrapX(x) / srcW;
+      const alt = srcH > 0 ? 90 - 180 * y / srcH : 0;
+      const phi = THREE.MathUtils.degToRad(90 - alt);
+      const theta = THREE.MathUtils.degToRad(viewLon);
+      return new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta) * radius,
+        Math.cos(phi) * radius,
+        Math.sin(phi) * Math.sin(theta) * radius,
+      );
+    }
+
+    function rayToPixel(dir) {
+      const lon = (THREE.MathUtils.radToDeg(Math.atan2(dir.z, dir.x)) + 360) % 360;
+      const alt = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)));
+      return {
+        x: lon / 360 * srcW,
+        y: (90 - alt) / 180 * srcH,
+      };
+    }
+
+    function projectClient(vec) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const point = vec.clone();
+      point.project(camera);
+      return {
+        x: (point.x * 0.5 + 0.5) * rect.width + rect.left,
+        y: (-point.y * 0.5 + 0.5) * rect.height + rect.top,
+        inFront: point.z < 1,
+      };
+    }
+
+    function horizonCurve() {
+      if (horizonPoints.length < 2 || !(srcW > 0)) return [];
+      const ordered = horizonPoints.map((point) => ({ x: point.x, y: point.y }))
+        .sort((a, b) => a.x - b.x);
+      const samples = [];
+      const steps = 10;
+      for (let index = 0; index < ordered.length; index += 1) {
+        const start = ordered[index];
+        const end = ordered[(index + 1) % ordered.length];
+        const x1 = index === ordered.length - 1 ? end.x + srcW : end.x;
+        for (let step = 0; step < steps; step += 1) {
+          const t = step / steps;
+          samples.push(pixelToVec(
+            start.x + (x1 - start.x) * t,
+            start.y + (end.y - start.y) * t,
+            468,
+          ));
+        }
+      }
+      samples.push(pixelToVec(ordered[0].x, ordered[0].y, 468));
+      return samples;
+    }
+
+    function rubberCurve() {
+      if (!horizonActive || horizonDrag >= 0 || !horizonCursor || !horizonPoints.length) return [];
+      const start = horizonPoints[horizonPoints.length - 1];
+      let dx = horizonCursor.x - start.x;
+      if (dx > srcW / 2) dx -= srcW;
+      if (dx < -srcW / 2) dx += srcW;
+      const samples = [];
+      const steps = 16;
+      for (let step = 0; step <= steps; step += 1) {
+        const t = step / steps;
+        samples.push(pixelToVec(
+          start.x + dx * t,
+          start.y + (horizonCursor.y - start.y) * t,
+          474,
+        ));
+      }
+      return samples;
+    }
+
+    function addHorizonLine(points, color) {
+      if (points.length < 2) return;
+      const geo = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 1,
+        depthTest: false,
+        depthWrite: false,
+      }));
+      line.renderOrder = 10;
+      horizonGroup.add(line);
+    }
+
+    function drawHorizon() {
+      emptyGroup(horizonGroup);
+      if (!(srcW > 0) || !(srcH > 0)) return;
+      const show = horizonActive
+        || document.getElementById("chk-horizon-points").checked;
+      if (!show) return;
+      addHorizonLine(horizonCurve(), 0xfacc15);
+      addHorizonLine(rubberCurve(), 0x38bdf8);
+      horizonPoints.forEach((point, index) => {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(index === horizonDrag ? 9 : 6, 12, 8),
+          new THREE.MeshBasicMaterial({
+            color: index === horizonPoints.length - 1 ? 0xfb923c : 0xfacc15,
+            transparent: true,
+            opacity: 1,
+            depthTest: false,
+            depthWrite: false,
+          }),
+        );
+        mesh.position.copy(pixelToVec(point.x, point.y, 470));
+        mesh.renderOrder = 11;
+        horizonGroup.add(mesh);
+      });
+    }
+
+    function setHorizonHint(text) {
+      document.getElementById("horizon-hint").textContent = text;
+    }
+
+    function horizonStatusText() {
+      const name = stem || "dieses Panorama";
+      const count = horizonPoints.length === 1 ? "1 Punkt" : `${horizonPoints.length} Punkte`;
+      if (!srcW || !srcH) {
+        return "Bildgroesse fehlt. Die 360-Ansicht aus der MeLE-App oeffnen.";
+      }
+      if (horizonActive) {
+        return `${count} auf ${name}. Klick setzt, Ziehen verschiebt. Die blaue Linie zeigt den naechsten Punkt.`;
+      }
+      return `${count} auf ${name}. Starten zum Weiterzeichnen.`;
+    }
+
+    function stopHorizonMode() {
+      horizonActive = false;
+      horizonDrag = -1;
+      horizonCursor = null;
+      const button = document.getElementById("btn-horizon");
+      button.classList.remove("on");
+      button.textContent = "Punktwolke starten";
+      drawHorizon();
+      setHorizonHint(horizonStatusText());
+    }
+
+    function horizonHit(clientX, clientY) {
+      if (!horizonActive || !horizonPoints.length) return -1;
+      const view = new THREE.Vector3();
+      camera.updateMatrixWorld();
+      camera.getWorldDirection(view);
+      let best = -1;
+      let bestD = 22;
+      horizonPoints.forEach((point, index) => {
+        const vec = pixelToVec(point.x, point.y, 1);
+        if (vec.dot(view) < 0.05) return;
+        const screen = projectClient(vec);
+        const distance = Math.hypot(clientX - screen.x, clientY - screen.y);
+        if (distance < bestD) {
+          bestD = distance;
+          best = index;
+        }
+      });
+      return best;
+    }
+
+    async function postHorizon(generate) {
+      const response = await fetch("/horizon-controls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stem,
+          north_x: srcW > 0 ? northOffset * srcW / 360 : 0,
+          generate,
+          points: horizonPoints.map((point) => ({ x: point.x, y: point.y })),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Speichern fehlgeschlagen.");
+      return data;
+    }
+
+    async function loadHorizonControls() {
+      if (!stem) {
+        setHorizonHint("360-Ansicht aus der MeLE-App oeffnen, damit die Punkte zum Panorama gehoeren.");
+        return;
+      }
+      try {
+        const response = await fetch(`/horizon-controls?stem=${encodeURIComponent(stem)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Punkte nicht geladen.");
+        horizonPoints = (data.points || []).map((point) => ({
+          x: Number(point.x),
+          y: Number(point.y),
+        }));
+        drawHorizon();
+        setHorizonHint(horizonStatusText());
+      } catch (err) {
+        setHorizonHint(err.message);
+      }
+    }
+
     function pickAt(clientX, clientY) {
       let best = null;
       let bestD = Infinity;
@@ -996,6 +1403,7 @@
         grid_step: Number(document.getElementById("grid-step").value) === 5 ? 5 : 10,
         grid_eq: document.getElementById("chk-eq").checked,
         grid_ecliptic: document.getElementById("chk-ecliptic").checked,
+        horizon_points: document.getElementById("chk-horizon-points").checked,
       };
       try {
         localStorage.setItem("mele-ui-prefs", JSON.stringify(payload));
@@ -1013,6 +1421,7 @@
             grid_step: String(payload.grid_step),
             grid_eq: payload.grid_eq ? "1" : "0",
             grid_ecliptic: payload.grid_ecliptic ? "1" : "0",
+            horizon_points: payload.horizon_points ? "1" : "0",
           });
           await fetch(`/ui-prefs?${query}`, { method: "POST" });
         } catch (_err) {
@@ -1056,7 +1465,11 @@
       if (data.grid_ecliptic != null) {
         document.getElementById("chk-ecliptic").checked = Boolean(data.grid_ecliptic);
       }
+      if (data.horizon_points != null) {
+        document.getElementById("chk-horizon-points").checked = Boolean(data.horizon_points);
+      }
       drawGrid();
+      drawHorizon();
     }
 
     async function persistSite() {
@@ -1220,6 +1633,10 @@
         persistPrefs();
       });
     });
+    document.getElementById("chk-horizon-points").addEventListener("change", () => {
+      drawHorizon();
+      persistPrefs();
+    });
     document.getElementById("info-close").addEventListener("click", hideInfo);
     document.getElementById("chk-track").addEventListener("change", (event) => {
       if (event.target.checked) loadTrack();
@@ -1246,13 +1663,32 @@
 
     const canvas = renderer.domElement;
     canvas.addEventListener("pointerdown", (event) => {
-      dragging = true;
+      horizonDrag = -1;
       dragMoved = 0;
       lastX = event.clientX;
       lastY = event.clientY;
       canvas.setPointerCapture(event.pointerId);
+      if (horizonActive) {
+        const hit = horizonHit(event.clientX, event.clientY);
+        if (hit >= 0) {
+          horizonDrag = hit;
+          dragging = false;
+          drawHorizon();
+          return;
+        }
+      }
+      dragging = true;
     });
     canvas.addEventListener("pointermove", (event) => {
+      if (horizonActive && srcW > 0 && srcH > 0) {
+        horizonCursor = rayToPixel(screenRay(event.clientX, event.clientY));
+        if (horizonDrag >= 0) {
+          horizonPoints[horizonDrag] = { x: horizonCursor.x, y: horizonCursor.y };
+          drawHorizon();
+          return;
+        }
+        drawHorizon();
+      }
       if (!dragging) return;
       const dx = event.clientX - lastX;
       const dy = event.clientY - lastY;
@@ -1264,18 +1700,45 @@
       applyLook();
     });
     canvas.addEventListener("pointerup", (event) => {
+      const movedPoint = horizonDrag >= 0;
+      horizonDrag = -1;
       dragging = false;
+      if (movedPoint) {
+        drawHorizon();
+        setHorizonHint(horizonStatusText());
+        return;
+      }
       if (dragMoved < 6) {
+        if (horizonActive && srcW > 0 && srcH > 0) {
+          horizonPoints.push(rayToPixel(screenRay(event.clientX, event.clientY)));
+          drawHorizon();
+          setHorizonHint(horizonStatusText());
+          return;
+        }
+        if (calibActive) {
+          addCalibPoint(event.clientX, event.clientY);
+          return;
+        }
         const hit = pickAt(event.clientX, event.clientY);
         if (hit) showInfo(hit);
       }
     });
-    canvas.addEventListener("pointercancel", () => { dragging = false; });
+    canvas.addEventListener("pointercancel", () => {
+      dragging = false;
+      horizonDrag = -1;
+    });
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
       setFov(fov + Math.sign(event.deltaY) * 5);
     }, { passive: false });
     addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        resetCalib(false);
+        clearGuides();
+        stopHorizonMode();
+        return;
+      }
+      if (event.target && (event.target.tagName === "INPUT" || event.target.tagName === "SELECT")) return;
       if (event.key === "1" && urls.preview) switchTo("preview");
       if (event.key === "2" && urls.png) switchTo("png");
       if (event.key === "3" && urls.original) switchTo("original");
@@ -1288,9 +1751,106 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
+    document.getElementById("calib-tz").textContent =
+      `Zeitzone ${Intl.DateTimeFormat().resolvedOptions().timeZone || "lokal"}. Breite, Laenge und Uhrzeit aus der Leiste oben.`;
+    document.getElementById("btn-calib").addEventListener("click", () => {
+      stopHorizonMode();
+      clearGuides();
+      resetCalib(true);
+      calibActive = true;
+      document.getElementById("btn-calib").classList.add("on");
+      setCalibHint("Zuerst nahe am Fusspunkt der Stange klicken, danach einen moeglichst weit entfernten Punkt auf dem Schatten.");
+      setHint("Schattenlinie markieren. ESC bricht ab.");
+    });
+    document.getElementById("btn-calib-cancel").addEventListener("click", () => {
+      resetCalib(false);
+      clearGuides();
+      setHint("Ziehen: umsehen  ·  Klick: Objekt  ·  Mausrad: Zoom");
+    });
+    document.getElementById("btn-calib-calc").addEventListener("click", async () => {
+      if (calibPoints.length < 2) return;
+      document.getElementById("btn-calib-calc").disabled = true;
+      try {
+        calibResult = await postCalib(false);
+        renderCalibResult(calibResult);
+        document.getElementById("btn-calib-apply").disabled = false;
+      } catch (err) {
+        document.getElementById("calib-result").textContent = err.message;
+      } finally {
+        document.getElementById("btn-calib-calc").disabled = calibPoints.length < 2;
+      }
+    });
+    document.getElementById("btn-calib-apply").addEventListener("click", async () => {
+      if (calibPoints.length < 2) return;
+      document.getElementById("btn-calib-apply").disabled = true;
+      try {
+        const data = await postCalib(true);
+        calibResult = data;
+        renderCalibResult(data);
+        northOffset = data.north_offset_deg;
+        const next = new URL(location.href);
+        if (data.north_x != null) next.searchParams.set("north", String(data.north_x));
+        history.replaceState({}, "", next);
+        showGuides(data.sun_azimuth_deg, data.sun_altitude_deg, data.shadow_azimuth_true_deg);
+        calibActive = false;
+        document.getElementById("btn-calib").classList.remove("on");
+        setCalibHint("Kalibrierung gespeichert. N, S und Sonne folgen dem neuen Azimut. Das Originalbild bleibt unveraendert.");
+        loadSky();
+      } catch (err) {
+        document.getElementById("calib-result").textContent = err.message;
+        document.getElementById("btn-calib-apply").disabled = false;
+      }
+    });
+
+    document.getElementById("btn-horizon").addEventListener("click", () => {
+      if (horizonActive) {
+        stopHorizonMode();
+        return;
+      }
+      resetCalib(false);
+      horizonActive = true;
+      const button = document.getElementById("btn-horizon");
+      button.classList.add("on");
+      button.textContent = "Punktwolke stoppen";
+      setHorizonHint(horizonStatusText());
+      setHint("Punktwolke: Klick setzt, Ziehen verschiebt. ESC beendet.");
+    });
+    document.getElementById("btn-horizon-undo").addEventListener("click", () => {
+      horizonPoints.pop();
+      drawHorizon();
+      setHorizonHint(horizonStatusText());
+      document.getElementById("horizon-result").textContent = "";
+    });
+    document.getElementById("btn-horizon-save").addEventListener("click", async () => {
+      document.getElementById("horizon-result").textContent = "Speichere …";
+      try {
+        const data = await postHorizon(false);
+        document.getElementById("horizon-result").textContent =
+          `${data.saved} Punkte fuer ${data.stem} gespeichert.`;
+      } catch (err) {
+        document.getElementById("horizon-result").textContent = err.message;
+      }
+    });
+    document.getElementById("btn-horizon-gen").addEventListener("click", async () => {
+      document.getElementById("horizon-result").textContent = "Erzeuge Horizontlinie …";
+      try {
+        const data = await postHorizon(true);
+        if (data.png) {
+          urls.png = data.png;
+          const pngButton = document.querySelector('#bar button[data-tex="png"]');
+          if (pngButton) pngButton.disabled = false;
+          switchTo("png");
+        }
+        document.getElementById("horizon-result").textContent =
+          `Horizontlinie mit ${data.profile_points} Spalten gespeichert. Das transparente PNG ist ersetzt.`;
+      } catch (err) {
+        document.getElementById("horizon-result").textContent = err.message;
+      }
+    });
+
     applyLook();
     load(urls[tex] ? tex : (urls.preview ? "preview" : "original"));
-    restorePrefs().then(restoreSite).then(loadSky);
+    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls);
     function tick() {
       requestAnimationFrame(tick);
       updateLabels();
