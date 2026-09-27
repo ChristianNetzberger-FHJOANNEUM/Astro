@@ -28,6 +28,15 @@ from mele.shadow_calibration import (
 )
 from mele.sites import load_photo_site, save_photo_site, sites_path
 from mele.weather import WeatherError, load_forecast, weather_dir_for
+from mele.weather_journal import (
+    SOURCE_ECOWITT,
+    SOURCE_GEOSPHERE,
+    append_forecast,
+    append_observation,
+    iter_journal,
+    should_skip_forecast,
+)
+from mele.weather_local import parse_observation_payload
 from mele.nina import NinaClient, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
@@ -277,7 +286,114 @@ def run_app(port: int | None = None) -> None:
             payload = load_forecast(lat, lon, weather_dir, refresh=bool(refresh), network=True)
         except WeatherError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
+        if (
+            settings.weather_journal_enabled
+            and bool(refresh)
+            and not payload.get("offline")
+            and not should_skip_forecast(
+                weather_dir,
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                interval_h=float(settings.weather_journal_interval_h or 1.0),
+                source=SOURCE_GEOSPHERE,
+            )
+        ):
+            try:
+                append_forecast(
+                    weather_dir,
+                    payload,
+                    latitude_deg=float(lat),
+                    longitude_deg=float(lon),
+                    label=settings.local_weather_label,
+                    source=SOURCE_GEOSPHERE,
+                )
+            except OSError:
+                pass
         return JSONResponse(payload)
+
+    @app.get("/weather/journal")
+    def weather_journal_list(kind: str = "", limit: int = 48) -> JSONResponse:
+        """Kurze Liste fuer spaeteres Replay (ohne volle hours-Serien)."""
+        rows = iter_journal(weather_dir, kind=kind or None)
+        slim = []
+        for item in rows[-max(1, min(int(limit), 500)) :]:
+            forecast = item.get("forecast") or {}
+            observation = item.get("observation") or {}
+            slim.append(
+                {
+                    "logged_at": item.get("logged_at"),
+                    "kind": item.get("kind"),
+                    "source": item.get("source"),
+                    "site": item.get("site"),
+                    "hour_count": forecast.get("hour_count"),
+                    "reference_time": forecast.get("reference_time"),
+                    "observation_when": observation.get("when"),
+                    "temp_c": observation.get("temp_c"),
+                    "humidity_pct": observation.get("humidity_pct"),
+                    "wind_ms": observation.get("wind_ms"),
+                    "uvi": observation.get("uvi"),
+                }
+            )
+        return JSONResponse({"count": len(slim), "entries": slim})
+
+    def _ingest_observation(payload: dict) -> JSONResponse:
+        if not settings.local_weather_enabled:
+            return JSONResponse(
+                {"ok": False, "error": "local_weather.enabled=false in mele.yaml"},
+                status_code=403,
+            )
+        lat = settings.latitude_deg
+        lon = settings.longitude_deg
+        try:
+            if payload.get("lat") is not None:
+                lat = float(payload.get("lat"))
+            if payload.get("lon") is not None:
+                lon = float(payload.get("lon"))
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "lat/lon ungueltig"}, status_code=400)
+        if lat is None or lon is None:
+            return JSONResponse(
+                {"ok": False, "error": "Standort lat/lon in mele.yaml setzen"},
+                status_code=400,
+            )
+        try:
+            observation = parse_observation_payload(payload)
+            source = SOURCE_ECOWITT
+            provider = (settings.local_weather_provider or "ecowitt").strip().lower()
+            if provider and provider != "ecowitt":
+                source = f"{provider}.local"
+            record = append_observation(
+                weather_dir,
+                observation,
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                source=source,
+                label=settings.local_weather_label,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        obs = {k: v for k, v in (record.get("observation") or {}).items() if k != "raw"}
+        return JSONResponse({"ok": True, "path": record.get("path"), "observation": obs})
+
+    @app.api_route("/weather/observation", methods=["GET", "POST"])
+    async def weather_observation(request: Request) -> JSONResponse:
+        """Ecowitt Custom Server / generische lokale Messung -> Journal."""
+        payload: dict = {}
+        if request.method == "GET":
+            payload = dict(request.query_params)
+        else:
+            content_type = (request.headers.get("content-type") or "").lower()
+            try:
+                if "application/json" in content_type:
+                    body = await request.json()
+                    if isinstance(body, dict):
+                        payload = body
+                else:
+                    form = await request.form()
+                    payload = {str(k): form.get(k) for k in form.keys()}
+            except Exception:
+                payload = dict(request.query_params)
+        return _ingest_observation(payload)
 
     @app.get("/sky-overlay")
     def sky_overlay(

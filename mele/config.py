@@ -29,6 +29,19 @@ class MeleSettings:
     timezone: str = ""
     catalog_dir: Path = REPO_ROOT / "data" / "catalogs"
     nina_base_url: str = "http://localhost:1888/v2/api"
+    weather_journal_enabled: bool = True
+    weather_journal_interval_h: float = 1.0
+    local_weather_enabled: bool = False
+    local_weather_provider: str = "ecowitt"
+    local_weather_label: str = ""
+
+
+def _optional_bool(value: Any, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _optional_float(value: Any) -> float | None:
@@ -56,6 +69,7 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         horizon = REPO_ROOT / horizon
     if not catalogs.is_absolute():
         catalogs = REPO_ROOT / catalogs
+    local = raw.get("local_weather") if isinstance(raw.get("local_weather"), dict) else {}
     return MeleSettings(
         ui_port=int(raw.get("ui_port") or 8082),
         media_dir=media,
@@ -67,6 +81,11 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         timezone=str(raw.get("timezone") or "").strip(),
         catalog_dir=catalogs,
         nina_base_url=str(raw.get("nina_base_url") or "http://localhost:1888/v2/api").strip().rstrip("/"),
+        weather_journal_enabled=_optional_bool(raw.get("weather_journal_enabled"), True),
+        weather_journal_interval_h=float(raw.get("weather_journal_interval_h") or 1.0),
+        local_weather_enabled=_optional_bool(local.get("enabled"), False),
+        local_weather_provider=str(local.get("provider") or "ecowitt").strip() or "ecowitt",
+        local_weather_label=str(local.get("label") or "").strip(),
     )
 
 

@@ -13,3 +13,11 @@ timezone: Europe/Vienna
 catalog_dir: data/catalogs
 # NINA Advanced API (READ ONLY in Phase 1). Default lokal auf dem MeLE-PC.
 nina_base_url: http://localhost:1888/v2/api
+# GeoSphere-Forecast-Journal (stündlich via Task Scheduler / CLI).
+weather_journal_enabled: true
+weather_journal_interval_h: 1
+# Lokale Station (z.B. Ecowitt GW1200+WS90) — Custom Server -> /weather/observation
+local_weather:
+  enabled: false
+  provider: ecowitt
+  label: Garten

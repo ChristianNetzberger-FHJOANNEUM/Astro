@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,8 @@ ATTRIBUTION = "Daten: GeoSphere Austria, CC-BY 4.0"
 STALE_AFTER = timedelta(hours=3)
 FETCH_TIMEOUT_S = 20
 SUMMARY_HOURS = 12
+# Unter dieser Geschwindigkeit keine Windrichtung (ruhig).
+_WIND_CALM_MS = 0.05
 
 
 class WeatherError(RuntimeError):
@@ -58,6 +61,50 @@ def wind_speed_ms(east_ms: float | None, north_ms: float | None) -> float | None
     return (east_ms * east_ms + north_ms * north_ms) ** 0.5
 
 
+def wind_dir_deg(east_ms: float | None, north_ms: float | None) -> float | None:
+    """Meteorologische Windrichtung in Grad (woher der Wind kommt, 0=N, 90=E)."""
+    if east_ms is None or north_ms is None:
+        return None
+    speed = wind_speed_ms(east_ms, north_ms)
+    if speed is None or speed < _WIND_CALM_MS:
+        return None
+    # atan2(v, u) = Richtung der Stroemung; meteorologisch = Gegenrichtung vom Norden.
+    degrees = (270.0 - math.degrees(math.atan2(north_ms, east_ms))) % 360.0
+    return round(degrees, 1)
+
+
+# 16-Punkt-Kompass (Sektoren je 22.5°, Mitte auf der Himmelsrichtung).
+_COMPASS16 = (
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSW",
+    "SW",
+    "WSW",
+    "W",
+    "WNW",
+    "NW",
+    "NNW",
+)
+
+
+def wind_compass16(degrees: float | None) -> str | None:
+    """Himmelsrichtung aus meteorologischer Windrichtung (16 Sektoren)."""
+    if degrees is None:
+        return None
+    try:
+        deg = float(degrees) % 360.0
+    except (TypeError, ValueError):
+        return None
+    return _COMPASS16[int((deg + 11.25) // 22.5) % 16]
+
+
 def parse_nwp(payload: dict[str, Any], *, query_lat: float, query_lon: float) -> dict[str, Any]:
     stamps = payload.get("timestamps") or []
     features = payload.get("features") or []
@@ -77,16 +124,18 @@ def parse_nwp(payload: dict[str, Any], *, query_lat: float, query_lon: float) ->
     suns = _series(params, "sund")
     hours = []
     for index, stamp in enumerate(stamps):
+        u = _num(east[index] if index < len(east) else None)
+        v = _num(north[index] if index < len(north) else None)
+        direction = wind_dir_deg(u, v)
         hours.append(
             {
                 "when": _parse_stamp(str(stamp)).isoformat(),
                 "cloud_pct": _num(clouds[index] if index < len(clouds) else None),
                 "temp_c": _num(temps[index] if index < len(temps) else None),
                 "humidity_pct": _num(hums[index] if index < len(hums) else None),
-                "wind_ms": wind_speed_ms(
-                    _num(east[index] if index < len(east) else None),
-                    _num(north[index] if index < len(north) else None),
-                ),
+                "wind_ms": wind_speed_ms(u, v),
+                "wind_dir_deg": direction,
+                "wind_compass": wind_compass16(direction),
                 "gust_ms": _num(gusts[index] if index < len(gusts) else None),
                 "precip_mm": _num(rain[index] if index < len(rain) else None),
                 "symbol": int(symbols[index]) if index < len(symbols) and symbols[index] is not None else None,

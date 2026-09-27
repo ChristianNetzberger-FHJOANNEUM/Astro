@@ -51,6 +51,14 @@ def main(argv: list[str] | None = None) -> int:
     catalog.add_argument("action", choices=["import", "info"])
     catalog.add_argument("--src", help="bereits heruntergeladene Katalogdateien")
     catalog.add_argument("--no-download", action="store_true")
+    weather_journal = sub.add_parser(
+        "weather-journal",
+        help="GeoSphere-Forecast holen und ins Journal schreiben (Task Scheduler)",
+    )
+    weather_journal.add_argument("--lat", type=float, default=None)
+    weather_journal.add_argument("--lon", type=float, default=None)
+    weather_journal.add_argument("--force", action="store_true")
+    weather_journal.add_argument("--label", default="")
     args = parser.parse_args(argv)
     if args.command == "horizon":
         return _cmd_horizon(args)
@@ -62,6 +70,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_download:
             extra.append("--no-download")
         return catalog_main(extra)
+    if args.command == "weather-journal":
+        from mele.weather_journal_cli import run_weather_journal
+        return run_weather_journal(
+            latitude_deg=args.lat,
+            longitude_deg=args.lon,
+            force=args.force,
+            label=args.label,
+        )
     return 1
 
 

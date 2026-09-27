@@ -35,6 +35,17 @@
     th { opacity: .7; font-weight: 600; }
     tr.night td { background: rgba(15,23,42,.55); }
     .warn { color: #fbbf24; }
+    .wind-cell { white-space: nowrap; }
+    .wind-arrow {
+      display: inline-block;
+      width: 1.1em;
+      text-align: center;
+      transform-origin: 50% 55%;
+      color: #38bdf8;
+      font-size: 14px;
+      line-height: 1;
+      margin-right: 2px;
+    }
   </style>
 </head>
 <body>
@@ -121,18 +132,55 @@
         const cells = [
           fmtTime(item.when),
           item.cloud_pct == null ? "—" : `${item.cloud_pct.toFixed(0)} %`,
-          item.wind_ms == null ? "—" : `${item.wind_ms.toFixed(1)} m/s`,
+          null, // Wind separat (Pfeil)
           item.humidity_pct == null ? "—" : `${item.humidity_pct.toFixed(0)} %`,
           item.temp_c == null ? "—" : `${item.temp_c.toFixed(1)} °C`,
           item.precip_mm == null ? "—" : `${item.precip_mm.toFixed(1)} mm`,
         ];
         cells.forEach((text) => {
           const td = document.createElement("td");
-          td.textContent = text;
+          if (text === null) {
+            td.className = "wind-cell";
+            td.appendChild(windCell(item));
+          } else {
+            td.textContent = text;
+          }
           tr.appendChild(td);
         });
         body.appendChild(tr);
       });
+    }
+
+    function windCell(item) {
+      const wrap = document.createDocumentFragment();
+      if (item.wind_ms == null) {
+        wrap.appendChild(document.createTextNode("—"));
+        return wrap;
+      }
+      const dir = item.wind_dir_deg;
+      if (dir != null && Number.isFinite(Number(dir))) {
+        const arrow = document.createElement("span");
+        arrow.className = "wind-arrow";
+        arrow.textContent = "↑";
+        arrow.style.transform = `rotate(${(Number(dir) + 180) % 360}deg)`;
+        arrow.title = `Wind aus ${Math.round(Number(dir))}° → Strömung`;
+        wrap.appendChild(arrow);
+      }
+      let text = `${item.wind_ms.toFixed(1)} m/s`;
+      if (dir != null && Number.isFinite(Number(dir))) {
+        const compass = item.wind_compass || compass16(Number(dir));
+        text += ` · ${Math.round(Number(dir))}° ${compass}`;
+      }
+      wrap.appendChild(document.createTextNode(text));
+      return wrap;
+    }
+
+    function compass16(deg) {
+      const labels = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+      ];
+      return labels[Math.floor(((deg % 360) + 11.25) / 22.5) % 16];
     }
 
     async function load(refresh) {

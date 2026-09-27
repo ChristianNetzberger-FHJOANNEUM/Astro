@@ -9,6 +9,8 @@ from mele.weather import (
     load_forecast,
     parse_nwp,
     summarize,
+    wind_compass16,
+    wind_dir_deg,
     wind_speed_ms,
 )
 
@@ -29,8 +31,23 @@ def test_parse_nwp_and_wind() -> None:
     assert first["cloud_pct"] == 20.0
     assert first["temp_c"] == 12.0
     assert abs((first["wind_ms"] or 0) - 1.0) < 0.01
+    # u=1, v=0 → Stroemung nach Osten → Wind aus Westen (270°)
+    assert first["wind_dir_deg"] == pytest.approx(270.0)
+    assert first["wind_compass"] == "W"
+    second = data["hours"][1]
+    assert second["wind_dir_deg"] == pytest.approx(225.0)
+    assert second["wind_compass"] == "SW"
     assert data["grid_lat"] == pytest.approx(48.303)
     assert wind_speed_ms(3.0, 4.0) == 5.0
+    assert wind_dir_deg(0.0, 5.0) == pytest.approx(180.0)  # aus Sueden
+    assert wind_compass16(180.0) == "S"
+    assert wind_compass16(0.0) == "N"
+    assert wind_compass16(11.0) == "N"
+    assert wind_compass16(12.0) == "NNE"
+    assert wind_compass16(348.76) == "N"
+    assert wind_dir_deg(0.0, 0.0) is None
+    assert wind_dir_deg(None, 1.0) is None
+    assert wind_compass16(None) is None
 
 
 def test_summarize_next_hours() -> None:
