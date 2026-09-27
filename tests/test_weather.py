@@ -6,8 +6,11 @@ import pytest
 from mele.weather import (
     WeatherError,
     cache_path,
+    dewpoint_c,
     load_forecast,
+    moon_phase_label,
     parse_nwp,
+    sky_summary,
     summarize,
     wind_compass16,
     wind_dir_deg,
@@ -34,6 +37,13 @@ def test_parse_nwp_and_wind() -> None:
     # u=1, v=0 → Stroemung nach Osten → Wind aus Westen (270°)
     assert first["wind_dir_deg"] == pytest.approx(270.0)
     assert first["wind_compass"] == "W"
+    assert first["dewpoint_c"] is not None
+    assert "light" in first
+    assert first["light"] in {"night", "twilight", "day"}
+    assert first["observe"] == (first["light"] == "night")
+    assert "moon_up" in first
+    assert first["moon_phase"] is not None
+    assert 0.0 <= first["moon_phase"] <= 1.0
     second = data["hours"][1]
     assert second["wind_dir_deg"] == pytest.approx(225.0)
     assert second["wind_compass"] == "SW"
@@ -48,6 +58,26 @@ def test_parse_nwp_and_wind() -> None:
     assert wind_dir_deg(0.0, 0.0) is None
     assert wind_dir_deg(None, 1.0) is None
     assert wind_compass16(None) is None
+
+
+def test_dewpoint_magnus() -> None:
+    # 20 °C, 100 % → Taupunkt = Temp
+    assert dewpoint_c(20.0, 100.0) == pytest.approx(20.0, abs=0.2)
+    # 20 °C, 50 % → ca. 9.3 °C
+    assert dewpoint_c(20.0, 50.0) == pytest.approx(9.3, abs=0.3)
+    assert dewpoint_c(12.0, 70.0) is not None
+    assert dewpoint_c(None, 50.0) is None
+    assert dewpoint_c(10.0, 0.0) is None
+
+
+def test_sky_summary_and_moon_label() -> None:
+    assert "Neumond" in moon_phase_label(0.01)
+    assert "Vollmond" in moon_phase_label(0.99)
+    data = parse_nwp(_payload(), query_lat=48.3, query_lon=14.28)
+    sky = sky_summary(data["hours"])
+    assert sky["observe_hours"] == sum(1 for h in data["hours"] if h.get("observe"))
+    assert sky["moon_up_hours"] == sum(1 for h in data["hours"] if h.get("moon_up"))
+    assert sky["moon_label"]
 
 
 def test_summarize_next_hours() -> None:

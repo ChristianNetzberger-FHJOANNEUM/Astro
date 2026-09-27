@@ -22,18 +22,62 @@
     .chart { display: flex; align-items: flex-end; gap: 3px; height: 140px;
              overflow-x: auto; padding-bottom: 4px; }
     .col { flex: 0 0 14px; display: flex; flex-direction: column; align-items: center;
-           height: 100%; justify-content: flex-end; }
+           height: 100%; justify-content: flex-end; border-radius: 2px; }
     .col .bar { width: 11px; border-radius: 2px 2px 0 0; min-height: 2px; }
-    .col.night .bar { outline: 1px solid rgba(226,232,240,.18); }
+    .col.light-night { background: rgba(2, 6, 23, 0.55); }
+    .col.light-twilight { background: rgba(59, 130, 246, 0.18); }
+    .col.light-day { background: rgba(251, 191, 36, 0.10); }
+    .col.light-night .bar { outline: 1px solid rgba(226,232,240,.22); }
     .col span { font-size: 9px; opacity: .7; margin-top: 3px; writing-mode: vertical-rl;
                 transform: rotate(180deg); height: 28px; }
     .cloud { background: #94a3b8; }
     .wind { background: #38bdf8; }
     .hum { background: #34d399; }
+    .legend { font-size: 12px; opacity: .8; margin: -4px 0 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+    .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px;
+                vertical-align: -2px; margin-right: 4px; }
+    .legend .sw-night { background: rgba(2, 6, 23, 0.9); border: 1px solid rgba(226,232,240,.25); }
+    .legend .sw-twilight { background: rgba(59, 130, 246, 0.45); }
+    .legend .sw-day { background: rgba(251, 191, 36, 0.35); }
+    .chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+    .sky-row {
+      display: grid;
+      grid-template-columns: 118px minmax(0, max-content);
+      column-gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+      min-height: 22px;
+    }
+    .sky-row.chart-row { align-items: end; min-height: 120px; }
+    .sky-row .sky-label {
+      font-size: 12px; opacity: .85; line-height: 1.25;
+      padding-top: 2px;
+    }
+    .sky-row.chart-row .sky-label { align-self: center; padding-bottom: 0; }
+    .sky-row.chart-row:last-child .sky-label { padding-bottom: 28px; align-self: end; }
+    .sky-strip, .chart { display: flex; gap: 3px; width: max-content; }
+    .chart { align-items: flex-end; height: 120px; overflow: visible; padding-bottom: 0; }
+    .sky-row.chart-row:last-child .chart { height: 140px; }
+    .sky-strip .cell {
+      flex: 0 0 14px; height: 16px; border-radius: 2px;
+      background: rgba(30, 41, 59, 0.55); box-sizing: border-box;
+    }
+    .sky-strip .cell.observe-on {
+      background: #22c55e;
+      box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35);
+    }
+    .sky-strip .cell.moon-on {
+      background: #e2e8f0;
+    }
+    .sky-strip .cell.moon-dim {
+      background: rgba(226, 232, 240, 0.28);
+    }
     table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
     th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #1e293b; }
     th { opacity: .7; font-weight: 600; }
-    tr.night td { background: rgba(15,23,42,.55); }
+    tr.light-night td { background: rgba(15,23,42,.55); }
+    tr.light-twilight td { background: rgba(37, 99, 235, 0.12); }
+    tr.light-day td { background: transparent; }
     .warn { color: #fbbf24; }
     .wind-cell { white-space: nowrap; }
     .wind-arrow {
@@ -60,22 +104,44 @@
     <p id="summary">Lade …</p>
     <p id="status"></p>
     <div class="chart-block">
-      <h2>Bewoelkung (%)</h2>
-      <div class="chart" id="chart-cloud"></div>
-    </div>
-    <div class="chart-block">
-      <h2>Wind (m/s)</h2>
-      <div class="chart" id="chart-wind"></div>
-    </div>
-    <div class="chart-block">
-      <h2>Feuchte (%)</h2>
-      <div class="chart" id="chart-hum"></div>
+      <h2>Prognose (60 h)</h2>
+      <p class="legend">
+        <span><i class="sw-night"></i>Nacht</span>
+        <span><i class="sw-twilight"></i>Daemmerung (±1 h)</span>
+        <span><i class="sw-day"></i>Tag</span>
+        <span style="opacity:.95">gruen = Beobachtungsfenster · hell = Mond ueber Horizont</span>
+      </p>
+      <div class="chart-scroll" id="sky-scroll">
+        <div class="sky-row">
+          <div class="sky-label" id="observe-label">Beobachten</div>
+          <div class="sky-strip" id="strip-observe"></div>
+        </div>
+        <div class="sky-row">
+          <div class="sky-label" id="moon-label">Mond</div>
+          <div class="sky-strip" id="strip-moon"></div>
+        </div>
+        <div class="sky-row chart-row">
+          <div class="sky-label">Bewoelkung %</div>
+          <div class="chart" id="chart-cloud"></div>
+        </div>
+        <div class="sky-row chart-row">
+          <div class="sky-label">Wind m/s</div>
+          <div class="chart" id="chart-wind"></div>
+        </div>
+        <div class="sky-row chart-row">
+          <div class="sky-label">Feuchte % rF</div>
+          <div class="chart" id="chart-hum"></div>
+        </div>
+      </div>
     </div>
     <div class="chart-block">
       <h2>Stunden</h2>
       <table>
         <thead>
-          <tr><th>Zeit</th><th>Wolken</th><th>Wind</th><th>Feuchte</th><th>Temp</th><th>Regen</th></tr>
+          <tr>
+            <th>Zeit</th><th>Wolken</th><th>Wind</th><th>Feuchte</th>
+            <th>Temp</th><th>Taupunkt</th><th>Regen</th>
+          </tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
@@ -96,12 +162,18 @@
       return date.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
     }
 
-    function isNight(iso) {
-      const hour = new Date(iso).getHours();
-      return hour >= 19 || hour < 7;
+    function lightClass(item) {
+      const light = item.light || "";
+      if (light === "night" || light === "twilight" || light === "day") {
+        return " light-" + light;
+      }
+      // Fallback ohne Ephemeride: grobe Lokalzeit
+      const hour = new Date(item.when).getHours();
+      if (hour >= 19 || hour < 7) return " light-night";
+      return " light-day";
     }
 
-    function barChart(id, hours, key, maxHint, cls) {
+    function barChart(id, hours, key, maxHint, cls, withLight, showHourLabels) {
       const box = document.getElementById(id);
       box.innerHTML = "";
       const values = hours.map((item) => Number(item[key])).filter((value) => Number.isFinite(value));
@@ -109,17 +181,60 @@
       hours.forEach((item) => {
         const value = Number(item[key]);
         const col = document.createElement("div");
-        col.className = "col" + (isNight(item.when) ? " night" : "");
+        col.className = "col" + (withLight ? lightClass(item) : "");
         const bar = document.createElement("div");
         bar.className = "bar " + cls;
         const pct = Number.isFinite(value) ? Math.max(2, (value / max) * 100) : 2;
         bar.style.height = `${Math.min(100, pct)}%`;
-        bar.title = `${fmtTime(item.when)}  ${Number.isFinite(value) ? value.toFixed(1) : "—"}`;
-        const label = document.createElement("span");
-        label.textContent = new Date(item.when).getHours();
+        const phase = item.light ? ` · ${item.light}` : "";
+        bar.title = `${fmtTime(item.when)}  ${Number.isFinite(value) ? value.toFixed(1) : "—"}${phase}`;
         col.appendChild(bar);
-        col.appendChild(label);
+        if (showHourLabels) {
+          const label = document.createElement("span");
+          label.textContent = new Date(item.when).getHours();
+          col.appendChild(label);
+        }
         box.appendChild(col);
+      });
+    }
+
+    function fillSkyStrips(hours, sky) {
+      const observeStrip = document.getElementById("strip-observe");
+      const moonStrip = document.getElementById("strip-moon");
+      observeStrip.innerHTML = "";
+      moonStrip.innerHTML = "";
+      const obsNote = (sky && sky.observe_note) || "Sonnenuntergang+1 h … Sonnenaufgang−1 h";
+      const obsN = sky && sky.observe_hours != null ? sky.observe_hours : "—";
+      document.getElementById("observe-label").textContent = `Beobachten (${obsN} h)`;
+      document.getElementById("observe-label").title = obsNote;
+      const moonLabel = (sky && sky.moon_label) || "Mond";
+      const moonN = sky && sky.moon_up_hours != null ? sky.moon_up_hours : "—";
+      document.getElementById("moon-label").textContent = `${moonLabel}`;
+      document.getElementById("moon-label").title = `Mond ueber Horizont: ${moonN} h`;
+
+      hours.forEach((item) => {
+        const obs = document.createElement("div");
+        obs.className = "cell" + (item.observe ? " observe-on" : "");
+        obs.title = item.observe
+          ? `${fmtTime(item.when)} · Beobachtungsfenster`
+          : `${fmtTime(item.when)} · kein Beobachtungsfenster (${item.light || "—"})`;
+        observeStrip.appendChild(obs);
+
+        const moon = document.createElement("div");
+        const phase = item.moon_phase;
+        const bright = phase != null ? 0.25 + 0.75 * Number(phase) : 0.5;
+        if (item.moon_up) {
+          moon.className = "cell moon-on";
+          moon.style.opacity = String(Math.max(0.35, Math.min(1, bright)));
+        } else {
+          moon.className = "cell moon-dim";
+          moon.style.opacity = "0.35";
+        }
+        const pct = phase != null ? `${Math.round(Number(phase) * 100)} %` : "—";
+        moon.title = item.moon_up
+          ? `${fmtTime(item.when)} · Mond ueber Horizont · ${pct}`
+          : `${fmtTime(item.when)} · Mond unter Horizont · ${pct}`;
+        moonStrip.appendChild(moon);
       });
     }
 
@@ -128,13 +243,14 @@
       body.innerHTML = "";
       hours.forEach((item) => {
         const tr = document.createElement("tr");
-        if (isNight(item.when)) tr.className = "night";
+        tr.className = (lightClass(item) || "").trim();
         const cells = [
           fmtTime(item.when),
           item.cloud_pct == null ? "—" : `${item.cloud_pct.toFixed(0)} %`,
           null, // Wind separat (Pfeil)
-          item.humidity_pct == null ? "—" : `${item.humidity_pct.toFixed(0)} %`,
+          item.humidity_pct == null ? "—" : `${item.humidity_pct.toFixed(0)} % rF`,
           item.temp_c == null ? "—" : `${item.temp_c.toFixed(1)} °C`,
+          item.dewpoint_c == null ? "—" : `${item.dewpoint_c.toFixed(1)} °C`,
           item.precip_mm == null ? "—" : `${item.precip_mm.toFixed(1)} mm`,
         ];
         cells.forEach((text) => {
@@ -209,9 +325,10 @@
         statusEl.textContent = notes.join("  ·  ");
         statusEl.className = data.offline || data.stale ? "warn" : "";
         const hours = data.hours || [];
-        barChart("chart-cloud", hours, "cloud_pct", 100, "cloud");
-        barChart("chart-wind", hours, "wind_ms", 8, "wind");
-        barChart("chart-hum", hours, "humidity_pct", 100, "hum");
+        fillSkyStrips(hours, data.sky || {});
+        barChart("chart-cloud", hours, "cloud_pct", 100, "cloud", true, false);
+        barChart("chart-wind", hours, "wind_ms", 8, "wind", false, false);
+        barChart("chart-hum", hours, "humidity_pct", 100, "hum", false, true);
         fillTable(hours);
         document.getElementById("attr").textContent = data.attribution || "";
       } catch (_err) {

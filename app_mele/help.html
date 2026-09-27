@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE Hilfe</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #0f172a;
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --nav-w: 240px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #top {
+      position: sticky; top: 0; z-index: 2; display: flex; gap: 12px; align-items: center;
+      padding: 10px 16px; background: rgba(15,23,42,.96); border-bottom: 1px solid var(--border);
+    }
+    #top a, #top button {
+      color: var(--text); background: #1f4e5f; border: 0; border-radius: 4px;
+      padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px;
+    }
+    #layout { display: grid; grid-template-columns: var(--nav-w) 1fr; min-height: calc(100vh - 48px); }
+    nav {
+      border-right: 1px solid var(--border); background: var(--panel);
+      padding: 16px 12px 40px; position: sticky; top: 48px; align-self: start;
+      max-height: calc(100vh - 48px); overflow: auto;
+    }
+    nav h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 14px 8px 8px; }
+    nav a {
+      display: block; padding: 8px 10px; border-radius: 6px; color: var(--text);
+      text-decoration: none; font-size: 14px; margin-bottom: 2px;
+    }
+    nav a:hover { background: rgba(56,189,248,.12); }
+    nav a.active { background: rgba(56,189,248,.2); color: var(--accent); }
+    main { padding: 24px 28px 60px; max-width: 820px; }
+    article { display: none; }
+    article.active { display: block; }
+    h1 { font-size: 26px; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 28px 0 8px; }
+    h3 { font-size: 15px; margin: 18px 0 6px; color: #cbd5e1; }
+    p, li { line-height: 1.55; color: #cbd5e1; font-size: 14.5px; }
+    .lead { font-size: 15.5px; color: var(--muted); margin-bottom: 18px; }
+    code, .path { font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+                  background: #111827; padding: 1px 5px; border-radius: 3px; }
+    ol, ul { padding-left: 1.3em; }
+    .note {
+      border-left: 3px solid var(--accent); padding: 8px 12px; margin: 14px 0;
+      background: rgba(56,189,248,.08); border-radius: 0 6px 6px 0; font-size: 14px;
+    }
+    @media (max-width: 800px) {
+      #layout { grid-template-columns: 1fr; }
+      nav { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <a href="/">Zurueck zur App</a>
+    <span style="opacity:.75;font-size:13px">MeLE Hilfe / Wiki</span>
+  </div>
+  <div id="layout">
+    <nav id="nav">
+      <h2>Einstieg</h2>
+      <a href="#start" data-page="start">Ueberblick</a>
+      <h2>Horizont</h2>
+      <a href="#horizont" data-page="horizont">Horizont freistellen</a>
+      <a href="#hybrid" data-page="hybrid">Hybrid (Floor + Farbe)</a>
+      <a href="#speichern" data-page="speichern">Speichern &amp; Export</a>
+      <h2>Standort</h2>
+      <a href="#einnorden" data-page="einnorden">Bild einnorden</a>
+      <a href="#standort" data-page="standort">Beobachterstandort</a>
+      <h2>Beobachtung</h2>
+      <a href="#wetter" data-page="wetter">Wetter &amp; Journal</a>
+      <a href="#360" data-page="360">360-Ansicht</a>
+    </nav>
+    <main>
+      <article id="start" class="active">
+        <h1>Ueberblick</h1>
+        <p class="lead">Kurze Ablaeufe fuer MeLE. Dieses Wiki ergaenzt die Formeln unter
+          „Berechnungen“ in der Haupt-App — hier stehen die <em>Workflows</em>.</p>
+        <h2>Typische Reihenfolge</h2>
+        <ol>
+          <li>360-Panorama waehlen</li>
+          <li>Standort setzen (Config / GPS-Foto / Karte)</li>
+          <li>Norden kalibrieren</li>
+          <li>Horizont freistellen (Methode waehlen)</li>
+          <li>PNG/Stellarium exportieren, 360-Ansicht / Wetter nutzen</li>
+        </ol>
+        <div class="note">Tipp: Bei Unklarheit zuerst die passende Seite links oeffnen,
+          statt nur die Kurzhilfe in der App zu lesen.</div>
+      </article>
+
+      <article id="horizont">
+        <h1>Horizont freistellen</h1>
+        <p class="lead">Ziel: Himmel transparent, Hindernisse (Haeuser, Baeume) opak —
+          als Maske und als Kurve h(Az).</p>
+        <h2>Welche Methode?</h2>
+        <h3>Auto</h3>
+        <p>Feste Blau-/Sonne-Heuristik. Schnell, oft ungenau bei Wolken oder aehnlichen Farben.</p>
+        <h3>Farbpicker</h3>
+        <p>Mehrere Blau-Proben + optional „Kein Himmel“ / Sonnen-Exclude.
+          Gut bei klarem Himmel. <strong>Graue Wolken ohne Blau</strong> werden oft nicht
+          als Himmel erkannt und bleiben als „Hindernis“ stehen.</p>
+        <h3>Zeichnen / 360-Punktwolke</h3>
+        <p>Stuetzpunkte setzen, zirkulaer interpolieren. Alles <em>oberhalb</em> der Linie
+          wird Himmel — unabhaengig von Farbe. Ideal als grobe Floor-Linie.</p>
+        <h3>Pinsel</h3>
+        <p>Pixelweise Maske nachziehen. Einzige Methode, die eine vorhandene Maske
+          inkrementell aendert (ohne Soft-Merge mit Farbe).</p>
+        <h3>Hybrid</h3>
+        <p>Floor + Farbpicker — siehe eigene Seite. Empfohlen bei Wolken + blauen Luecken.</p>
+        <h2>Empfehlung</h2>
+        <ul>
+          <li>Klarer blauer Himmel → Farbpicker</li>
+          <li>Wolken / schwierige Farben → Zeichnen oder Hybrid</li>
+          <li>Feinschliff → Pinsel</li>
+        </ul>
+      </article>
+
+      <article id="hybrid">
+        <h1>Hybrid (Floor + Farbe)</h1>
+        <p class="lead">Grobe Horizontlinie erzwingen, restlichen blauen Himmel darunter
+          per Farbe nachziehen — ohne die Floor zu verlieren.</p>
+        <h2>Ablauf</h2>
+        <ol>
+          <li><strong>Floor setzen:</strong> Verfahren „Zeichnen“ oder Punktwolke in der 360-Ansicht,
+            Linie generieren/speichern. Linie etwas entlang der echten Hinderniskante
+            (Dachkanten, Baumwipfel) — oberhalb davon soll spaeter alles Himmel sein.</li>
+          <li><strong>Hybrid waehlen,</strong> Blau-Proben setzen (wie Farbpicker).</li>
+          <li><strong>Horizont erkennen</strong> — Ergebnis: Himmel =
+            <code>oberhalb Floor</code> <strong>oder</strong> <code>farbähnlich</code>.</li>
+        </ol>
+        <h2>Was passiert technisch?</h2>
+        <ul>
+          <li>Farbpicker allein <em>ersetzt</em> die Kurve — Hybrid <em>merged</em>.</li>
+          <li>Die 2D-Maske bleibt die gemergte Maske (nicht nur aus der Kurve neu gebaut).</li>
+          <li>Die JSON-Kurve h(Az) kommt aus der gemergten Maske; Floor-Kontrollepunkte bleiben erhalten.</li>
+        </ul>
+        <div class="note">Ohne Floor-Linie (Zeichnen/Punktwolke) startet Hybrid nicht —
+          Meldung in der App.</div>
+      </article>
+
+      <article id="speichern">
+        <h1>Speichern &amp; Export</h1>
+        <p>Pro Foto unter <span class="path">data/horizon/</span>:</p>
+        <ul>
+          <li><code>{stem}.horizon.json</code> / <code>.csv</code> — dichte Kurve h(Az), optional control_points</li>
+          <li><code>{stem}.horizon.mask.png</code> — Grau: 0 Himmel, 255 Boden</li>
+          <li><code>{stem}.horizon.png</code> / <code>.tif</code> — RGB+Alpha (nach Export)</li>
+          <li><code>{stem}.horizon.full.png</code> — Vollaufloesung</li>
+          <li><code>{stem}.landscape/</code> — Stellarium spherical</li>
+        </ul>
+        <p>Die transparente PNG kommt aus der Maske. Die astronomische Horizontlinie
+          ist die gespeicherte Punktkurve. Beides wird bei Erkennen/Speichern aktualisiert.</p>
+      </article>
+
+      <article id="einnorden">
+        <h1>Bild einnorden</h1>
+        <p class="lead">Equirektangular: Norden ist eine X-Position auf dem Panorama
+          (<code>north_x</code>).</p>
+        <h2>Implementierte Wege</h2>
+        <ol>
+          <li><strong>Klick: Norden</strong> in der Haupt-App — Klick auf bekannte Nordrichtung im Bild.</li>
+          <li><strong>360-Ansicht</strong> — Kalibrierung / Marken (Schattenkalibrierung, falls genutzt).</li>
+          <li>Gespeicherter Wert in <code>.horizon.json</code> bleibt beim erneuten Oeffnen erhalten.</li>
+        </ol>
+        <p>Ohne korrektes Norden sind Azimut und Stern-Overlay verdreht.</p>
+      </article>
+
+      <article id="standort">
+        <h1>Beobachterstandort</h1>
+        <ul>
+          <li><code>configs/mele.yaml</code> — latitude_deg / longitude_deg</li>
+          <li>GPS-Handyfotos in <span class="path">media/GPS-locations/</span></li>
+          <li>Pro-Pano in <span class="path">data/horizon/sites.json</span></li>
+          <li>OSM-Karte zum Pruefen</li>
+        </ul>
+        <p>Osmo-GPS der 360-Kamera ist oft ungueltig — deshalb getrennte GPS-Ordner.</p>
+      </article>
+
+      <article id="wetter">
+        <h1>Wetter &amp; Journal</h1>
+        <p>Eigene Seite wie 360: GeoSphere NWP (~60 h), Taupunkt, Beobachtungsfenster,
+          Mondband.</p>
+        <ul>
+          <li>Forecast-Journal: Task Scheduler / <code>scripts/weather-journal.ps1</code></li>
+          <li>Lokal spaeter: Ecowitt Custom Server → <code>/weather/observation</code></li>
+          <li>Journal: <span class="path">data/weather/journal/YYYY-MM/</span></li>
+        </ul>
+      </article>
+
+      <article id="360">
+        <h1>360-Ansicht</h1>
+        <p>Three.js lokal, Katalog SQLite, Mond/Planeten aus Ephemeride.
+          Punktwolke fuer Horizont, GoTo (NINA), Prefs, Bahn eines Objekts.</p>
+        <p>Taste 1/2/3: Vorschau / transparentes PNG / Original.</p>
+      </article>
+    </main>
+  </div>
+  <script>
+    const links = [...document.querySelectorAll("nav a[data-page]")];
+    const pages = [...document.querySelectorAll("article")];
+
+    function show(id) {
+      const page = id.replace(/^#/, "") || "start";
+      pages.forEach((el) => el.classList.toggle("active", el.id === page));
+      links.forEach((a) => a.classList.toggle("active", a.dataset.page === page));
+      history.replaceState(null, "", "#" + page);
+    }
+
+    links.forEach((a) => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      show(a.dataset.page);
+    }));
+    show(location.hash || "start");
+    window.addEventListener("hashchange", () => show(location.hash));
+  </script>
+</body>
+</html>

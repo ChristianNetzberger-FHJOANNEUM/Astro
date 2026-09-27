@@ -44,6 +44,7 @@ from mele.horizon import (
     apply_north,
     detect_horizon,
     detect_horizon_from_samples,
+    detect_horizon_hybrid,
     ensure_preview,
     find_sun_excludes,
     load_panorama,
@@ -120,6 +121,7 @@ def run_app(port: int | None = None) -> None:
     weather_dir = weather_dir_for(settings.horizon_dir)
     weather_dir.mkdir(parents=True, exist_ok=True)
     weather_html = (Path(__file__).resolve().parent / "weather.html").read_text(encoding="utf-8")
+    help_html = (Path(__file__).resolve().parent / "help.html").read_text(encoding="utf-8")
     app.add_static_files("/mele-media", preview_dir)
     app.add_static_files("/mele-export", settings.horizon_dir)
     app.add_static_files("/mele-source", settings.media_dir)
@@ -277,6 +279,10 @@ def run_app(port: int | None = None) -> None:
     @app.get("/weather-view")
     def weather_view() -> HTMLResponse:
         return HTMLResponse(weather_html)
+
+    @app.get("/help-view")
+    def help_view() -> HTMLResponse:
+        return HTMLResponse(help_html)
 
     @app.get("/weather-data")
     def weather_data(lat: float | None = None, lon: float | None = None, refresh: int = 0) -> JSONResponse:
@@ -780,6 +786,30 @@ def run_app(port: int | None = None) -> None:
             auto_sun=not excludes,
         )
 
+    def _detect_hybrid(
+        path: Path,
+        samples,
+        rejects,
+        excludes,
+        floor_profile,
+        north_x: float,
+        hue_pad: float,
+        sat_pad: float,
+        val_pad: float,
+    ):
+        return detect_horizon_hybrid(
+            path,
+            samples,
+            floor_profile,
+            north_x=north_x,
+            hue_pad=hue_pad,
+            sat_pad=sat_pad,
+            val_pad=val_pad,
+            reject=rejects,
+            excludes=excludes,
+            auto_sun=not excludes,
+        )
+
     def _find_sun_job(path: Path):
         rgb, src_w, src_h = load_panorama(path)
         return find_sun_excludes(rgb, src_w, src_h)
@@ -962,16 +992,54 @@ def run_app(port: int | None = None) -> None:
                 return
             if state.detecting:
                 return
-            if state.method == "picker" and not state.sky_samples:
+            if state.method in {"picker", "hybrid"} and not state.sky_samples:
                 ui.notify("Zuerst Himmelsfarben anklicken.", type="warning")
                 return
+            floor_profile = None
+            if state.method == "hybrid":
+                if state.manual_points:
+                    try:
+                        _rebuild_manual()
+                    except ValueError as exc:
+                        ui.notify(str(exc), type="negative")
+                        return
+                floor_profile = _active_profile()
+                if floor_profile is None or not floor_profile.points:
+                    ui.notify(
+                        "Hybrid braucht zuerst eine Floor-Linie (Zeichnen oder Punktwolke generieren).",
+                        type="warning",
+                    )
+                    return
             path = state.image_path
             state.detecting = True
             state.status = f"Erkenne Horizont: {path.name}"
             refresh_meta()
             ui.notify(f"Erkennung auf {path.name}", type="info")
             try:
-                if state.method == "picker":
+                if state.method == "hybrid":
+                    profile, hybrid_mask = await run.io_bound(
+                        _detect_hybrid,
+                        path,
+                        list(state.sky_samples),
+                        list(state.reject_samples),
+                        list(state.sun_excludes),
+                        floor_profile,
+                        state.north_x,
+                        state.hue_pad,
+                        state.sat_pad,
+                        state.val_pad,
+                    )
+                    if state.image_path != path:
+                        return
+                    state.profile = profile
+                    # Hybrid-Maske auf Vorschau-Groesse
+                    if hybrid_mask.shape != (state.preview_height, state.preview_width):
+                        from mele.mask import resize_mask
+
+                        state.mask = resize_mask(hybrid_mask, state.preview_width, state.preview_height)
+                    else:
+                        state.mask = hybrid_mask
+                elif state.method == "picker":
                     profile = await run.io_bound(
                         _detect_picker,
                         path,
@@ -983,12 +1051,16 @@ def run_app(port: int | None = None) -> None:
                         state.sat_pad,
                         state.val_pad,
                     )
+                    if state.image_path != path:
+                        return
+                    state.profile = profile
+                    state.mask = mask_from_profile(profile, state.preview_width, state.preview_height)
                 else:
                     profile = await run.io_bound(_detect_auto, path, state.north_x)
-                if state.image_path != path:
-                    return
-                state.profile = profile
-                state.mask = mask_from_profile(profile, state.preview_width, state.preview_height)
+                    if state.image_path != path:
+                        return
+                    state.profile = profile
+                    state.mask = mask_from_profile(profile, state.preview_width, state.preview_height)
                 _persist()
                 state.status = f"{path.name}: {len(profile.points)} Punkte, gespeichert"
                 ui.notify(f"Horizont fuer {path.name} gespeichert.", type="positive")
@@ -1079,7 +1151,7 @@ def run_app(port: int | None = None) -> None:
                 if is_click:
                     on_mark_north(preview_x, preview_y)
                 return
-            if state.method == "picker" and is_click:
+            if state.method in {"picker", "hybrid"} and is_click:
                 src_x = preview_x * state.source_width / state.preview_width
                 src_y = preview_y * state.source_height / state.preview_height
                 if state.picker_role == "sun":
@@ -1272,6 +1344,9 @@ def run_app(port: int | None = None) -> None:
             )
             ui.run_javascript(f"window.open('/weather-view?{query}', '_blank')")
 
+        def on_open_help() -> None:
+            ui.run_javascript("window.open('/help-view', '_blank')")
+
         def on_set_site(lat: float, lon: float, source: str) -> None:
             state.latitude_deg = lat
             state.longitude_deg = lon
@@ -1354,6 +1429,7 @@ def run_app(port: int | None = None) -> None:
             on_toggle_sky_view=on_toggle_sky_view,
             on_open_pano=on_open_pano,
             on_open_weather=on_open_weather,
+            on_open_help=on_open_help,
             on_set_site=on_set_site,
             geotagged_fn=geotagged,
             on_gps_upload=on_gps_upload,

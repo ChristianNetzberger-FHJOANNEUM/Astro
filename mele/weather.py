@@ -105,6 +105,122 @@ def wind_compass16(degrees: float | None) -> str | None:
     return _COMPASS16[int((deg + 11.25) // 22.5) % 16]
 
 
+def dewpoint_c(temp_c: float | None, humidity_pct: float | None) -> float | None:
+    """Taupunkt (°C) aus Temperatur und relativer Feuchte (Magnus, Wasser)."""
+    if temp_c is None or humidity_pct is None:
+        return None
+    try:
+        t = float(temp_c)
+        rh = float(humidity_pct)
+    except (TypeError, ValueError):
+        return None
+    if rh <= 0.0:
+        return None
+    rh = min(100.0, rh)
+    # Magnus-Tetens ueber Wasser
+    a = 17.62
+    b = 243.12
+    gamma = (a * t) / (b + t) + math.log(rh / 100.0)
+    if abs(a - gamma) < 1e-9:
+        return None
+    return round((b * gamma) / (a - gamma), 1)
+
+
+def annotate_hours(
+    hours: list[dict[str, Any]],
+    *,
+    latitude_deg: float,
+    longitude_deg: float,
+) -> list[dict[str, Any]]:
+    """Ergaenzt Taupunkt, Tageslicht, Beobachtungsfenster und Mondlage pro Stunde."""
+    if not hours:
+        return hours
+    stamps: list[datetime] = []
+    for item in hours:
+        try:
+            stamps.append(_parse_stamp(str(item["when"])))
+        except (KeyError, ValueError, TypeError):
+            stamps.append(datetime.now(timezone.utc))
+    try:
+        from mele.catalog import daylight_phases_for_stamps
+
+        lights = daylight_phases_for_stamps(stamps, latitude_deg, longitude_deg)
+    except Exception:  # noqa: BLE001
+        lights = [None] * len(hours)
+
+    moon_up: list[bool | None] = [None] * len(hours)
+    moon_phase: list[float | None] = [None] * len(hours)
+    try:
+        from mele.ephemeris import (
+            angular_sep_deg,
+            illumination_from_sep,
+            moon_radec,
+            sun_radec,
+        )
+        from mele.sky import radec_to_az_alt
+
+        for index, stamp in enumerate(stamps):
+            m_ra, m_dec = moon_radec(stamp)
+            _, alt = radec_to_az_alt(m_ra, m_dec, latitude_deg, longitude_deg, stamp)
+            moon_up[index] = float(alt) > 0.0
+            s_ra, s_dec = sun_radec(stamp)
+            moon_phase[index] = round(
+                illumination_from_sep(angular_sep_deg(s_ra, s_dec, m_ra, m_dec)),
+                3,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    for item, light, up, phase in zip(hours, lights, moon_up, moon_phase, strict=True):
+        item["dewpoint_c"] = dewpoint_c(item.get("temp_c"), item.get("humidity_pct"))
+        if light is not None:
+            item["light"] = light
+            # Beobachtungsfenster = astronomische Nacht nach ±1 h Daemmerung
+            item["observe"] = light == "night"
+        if up is not None:
+            item["moon_up"] = bool(up)
+        if phase is not None:
+            item["moon_phase"] = phase
+    return hours
+
+
+def moon_phase_label(phase: float | None) -> str:
+    """Beleuchtung 0–1 → kurze deutsche Bezeichnung + Prozent (ohne Zu-/Abnahme)."""
+    if phase is None:
+        return "Mond —"
+    pct = int(round(float(phase) * 100))
+    if phase < 0.03:
+        name = "Neumond"
+    elif phase < 0.25:
+        name = "Sichel"
+    elif phase < 0.45:
+        name = "Halbmond"
+    elif phase < 0.55:
+        name = "Vollmond"
+    elif phase < 0.75:
+        name = "Dreiviertel"
+    elif phase < 0.97:
+        name = "Sichel"
+    else:
+        name = "Vollmond"
+    return f"{name} · {pct} %"
+
+
+def sky_summary(hours: list[dict[str, Any]]) -> dict[str, Any]:
+    """Kompakte Sky-Infos fuer Timeline-Header."""
+    observe_n = sum(1 for item in hours if item.get("observe"))
+    moon_n = sum(1 for item in hours if item.get("moon_up"))
+    phases = [float(item["moon_phase"]) for item in hours if item.get("moon_phase") is not None]
+    mid = phases[len(phases) // 2] if phases else None
+    return {
+        "observe_hours": observe_n,
+        "moon_up_hours": moon_n,
+        "moon_phase": mid,
+        "moon_label": moon_phase_label(mid),
+        "observe_note": "Sonnenuntergang+1 h bis Sonnenaufgang-1 h (ohne Daemmerung)",
+    }
+
+
 def parse_nwp(payload: dict[str, Any], *, query_lat: float, query_lon: float) -> dict[str, Any]:
     stamps = payload.get("timestamps") or []
     features = payload.get("features") or []
@@ -127,12 +243,15 @@ def parse_nwp(payload: dict[str, Any], *, query_lat: float, query_lon: float) ->
         u = _num(east[index] if index < len(east) else None)
         v = _num(north[index] if index < len(north) else None)
         direction = wind_dir_deg(u, v)
+        temp = _num(temps[index] if index < len(temps) else None)
+        humidity = _num(hums[index] if index < len(hums) else None)
         hours.append(
             {
                 "when": _parse_stamp(str(stamp)).isoformat(),
                 "cloud_pct": _num(clouds[index] if index < len(clouds) else None),
-                "temp_c": _num(temps[index] if index < len(temps) else None),
-                "humidity_pct": _num(hums[index] if index < len(hums) else None),
+                "temp_c": temp,
+                "humidity_pct": humidity,
+                "dewpoint_c": dewpoint_c(temp, humidity),
                 "wind_ms": wind_speed_ms(u, v),
                 "wind_dir_deg": direction,
                 "wind_compass": wind_compass16(direction),
@@ -142,6 +261,7 @@ def parse_nwp(payload: dict[str, Any], *, query_lat: float, query_lon: float) ->
                 "sunshine_s": _num(suns[index] if index < len(suns) else None),
             }
         )
+    hours = annotate_hours(hours, latitude_deg=query_lat, longitude_deg=query_lon)
     ref = payload.get("reference_time")
     return {
         "source": NWP_RESOURCE,
@@ -279,6 +399,10 @@ def load_forecast(
         cached = dict(cached)
         cached["offline"] = False
     cached["stale"] = _is_stale(cached, now=stamp)
-    cached["summary"] = summarize(cached.get("hours") or [], now=stamp)
+    hours = list(cached.get("hours") or [])
+    annotate_hours(hours, latitude_deg=latitude_deg, longitude_deg=longitude_deg)
+    cached["hours"] = hours
+    cached["summary"] = summarize(hours, now=stamp)
+    cached["sky"] = sky_summary(hours)
     cached["attribution"] = ATTRIBUTION
     return cached

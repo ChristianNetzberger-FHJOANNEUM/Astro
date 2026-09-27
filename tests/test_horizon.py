@@ -317,3 +317,23 @@ def test_sky_obstruction_solid_angle() -> None:
     assert abs(free - 50.0) < 0.6
     blocked, _free = sky_obstruction(_flat_profile(90.0))
     assert blocked > 99.5
+
+
+def test_merge_sky_with_floor_or() -> None:
+    from mele.horizon import merge_sky_with_floor
+
+    # Floor bei alt=0 → y = H/2 = 5 bei height=10
+    floor = _flat_profile(0.0)
+    floor.image_width = 8
+    floor.image_height = 10
+    color = np.zeros((10, 8), dtype=bool)
+    # blaue Luecke unter der Floor-Linie (unterer Bildteil y=7)
+    color[7, 3] = True
+    hybrid = merge_sky_with_floor(color, floor)
+    # oberhalb Floor (y < 5) immer Himmel
+    assert hybrid[2, 0]
+    assert hybrid[4, 4]
+    # unter Floor: nur Farbe
+    assert hybrid[7, 3]
+    assert not hybrid[7, 4]
+    assert not hybrid[8, 0]

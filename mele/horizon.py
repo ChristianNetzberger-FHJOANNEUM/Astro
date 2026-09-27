@@ -467,6 +467,84 @@ def detect_horizon_from_samples(
     return profile_from_mask(path, mask, src_w, src_h, north_x, median_window)
 
 
+def floor_sky_mask(profile: HorizonProfile, width: int, height: int) -> np.ndarray:
+    """True = Himmel oberhalb der Floor-Kurve (Punktwolke / Zeichnung)."""
+    sky = np.ones((height, width), dtype=bool)
+    src_w = profile.image_width or width
+    north = profile.north_x * width / src_w if src_w else profile.north_x
+    for x in range(width):
+        az = pixel_to_az(x + 0.5, width, north)
+        y = int(round(alt_to_pixel(profile.altitude_at(az), height)))
+        y = max(0, min(height, y))
+        sky[y:, x] = False
+    return sky
+
+
+def merge_sky_with_floor(color_sky: np.ndarray, floor_profile: HorizonProfile) -> np.ndarray:
+    """Hybrid: Floor erzwingt Himmel darueber; Farbe fuellt zusaetzlich darunter (Blau)."""
+    if color_sky.dtype != np.bool_ and color_sky.dtype != bool:
+        color_sky = color_sky.astype(bool)
+    height, width = color_sky.shape
+    return floor_sky_mask(floor_profile, width, height) | color_sky
+
+
+def detect_horizon_hybrid(
+    path: Path,
+    samples: list[SkySample] | list[tuple[int, int, int]],
+    floor_profile: HorizonProfile,
+    *,
+    north_x: float | None = None,
+    process_width: int = DEFAULT_PROCESS_WIDTH,
+    median_window: int = MEDIAN_WINDOW,
+    hue_pad: float = 14.0,
+    sat_pad: float = 0.18,
+    val_pad: float = 0.18,
+    reject: list[SkySample] | list[tuple[int, int, int]] | None = None,
+    excludes: list[SunExclude] | None = None,
+    auto_sun: bool = True,
+) -> tuple[HorizonProfile, np.ndarray]:
+    """Punktwolken-Floor + Farbpicker.
+
+    Returns:
+        profile: Silhouette aus der gemergten Maske
+        mask_u8: 0=Himmel, 255=Boden (2D, nicht nur aus der Kurve neu gebaut)
+    """
+    rgb, src_w, src_h = load_panorama(path, process_width)
+    height, width = rgb.shape[:2]
+    colors = _sample_colors(rgb, samples, src_w, src_h)
+    reject_colors = _sample_colors(rgb, reject or [], src_w, src_h)
+    color_sky = sky_mask_from_samples(
+        rgb,
+        colors,
+        hue_pad=hue_pad,
+        sat_pad=sat_pad,
+        val_pad=val_pad,
+        include_sun=False,
+        reject=reject_colors,
+    )
+    color_sky = refine_sky_mask(color_sky, rgb, src_w, src_h, excludes, auto_sun=auto_sun)
+    # Floor auf Process-Aufloesung bringen (Altitude-Interpolation unabhaengig von process_width)
+    floor = HorizonProfile(
+        source=floor_profile.source,
+        image_width=src_w,
+        image_height=src_h,
+        process_width=width,
+        process_height=height,
+        north_x=north_x if north_x is not None else floor_profile.north_x,
+        created_at=floor_profile.created_at,
+        points=list(floor_profile.points),
+        calibration=floor_profile.calibration,
+        control_points=floor_profile.control_points,
+    )
+    hybrid = merge_sky_with_floor(color_sky, floor)
+    north = floor.north_x
+    profile = profile_from_mask(path, hybrid, src_w, src_h, north, median_window)
+    if floor.control_points is not None:
+        profile.control_points = list(floor.control_points)
+    mask_u8 = np.where(hybrid, 0, 255).astype(np.uint8)
+    return profile, mask_u8
+
+
 def profile_from_manual_points(
     path: Path | str,
     points_xy: list[tuple[float, float]],

@@ -28,6 +28,11 @@ Sonne: eigener Exclude-Kreis (Farbe passt nie ins Blau). Optional
 *Kein Himmel* auf Wände/Fenster. Danach nur die mit dem Zenit
 zusammenhaengende Himmelsschicht.
 
+**Hybrid.** Zuerst grobe Floor-Linie (Zeichnen / 360°-Punktwolke), dann
+Himmelsfarben wie beim Picker. Ergebnis: Himmel = alles oberhalb der Floor
+**oder** farbähnlich. So bleiben wolkenfreie Luecken unter der Floor
+transparent, ohne die Floor zu verlieren. Details: Hilfe-Wiki.
+
 **Zeichnen.** Stuetzpunkte, zirkulaer interpoliert.
 
 **Pinsel / Radierer.** Malt die Alpha-Maske: Pinsel = Himmel (transparent),
@@ -117,6 +122,7 @@ def build_ui(
     on_toggle_sky_view: Callable[[], None],
     on_open_pano: Callable[[], None],
     on_open_weather: Callable[[], None],
+    on_open_help: Callable[[], None],
     on_set_site: Callable[[float, float, str], None],
     geotagged_fn: Callable[[], list[tuple[str, float | None, float | None]]],
     on_gps_upload: Callable[..., None],
@@ -148,6 +154,9 @@ def build_ui(
                 ui.button("Wetter", icon="cloud", on_click=on_open_weather).props("flat dense").tooltip(
                     "Neues Fenster: GeoSphere-Bewoelkung, Wind, Feuchte (~60 h). Cache lokal."
                 )
+                ui.button("Hilfe", icon="help", on_click=on_open_help).props("flat dense").tooltip(
+                    "Wiki: Horizont, Einnorden, Hybrid, Wetter-Journal"
+                )
             cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
                 "text-caption font-mono whitespace-pre-wrap"
             )
@@ -170,6 +179,7 @@ def build_ui(
                 {
                     "auto": "Auto",
                     "picker": "Farbpicker",
+                    "hybrid": "Hybrid",
                     "draw": "Zeichnen",
                     "brush": "Pinsel",
                 },
@@ -306,15 +316,23 @@ def build_ui(
         sw = state.source_width or pw
         sh = state.source_height or ph
         profile = _profile()
-        samples = [(s.preview_x, s.preview_y) for s in state.sky_samples] if state.method == "picker" else []
-        rejects = [(s.preview_x, s.preview_y) for s in state.reject_samples] if state.method == "picker" else []
+        samples = (
+            [(s.preview_x, s.preview_y) for s in state.sky_samples]
+            if state.method in {"picker", "hybrid"}
+            else []
+        )
+        rejects = (
+            [(s.preview_x, s.preview_y) for s in state.reject_samples]
+            if state.method in {"picker", "hybrid"}
+            else []
+        )
         suns = []
-        if state.method in {"picker", "auto"}:
+        if state.method in {"picker", "hybrid", "auto"}:
             suns = [
                 (excl.preview_x, excl.preview_y, excl.preview_radius) for excl in state.sun_excludes
             ]
         handles = []
-        if state.method == "draw" and sw and sh and pw and ph:
+        if state.method in {"draw", "hybrid"} and sw and sh and pw and ph:
             handles = [(x * pw / sw, y * ph / sh) for x, y in state.manual_points]
         mask_uri = ""
         if state.method == "brush" and state.mask is not None:
@@ -439,8 +457,14 @@ def build_ui(
         except RuntimeError:
             return
         with method_box:
-            if state.method == "picker":
-                ui.label("Klick setzt je nach Rolle: Himmel, Sonne oder Hauswand.").classes("text-caption")
+            if state.method in {"picker", "hybrid"}:
+                if state.method == "hybrid":
+                    ui.label(
+                        "1) Floor: Zeichnen oder 360°-Punktwolke. "
+                        "2) Himmelsfarben klicken. 3) Horizont erkennen."
+                    ).classes("text-caption")
+                else:
+                    ui.label("Klick setzt je nach Rolle: Himmel, Sonne oder Hauswand.").classes("text-caption")
                 def on_picker_role(event) -> None:
                     state.picker_role = str(event.value or "sky")
                     render_status()
@@ -454,6 +478,11 @@ def build_ui(
                     f"{len(state.sky_samples)} Himmel (cyan), "
                     f"{len(state.reject_samples)} Ausschluss (rosa), "
                     f"{len(state.sun_excludes)} Sonne (orange)."
+                    + (
+                        f" Floor-Punkte: {len(state.manual_points)}."
+                        if state.method == "hybrid"
+                        else ""
+                    )
                 ).classes("text-caption")
                 with ui.row().classes("flex-wrap q-gutter-xs"):
                     for sample in state.sky_samples:
@@ -488,6 +517,12 @@ def build_ui(
                 ui.button("Himmel loeschen", on_click=on_clear_samples).props("flat dense")
                 ui.button("Ausschluss loeschen", on_click=on_clear_rejects).props("flat dense")
                 ui.button("Sonne loeschen", on_click=on_clear_suns).props("flat dense")
+                if state.method == "hybrid":
+                    ui.separator()
+                    ui.label(
+                        f"Floor-Stuetzpunkte: {len(state.manual_points)} (gelb). "
+                        "Im Hybrid-Modus setzt ein Klick Farben; Floor in Zeichnen/360 setzen."
+                    ).classes("text-caption")
             elif state.method == "draw":
                 ui.label(
                     f"{len(state.manual_points)} Stuetzpunkte (gelb). "
@@ -510,7 +545,7 @@ def build_ui(
 
     def render_meta() -> None:
         if state.method in {"draw", "brush"}:
-            detect_btn.set_text("Nur Auto / Picker")
+            detect_btn.set_text("Nur Auto / Picker / Hybrid")
             detect_btn.disable()
         else:
             detect_btn.set_text("Erkenne ..." if state.detecting else "Horizont erkennen")
@@ -589,6 +624,11 @@ def build_ui(
                 hint.text = "Klick auf Hauswand/Fenster: diese Farbe ist kein Himmel."
             else:
                 hint.text = "Klick ins Blau. Sonne extra ausnehmen, Wände als 'Kein Himmel'."
+        elif state.method == "hybrid":
+            hint.text = (
+                "Hybrid: Floor aus Zeichnen/360, dann Blau klicken, dann Erkennen. "
+                "Himmel = Floor-darueber ODER Farbe."
+            )
         elif state.method == "draw":
             hint.text = (
                 "Klick setzt einen Horizontpunkt. Profil speichern erzeugt die Linie. "

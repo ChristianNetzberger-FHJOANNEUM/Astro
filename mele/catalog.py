@@ -739,6 +739,21 @@ def classify_daylight(
     return phases
 
 
+def daylight_phases_for_stamps(
+    stamps: list[datetime],
+    latitude_deg: float,
+    longitude_deg: float,
+    *,
+    twilight_min: int = TWILIGHT_MINUTES,
+) -> list[str]:
+    """Klassifiziert Zeitstempel am Standort als night / twilight / day."""
+    if not stamps:
+        return []
+    sun_alts = _sun_altitudes(stamps, latitude_deg, longitude_deg)
+    rises, sets = _horizon_crossings(stamps, sun_alts)
+    return classify_daylight(stamps, sun_alts, rises + sets, twilight_min)
+
+
 def _phase_windows(
     stamps: list[datetime],
     above: np.ndarray,
