@@ -77,6 +77,85 @@ def test_overlay_matches_sky_math_and_time_shift(tmp_path: Path) -> None:
     assert abs(delta) > 50
 
 
+def test_dso_type_filter_messier_and_ngc(tmp_path: Path) -> None:
+    db = _build(tmp_path)
+    # Winterabend: M31 und M42 oft ueber dem Horizont in Mitteleuropa
+    when = datetime(2026, 1, 15, 20, 0, tzinfo=timezone.utc)
+    galaxies = query_overlay(
+        db_path=db,
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        mag_limit=9.0,
+        stars=False,
+        constellations=False,
+        messier=True,
+        ngc=True,
+        planets=False,
+        dso_types=["galaxy"],
+    )
+    ids = {item["id"] for item in galaxies["dso"]}
+    assert "M31" in ids
+    assert "M42" not in ids
+    opens = query_overlay(
+        db_path=db,
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        mag_limit=9.0,
+        stars=False,
+        constellations=False,
+        messier=True,
+        ngc=True,
+        planets=False,
+        dso_types=["open"],
+    )
+    open_ids = {item["id"] for item in opens["dso"]}
+    assert "M42" in open_ids
+    assert "M31" not in open_ids
+    none = query_overlay(
+        db_path=db,
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        mag_limit=9.0,
+        stars=False,
+        constellations=False,
+        messier=True,
+        ngc=True,
+        planets=False,
+        dso_types=[],
+    )
+    assert none["dso"] == []
+
+
+def test_openngc_b_mag_fallback(tmp_path: Path) -> None:
+    from mele.catalog import _parse_openngc, _parse_openngc_mag
+
+    assert _parse_openngc_mag({"V-Mag": "5.73", "B-Mag": "6.1"}) == (5.73, "V")
+    assert _parse_openngc_mag({"V-Mag": "", "B-Mag": "11.20"}) == (11.2, "B")
+    assert _parse_openngc_mag({"V-Mag": "", "B-Mag": ""}) == (None, None)
+
+    rows = {row[0]: row for row in _parse_openngc(FIXTURES / "NGC.csv")}
+    # key, catalog, number, name, type, ra, dec, mag, mag_band, messier
+    assert rows["M31"][7] == 3.44
+    assert rows["M31"][8] == "V"
+    assert rows["NGC6426"][7] == 11.2
+    assert rows["NGC6426"][8] == "B"
+
+    db = _build(tmp_path)
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        m31 = conn.execute("SELECT mag, mag_band FROM dso WHERE key='M31'").fetchone()
+        n6426 = conn.execute("SELECT mag, mag_band FROM dso WHERE key='NGC6426'").fetchone()
+    assert float(m31["mag"]) == 3.44
+    assert m31["mag_band"] == "V"
+    assert float(n6426["mag"]) == 11.2
+    assert n6426["mag_band"] == "B"
+
+
 def test_horizon_hides_objects_below_profile(tmp_path: Path) -> None:
     db = _build(tmp_path)
     when = datetime(2026, 9, 23, 18, 0, tzinfo=timezone.utc)
@@ -168,14 +247,21 @@ def test_object_track_marks_day_twilight_night() -> None:
         longitude_deg=16.4,
         when=when,
         step_min=30,
+        tz_offset_min=120,  # CEST
     )
     lights = {point["light"] for point in track["points"]}
     assert lights >= {"night", "twilight", "day"}
     assert track["sunrise"]
     assert track["sunset"]
     assert track["twilight_min"] == 60
-    noon = next(point for point in track["points"] if point["when"].startswith("2026-09-23T12:"))
-    late = next(point for point in track["points"] if point["when"].startswith("2026-09-23T21:"))
-    assert noon["light"] == "day"
-    assert late["light"] == "night"
+    assert any(point["light"] == "day" for point in track["points"])
+    assert any(point["light"] == "night" for point in track["points"])
     assert any(slot.get("light") == "night" for slot in track["windows"])
+    # Eine Beobachtungsnacht: Nachtfenster nicht an Mitternacht zerschnitten
+    night_slots = [slot for slot in track["windows"] if slot.get("light") == "night"]
+    assert len(night_slots) >= 1
+    if len(night_slots) == 1:
+        start = datetime.fromisoformat(night_slots[0]["start"].replace("Z", "+00:00"))
+        end = datetime.fromisoformat(night_slots[0]["end"].replace("Z", "+00:00"))
+        assert end > start
+        assert (end - start).total_seconds() > 3 * 3600

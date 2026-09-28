@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE Almanach</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #0b1220; color: #e2e8f0;
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center;
+           flex-wrap: wrap; padding: 10px 14px; background: rgba(15,23,42,.94);
+           border-bottom: 1px solid #1e293b; }
+    #bar a, #bar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+           padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px; }
+    #bar button:disabled { opacity: .45; cursor: wait; }
+    #bar .sep { width: 1px; height: 22px; background: #334155; margin: 0 2px; }
+    main { padding: 16px 18px 48px; max-width: 1200px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .meta { font-size: 13px; opacity: .85; }
+    .filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end;
+               margin: 14px 0 10px; padding: 12px; background: #0f172a; border-radius: 8px; }
+    .filters label { font-size: 12px; opacity: .85; display: flex; flex-direction: column; gap: 4px; }
+    .filters input[type="number"], .filters input[type="datetime-local"],
+    .filters input[type="text"], .filters select {
+      background: #111827; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px;
+      padding: 6px 8px; min-width: 8rem;
+    }
+    .filters select { min-width: 12rem; }
+    .filters .row { flex-direction: row; align-items: center; gap: 8px; }
+    #status { font-size: 13px; opacity: .85; min-height: 1.3em; margin: 6px 0 12px; }
+    #status.warn { color: #fbbf24; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #1e293b; }
+    th { opacity: .7; font-weight: 600; cursor: pointer; user-select: none; }
+    th:hover { color: #38bdf8; }
+    tr.selected td { background: rgba(34, 197, 94, 0.12); }
+    tr:hover td { background: rgba(56, 189, 248, 0.06); }
+    tr.block-head td { background: #132033; opacity: .95; font-weight: 600;
+                       border-bottom: 1px solid #334155; padding-top: 10px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .tonight-box { margin-top: 22px; padding: 12px; background: #0f172a; border-radius: 8px; }
+    .tonight-box h2 { font-size: 15px; margin: 0 0 8px; }
+    #tonight-list { font-size: 13px; opacity: .9; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <a href="/">Zurueck</a>
+    <a href="/help-view#almanach">Hilfe</a>
+    <button id="btn-load" type="button">Almanach laden</button>
+    <button id="btn-save" type="button">Liste speichern</button>
+    <span class="sep"></span>
+    <span id="hint">Messier + Sterne · Horizontmaske · benannte Listen</span>
+  </div>
+  <main>
+    <h1>Beobachtungs-Almanach</h1>
+    <p class="meta" id="site">Standort / Datum —</p>
+    <div class="filters">
+      <label>Beobachtungsliste
+        <select id="list-select"></select>
+      </label>
+      <label>Neue Liste / Umbenennen
+        <input id="list-label" type="text" placeholder="z.B. APO, Newton 10&quot;" maxlength="48">
+      </label>
+      <label class="row"><input id="chk-messier" type="checkbox" checked> Messier</label>
+      <label>Sterne mag ≤
+        <input id="star-mag" type="number" min="0" max="6" step="0.5" value="3">
+      </label>
+      <label class="row"><input id="chk-stars" type="checkbox" checked> Sterne einbeziehen</label>
+      <label>Min. beobachtbar (min)
+        <input id="min-obs" type="number" min="0" max="600" step="15" value="30">
+      </label>
+      <label>Datum/Zeit
+        <input id="when" type="datetime-local">
+      </label>
+      <label>Sortierung
+        <select id="sort-mode">
+          <option value="observable_h">Dauer Sichtbarkeit (Nacht∩Horizont)</option>
+          <option value="alpha_blocks">Alphabetisch (Messier / Sterne getrennt)</option>
+          <option value="mag">Helligkeit (mag)</option>
+          <option value="observable_max_alt">Max. Elevation (Nacht)</option>
+        </select>
+      </label>
+      <label>Zeitformat
+        <select id="time-format">
+          <option value="24h">24 Stunden</option>
+          <option value="12h">12 Stunden (AM/PM)</option>
+        </select>
+      </label>
+      <label class="row"><input id="chk-only-selected" type="checkbox"> Nur Auswahl anzeigen</label>
+    </div>
+    <p id="status"></p>
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="tonight">Liste</th>
+          <th data-sort="name">Name</th>
+          <th data-sort="kind">Art</th>
+          <th data-sort="mag">mag</th>
+          <th data-sort="observable_h">Nacht∩Horizont</th>
+          <th data-sort="observable_max_alt">max h Nacht</th>
+          <th data-sort="above_horizon_h">ueber Horizont</th>
+          <th data-sort="windows">Fenster (Nacht)</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="tonight-box">
+      <h2>Aktive Liste: <span id="list-title">Standard</span></h2>
+      <p class="meta">Checkbox markiert Objekte in der aktiven Liste. Speichern schreibt
+        <code id="tonight-path">data/horizon/observe-lists/…</code>.
+        Kennzahlen werden bei jedem Laden neu fuer das gewaehlte Datum berechnet.</p>
+      <div id="tonight-list">—</div>
+    </div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const lat = params.get("lat") || "";
+    const lon = params.get("lon") || "";
+    const stem = params.get("stem") || "";
+    const siteEl = document.getElementById("site");
+    const statusEl = document.getElementById("status");
+    const btnLoad = document.getElementById("btn-load");
+    const btnSave = document.getElementById("btn-save");
+    const whenEl = document.getElementById("when");
+    const listSelect = document.getElementById("list-select");
+    const listLabelEl = document.getElementById("list-label");
+    const sortModeEl = document.getElementById("sort-mode");
+    const timeFormatEl = document.getElementById("time-format");
+    const onlySelectedEl = document.getElementById("chk-only-selected");
+    let entries = [];
+    let tonightKeys = new Set();
+    let lists = [{ id: "default", label: "Standard" }];
+    let activeList = "default";
+    let sortKey = "observable_h";
+    let sortAsc = false;
+    let prefsReady = false;
+    let prefsTimer = null;
+
+    function tzOffsetMin() {
+      return -new Date().getTimezoneOffset();
+    }
+
+    function toLocalInput(date) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    whenEl.value = toLocalInput(new Date());
+    siteEl.textContent = lat && lon
+      ? `Standort ${Number(lat).toFixed(4)}°, ${Number(lon).toFixed(4)}°` + (stem ? ` · ${stem}` : "")
+      : "Standort fehlt (lat/lon in URL).";
+
+    function currentListMeta() {
+      return lists.find((item) => item.id === activeList) || { id: activeList, label: activeList };
+    }
+
+    function fmtTime(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "—";
+      const hour12 = timeFormatEl.value === "12h";
+      return d.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12,
+      });
+    }
+
+    function fmtWindows(slots) {
+      if (!slots || !slots.length) return "—";
+      return slots.map((s) => `${fmtTime(s.start)}–${fmtTime(s.end)}`).join(", ");
+    }
+
+    function applySortMode(mode) {
+      if (mode === "alpha_blocks") {
+        sortKey = "alpha_blocks";
+        sortAsc = true;
+      } else if (mode === "mag") {
+        sortKey = "mag";
+        sortAsc = true;
+      } else if (mode === "observable_max_alt") {
+        sortKey = "observable_max_alt";
+        sortAsc = false;
+      } else {
+        sortKey = "observable_h";
+        sortAsc = false;
+      }
+      sortModeEl.value = mode || "observable_h";
+    }
+
+    function sortedEntries(source) {
+      const list = [...source];
+      if (sortKey === "alpha_blocks") {
+        const messier = list.filter((e) => e.kind === "messier")
+          .sort((a, b) => String(a.name || a.key).localeCompare(String(b.name || b.key), "de"));
+        const stars = list.filter((e) => e.kind !== "messier")
+          .sort((a, b) => String(a.name || a.key).localeCompare(String(b.name || b.key), "de"));
+        return [...messier, ...stars];
+      }
+      list.sort((a, b) => {
+        if (sortKey === "tonight") {
+          const av = tonightKeys.has(a.key) ? 1 : 0;
+          const bv = tonightKeys.has(b.key) ? 1 : 0;
+          return sortAsc ? av - bv : bv - av;
+        }
+        if (sortKey === "name" || sortKey === "kind") {
+          const av = String(a[sortKey] || "");
+          const bv = String(b[sortKey] || "");
+          return sortAsc ? av.localeCompare(bv, "de") : bv.localeCompare(av, "de");
+        }
+        if (sortKey === "windows") {
+          const av = (a.observable_windows || []).length;
+          const bv = (b.observable_windows || []).length;
+          return sortAsc ? av - bv : bv - av;
+        }
+        const av = Number(a[sortKey]);
+        const bv = Number(b[sortKey]);
+        const an = Number.isFinite(av) ? av : (sortAsc ? 1e9 : -1e9);
+        const bn = Number.isFinite(bv) ? bv : (sortAsc ? 1e9 : -1e9);
+        return sortAsc ? an - bn : bn - an;
+      });
+      return list;
+    }
+
+    function visibleEntries() {
+      if (!onlySelectedEl.checked) return entries;
+      return entries.filter((e) => tonightKeys.has(e.key));
+    }
+
+    function renderListSelect() {
+      listSelect.innerHTML = "";
+      lists.forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item.id;
+        opt.textContent = item.label || item.id;
+        if (item.id === activeList) opt.selected = true;
+        listSelect.appendChild(opt);
+      });
+      const meta = currentListMeta();
+      document.getElementById("list-title").textContent = meta.label || meta.id;
+      document.getElementById("tonight-path").textContent =
+        `data/horizon/observe-lists/${meta.id}.json`;
+      if (!listLabelEl.value) listLabelEl.placeholder = meta.label || "z.B. APO";
+    }
+
+    function renderTonight() {
+      const selected = entries.filter((e) => tonightKeys.has(e.key));
+      document.getElementById("tonight-list").textContent = selected.length
+        ? selected.map((e) => e.name || e.key).join(" · ")
+        : "keine Auswahl";
+      renderListSelect();
+    }
+
+    function renderTable() {
+      const body = document.getElementById("rows");
+      body.innerHTML = "";
+      const rows = sortedEntries(visibleEntries());
+      let lastBlock = null;
+      rows.forEach((item) => {
+        if (sortKey === "alpha_blocks") {
+          const block = item.kind === "messier" ? "Messier" : "Sterne";
+          if (block !== lastBlock) {
+            lastBlock = block;
+            const head = document.createElement("tr");
+            head.className = "block-head";
+            const td = document.createElement("td");
+            td.colSpan = 8;
+            td.textContent = block;
+            head.appendChild(td);
+            body.appendChild(head);
+          }
+        }
+        const tr = document.createElement("tr");
+        if (tonightKeys.has(item.key)) tr.className = "selected";
+        const tdCheck = document.createElement("td");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = tonightKeys.has(item.key);
+        cb.addEventListener("change", () => {
+          if (cb.checked) tonightKeys.add(item.key);
+          else tonightKeys.delete(item.key);
+          renderTable();
+          renderTonight();
+        });
+        tdCheck.appendChild(cb);
+        const cells = [
+          item.name || item.key,
+          item.kind || "—",
+          item.mag == null ? "—" : Number(item.mag).toFixed(1),
+          item.observable_h == null ? "—" : `${Number(item.observable_h).toFixed(1)} h`,
+          item.observable_max_alt == null ? "—" : `${Number(item.observable_max_alt).toFixed(1)}°`,
+          item.above_horizon_h == null ? "—" : `${Number(item.above_horizon_h).toFixed(1)} h`,
+          fmtWindows(item.observable_windows),
+        ];
+        tr.appendChild(tdCheck);
+        cells.forEach((text, idx) => {
+          const td = document.createElement("td");
+          if (idx >= 2 && idx <= 5) td.className = "num";
+          td.textContent = text;
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      renderTonight();
+    }
+
+    function schedulePrefsSave() {
+      if (!prefsReady) return;
+      clearTimeout(prefsTimer);
+      prefsTimer = setTimeout(() => savePrefs(), 400);
+    }
+
+    async function savePrefs() {
+      const payload = {
+        sort_mode: sortModeEl.value,
+        only_selected: onlySelectedEl.checked,
+        messier: document.getElementById("chk-messier").checked,
+        stars: document.getElementById("chk-stars").checked,
+        star_mag: Number(document.getElementById("star-mag").value || 3),
+        min_obs_min: Number(document.getElementById("min-obs").value || 0),
+        active_list: activeList,
+        time_format: timeFormatEl.value,
+      };
+      try {
+        await fetch("/observe/prefs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (_err) { /* ignore */ }
+    }
+
+    async function loadPrefs() {
+      try {
+        const response = await fetch("/observe/prefs");
+        const data = await response.json();
+        if (Array.isArray(data.lists) && data.lists.length) lists = data.lists;
+        activeList = data.active || data.active_list || "default";
+        document.getElementById("chk-messier").checked = data.messier !== false;
+        document.getElementById("chk-stars").checked = data.stars !== false;
+        if (data.star_mag != null) document.getElementById("star-mag").value = data.star_mag;
+        if (data.min_obs_min != null) document.getElementById("min-obs").value = data.min_obs_min;
+        onlySelectedEl.checked = Boolean(data.only_selected);
+        timeFormatEl.value = data.time_format === "12h" ? "12h" : "24h";
+        applySortMode(data.sort_mode || "observable_h");
+        renderListSelect();
+      } catch (_err) {
+        applySortMode("observable_h");
+        timeFormatEl.value = "24h";
+        renderListSelect();
+      } finally {
+        prefsReady = true;
+      }
+    }
+
+    document.querySelectorAll("th[data-sort]").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        if (sortKey === key) sortAsc = !sortAsc;
+        else {
+          sortKey = key;
+          sortAsc = key === "name" || key === "kind" || key === "mag";
+        }
+        if (key === "observable_h") sortModeEl.value = "observable_h";
+        else if (key === "mag") sortModeEl.value = "mag";
+        else if (key === "observable_max_alt") sortModeEl.value = "observable_max_alt";
+        else if (key === "name") sortModeEl.value = "alpha_blocks";
+        schedulePrefsSave();
+        renderTable();
+      });
+    });
+
+    sortModeEl.addEventListener("change", () => {
+      applySortMode(sortModeEl.value);
+      schedulePrefsSave();
+      renderTable();
+    });
+    timeFormatEl.addEventListener("change", () => {
+      schedulePrefsSave();
+      renderTable();
+    });
+    onlySelectedEl.addEventListener("change", () => {
+      schedulePrefsSave();
+      renderTable();
+    });
+    ["chk-messier", "chk-stars", "star-mag", "min-obs"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", schedulePrefsSave);
+    });
+
+    listSelect.addEventListener("change", async () => {
+      activeList = listSelect.value;
+      await fetch("/observe/lists/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ list_id: activeList }),
+      });
+      await loadTonight();
+      renderTable();
+      schedulePrefsSave();
+    });
+
+    async function loadTonight() {
+      const query = new URLSearchParams({ stem, list_id: activeList });
+      const response = await fetch(`/observe/tonight?${query}`);
+      const data = await response.json();
+      tonightKeys = new Set((data.objects || []).map((o) => o.key));
+      if (Array.isArray(data.lists) && data.lists.length) lists = data.lists;
+      if (data.list_id) activeList = data.list_id;
+      if (data.label) {
+        const meta = currentListMeta();
+        meta.label = data.label;
+      }
+    }
+
+    async function loadAlmanac() {
+      if (!lat || !lon) {
+        statusEl.textContent = "lat/lon in der URL noetig.";
+        statusEl.className = "warn";
+        return;
+      }
+      btnLoad.disabled = true;
+      statusEl.textContent = "Berechne Sichtbarkeit (kann einige Sekunden dauern) …";
+      statusEl.className = "";
+      const useStars = document.getElementById("chk-stars").checked;
+      const query = new URLSearchParams({
+        lat,
+        lon,
+        stem,
+        messier: document.getElementById("chk-messier").checked ? "1" : "0",
+        star_mag: useStars ? String(document.getElementById("star-mag").value) : "-1",
+        min_obs_min: String(document.getElementById("min-obs").value || "0"),
+        when: whenEl.value ? new Date(whenEl.value).toISOString() : new Date().toISOString(),
+        tz_offset_min: String(tzOffsetMin()),
+      });
+      try {
+        const response = await fetch(`/observe/almanac?${query}`);
+        const data = await response.json();
+        if (data.error) {
+          statusEl.textContent = data.error;
+          statusEl.className = "warn";
+          entries = [];
+          renderTable();
+          return;
+        }
+        entries = data.entries || [];
+        statusEl.textContent = `${data.count || 0} Objekte · Schritt ${data.step_min || 30} min · Liste „${currentListMeta().label}“`;
+        renderTable();
+        schedulePrefsSave();
+      } catch (_err) {
+        statusEl.textContent = "Almanach konnte nicht geladen werden.";
+        statusEl.className = "warn";
+      } finally {
+        btnLoad.disabled = false;
+      }
+    }
+
+    async function saveTonight() {
+      const typed = listLabelEl.value.trim();
+      btnSave.disabled = true;
+      try {
+        if (typed && typed !== currentListMeta().label) {
+          const created = await fetch("/observe/lists", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: typed, make_active: true }),
+          });
+          const createdData = await created.json();
+          if (!createdData.ok) {
+            statusEl.textContent = createdData.error || "Liste anlegen fehlgeschlagen";
+            statusEl.className = "warn";
+            return;
+          }
+          if (Array.isArray(createdData.lists)) lists = createdData.lists;
+          activeList = createdData.active || activeList;
+        }
+
+        let selected = entries.filter((e) => tonightKeys.has(e.key)).map((e) => ({
+          key: e.key,
+          name: e.name,
+          kind: e.kind,
+          mag: e.mag,
+          ra: e.ra,
+          dec: e.dec,
+        }));
+        if (!entries.length && tonightKeys.size) {
+          const prev = await fetch(`/observe/tonight?${new URLSearchParams({ stem, list_id: activeList })}`);
+          const prevData = await prev.json();
+          selected = (prevData.objects || []).filter((o) => tonightKeys.has(o.key));
+        }
+
+        const label = typed || currentListMeta().label || activeList;
+        const response = await fetch("/observe/tonight", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            stem,
+            list_id: activeList,
+            label,
+            lat: lat ? Number(lat) : null,
+            lon: lon ? Number(lon) : null,
+            when: whenEl.value ? new Date(whenEl.value).toISOString() : null,
+            objects: selected,
+          }),
+        });
+        const data = await response.json();
+        if (!data.ok) {
+          statusEl.textContent = data.error || "Speichern fehlgeschlagen";
+          statusEl.className = "warn";
+          return;
+        }
+        if (data.list_id) activeList = data.list_id;
+        if (data.label) {
+          const meta = lists.find((item) => item.id === activeList);
+          if (meta) meta.label = data.label;
+          else lists.push({ id: activeList, label: data.label });
+        }
+        listLabelEl.value = "";
+        statusEl.textContent = `Liste „${data.label || activeList}“ gespeichert (${selected.length}): ${data.path || ""}`;
+        statusEl.className = "";
+        renderTonight();
+        schedulePrefsSave();
+      } catch (_err) {
+        statusEl.textContent = "Speichern fehlgeschlagen.";
+        statusEl.className = "warn";
+      } finally {
+        btnSave.disabled = false;
+      }
+    }
+
+    btnLoad.addEventListener("click", () => loadAlmanac());
+    btnSave.addEventListener("click", () => saveTonight());
+
+    loadPrefs()
+      .then(() => loadTonight())
+      .then(() => renderTable());
+  </script>
+</body>
+</html>

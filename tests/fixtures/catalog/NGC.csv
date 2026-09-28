@@ -1,4 +1,5 @@
-Name;Type;RA;Dec;V-Mag;M;Common names
-NGC0224;G;00:42:44.35;+41:16:07.4;3.44;031;Andromeda Galaxy
-NGC1976;Cl+N;05:35:17.3;-05:23:28;4.00;042;Great Orion Nebula
-IC4715;G;18:16:56.12;-18:29:07.7;4.50;024;Small Sgr Star Cloud
+Name;Type;RA;Dec;B-Mag;V-Mag;M;Common names
+NGC0224;G;00:42:44.35;+41:16:07.4;;3.44;031;Andromeda Galaxy
+NGC1976;Cl+N;05:35:17.3;-05:23:28;;4.00;042;Great Orion Nebula
+IC4715;G;18:16:56.12;-18:29:07.7;;4.50;024;Small Sgr Star Cloud
+NGC6426;GCl;17:44:54.71;+03:10:12.5;11.20;;;

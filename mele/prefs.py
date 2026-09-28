@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mele.catalog import DSO_TYPE_GROUP_KEYS, normalize_dso_type_groups
+
 
 DEFAULTS = {
     "star_scale": 1.0,
@@ -17,11 +19,41 @@ DEFAULTS = {
     "grid_eq": False,
     "grid_ecliptic": False,
     "horizon_points": True,
+    "tonight": False,
+    "show_stars": True,
+    "show_const": True,
+    "show_messier": True,
+    "show_ngc": False,
+    "show_planets": True,
+    # OpenNGC-UI-Gruppen; alle = kein Filter
+    "dso_types": list(DSO_TYPE_GROUP_KEYS),
 }
 
 
 def prefs_path(horizon_dir: Path) -> Path:
     return horizon_dir / "ui-prefs.json"
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value in (True, 1, "1", "true", "True")
+
+
+def _normalize_dso_types(value: Any) -> list[str]:
+    if value is None:
+        return list(DSO_TYPE_GROUP_KEYS)
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(p).strip() for p in value if str(p).strip()]
+    else:
+        parts = list(DSO_TYPE_GROUP_KEYS)
+    groups = normalize_dso_type_groups(parts)
+    if groups is None:
+        return list(DSO_TYPE_GROUP_KEYS)
+    # stabile Reihenfolge
+    return [key for key in DSO_TYPE_GROUP_KEYS if key in groups]
 
 
 def load_prefs(path: Path) -> dict[str, Any]:
@@ -36,14 +68,20 @@ def load_prefs(path: Path) -> dict[str, Any]:
     try:
         data["star_scale"] = max(0.4, min(4.0, float(data.get("star_scale", 1.0))))
         data["mag_limit"] = max(0.0, min(9.0, float(data.get("mag_limit", 5.5))))
-        flag = data.get("track_hours", False)
-        data["track_hours"] = flag in (True, 1, "1", "true", "True")
-        data["grid"] = data.get("grid", False) in (True, 1, "1", "true", "True")
-        data["grid_eq"] = data.get("grid_eq", False) in (True, 1, "1", "true", "True")
-        data["grid_ecliptic"] = data.get("grid_ecliptic", False) in (True, 1, "1", "true", "True")
-        data["horizon_points"] = data.get("horizon_points", True) in (True, 1, "1", "true", "True")
+        data["track_hours"] = _as_bool(data.get("track_hours"), False)
+        data["grid"] = _as_bool(data.get("grid"), False)
+        data["grid_eq"] = _as_bool(data.get("grid_eq"), False)
+        data["grid_ecliptic"] = _as_bool(data.get("grid_ecliptic"), False)
+        data["horizon_points"] = _as_bool(data.get("horizon_points"), True)
+        data["tonight"] = _as_bool(data.get("tonight"), False)
+        data["show_stars"] = _as_bool(data.get("show_stars"), True)
+        data["show_const"] = _as_bool(data.get("show_const"), True)
+        data["show_messier"] = _as_bool(data.get("show_messier"), True)
+        data["show_ngc"] = _as_bool(data.get("show_ngc"), False)
+        data["show_planets"] = _as_bool(data.get("show_planets"), True)
         step = int(data.get("grid_step", 10))
         data["grid_step"] = 5 if step == 5 else 10
+        data["dso_types"] = _normalize_dso_types(data.get("dso_types"))
     except (TypeError, ValueError):
         data = dict(DEFAULTS)
     return data

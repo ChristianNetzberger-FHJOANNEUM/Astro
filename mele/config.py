@@ -20,12 +20,15 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 @dataclass
 class MeleSettings:
     ui_port: int = 8082
+    # 0.0.0.0 = LAN-Zugriff (iPad/Heimnetz); 127.0.0.1 = nur lokal
+    ui_host: str = "0.0.0.0"
     media_dir: Path = REPO_ROOT / "media"
     gps_dir: Path = REPO_ROOT / "media" / "GPS-locations"
     horizon_dir: Path = REPO_ROOT / "data" / "horizon"
     preview_width: int = 2000
     latitude_deg: float | None = None
     longitude_deg: float | None = None
+    elevation_m: float = 0.0
     timezone: str = ""
     catalog_dir: Path = REPO_ROOT / "data" / "catalogs"
     nina_base_url: str = "http://localhost:1888/v2/api"
@@ -72,12 +75,14 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
     local = raw.get("local_weather") if isinstance(raw.get("local_weather"), dict) else {}
     return MeleSettings(
         ui_port=int(raw.get("ui_port") or 8082),
+        ui_host=str(raw.get("ui_host") or "0.0.0.0").strip() or "0.0.0.0",
         media_dir=media,
         gps_dir=gps,
         horizon_dir=horizon,
         preview_width=int(raw.get("preview_width") or 2000),
         latitude_deg=_optional_float(raw.get("latitude_deg")),
         longitude_deg=_optional_float(raw.get("longitude_deg")),
+        elevation_m=float(raw.get("elevation_m") or 0.0),
         timezone=str(raw.get("timezone") or "").strip(),
         catalog_dir=catalogs,
         nina_base_url=str(raw.get("nina_base_url") or "http://localhost:1888/v2/api").strip().rstrip("/"),

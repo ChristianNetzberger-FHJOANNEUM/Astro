@@ -22,6 +22,43 @@ from mele.sky import radec_to_az_alt, radec_to_az_alt_many
 DEFAULT_DB = REPO_ROOT / "data" / "catalogs" / "sky.sqlite"
 DEFAULT_SRC = REPO_ROOT / "data" / "catalogs" / "src"
 
+# OpenNGC Type-Codes -> UI-Gruppen (Messier und NGC/IC teilen dasselbe Feld).
+DSO_TYPE_GROUPS: dict[str, frozenset[str]] = {
+    "galaxy": frozenset({"G", "GPair", "GTrpl", "GGroup"}),
+    "globular": frozenset({"GCl"}),
+    "open": frozenset({"OCl", "*Ass", "Cl+N"}),
+    "planetary": frozenset({"PN"}),
+    "nebula": frozenset({"Neb", "HII", "EmN", "RfN", "DrkN", "SNR"}),
+}
+DSO_TYPE_GROUP_KEYS = ("galaxy", "globular", "open", "planetary", "nebula", "other")
+_DSO_GROUPED_TYPES = frozenset().union(*DSO_TYPE_GROUPS.values())
+
+
+def normalize_dso_type_groups(groups: list[str] | set[str] | None) -> set[str] | None:
+    """UI-Gruppen normalisieren. None = alle (kein Filter). Leere Menge = keine DSO."""
+    if groups is None:
+        return None
+    allowed = {str(g).strip().lower() for g in groups if str(g).strip()}
+    allowed &= set(DSO_TYPE_GROUP_KEYS)
+    if allowed >= set(DSO_TYPE_GROUP_KEYS):
+        return None
+    return allowed
+
+
+def dso_row_matches_type_groups(raw_type: str | None, groups: set[str] | None) -> bool:
+    if groups is None:
+        return True
+    if not groups:
+        return False
+    code = (raw_type or "").strip()
+    for key, codes in DSO_TYPE_GROUPS.items():
+        if key in groups and code in codes:
+            return True
+    if "other" in groups and code not in _DSO_GROUPED_TYPES:
+        return True
+    return False
+
+
 DOWNLOADS = (
     (
         "hygdata_v41.csv",
@@ -168,6 +205,7 @@ CREATE TABLE IF NOT EXISTS dso (
     ra_deg REAL NOT NULL,
     dec_deg REAL NOT NULL,
     mag REAL,
+    mag_band TEXT,
     messier INTEGER
 );
 CREATE INDEX IF NOT EXISTS dso_messier ON dso(messier);
@@ -348,11 +386,7 @@ def _parse_openngc(path: Path) -> list[tuple]:
             if not name:
                 continue
             common = (raw.get("Common names") or "").split(",")[0].strip()
-            mag_s = (raw.get("V-Mag") or "").strip()
-            try:
-                mag = float(mag_s) if mag_s else None
-            except ValueError:
-                mag = None
+            mag, mag_band = _parse_openngc_mag(raw)
             messier_s = (raw.get("M") or "").strip()
             messier = int(messier_s) if messier_s.isdigit() else None
             if name.startswith("NGC"):
@@ -371,8 +405,21 @@ def _parse_openngc(path: Path) -> list[tuple]:
             display = f"M{messier}" if messier is not None else name
             if common:
                 display = f"{display} {common}" if messier is not None else f"{name} {common}"
-            rows.append((key, catalog, number, display, kind, ra, dec, mag, messier))
+            rows.append((key, catalog, number, display, kind, ra, dec, mag, mag_band, messier))
     return rows
+
+
+def _parse_openngc_mag(raw: dict) -> tuple[float | None, str | None]:
+    """V-Mag bevorzugen; fehlt sie, B-Mag als Fallback (OpenNGC)."""
+    for band, key in (("V", "V-Mag"), ("B", "B-Mag")):
+        text = (raw.get(key) or "").strip()
+        if not text:
+            continue
+        try:
+            return float(text), band
+        except ValueError:
+            continue
+    return None, None
 
 
 def build_database(
@@ -406,8 +453,8 @@ def build_database(
             lines,
         )
         conn.executemany(
-            "INSERT INTO dso (key, catalog, number, name, type, ra_deg, dec_deg, mag, messier) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO dso (key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             objects,
         )
         conn.execute(
@@ -481,9 +528,11 @@ def query_overlay(
     messier: bool = True,
     ngc: bool = False,
     planets: bool = True,
+    dso_types: list[str] | set[str] | None = None,
     profile: HorizonProfile | None = None,
 ) -> dict:
     when_utc = when.astimezone(timezone.utc)
+    type_groups = normalize_dso_type_groups(dso_types)
     empty = {
         "when": when_utc.isoformat(),
         "stars": [],
@@ -514,17 +563,26 @@ def query_overlay(
                     )
                 )
             if messier or ngc:
-                clauses = []
-                if messier:
-                    clauses.append("messier IS NOT NULL")
-                if ngc:
-                    clauses.append("(catalog IN ('NGC','IC') AND (mag IS NULL OR mag <= ?))")
-                sql = (
-                    "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, messier "
-                    "FROM dso WHERE " + " OR ".join(clauses)
-                )
-                params = (max(mag_limit + 3.0, 9.0),) if ngc else ()
-                dso_rows = list(conn.execute(sql, params))
+                if type_groups is not None and not type_groups:
+                    dso_rows = []
+                else:
+                    clauses = []
+                    if messier:
+                        clauses.append("messier IS NOT NULL")
+                    if ngc:
+                        clauses.append("(catalog IN ('NGC','IC') AND (mag IS NULL OR mag <= ?))")
+                    sql = (
+                        "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                        "FROM dso WHERE " + " OR ".join(clauses)
+                    )
+                    params = (max(mag_limit + 3.0, 9.0),) if ngc else ()
+                    dso_rows = list(conn.execute(sql, params))
+                    if type_groups is not None:
+                        dso_rows = [
+                            row
+                            for row in dso_rows
+                            if dso_row_matches_type_groups(row["type"], type_groups)
+                        ]
             if constellations:
                 line_rows = list(conn.execute("SELECT iau, hip_a, hip_b FROM constellation_lines"))
 
@@ -618,6 +676,9 @@ def query_overlay(
             }
             if row["mag"] is not None:
                 item["mag"] = float(row["mag"])
+                band = (row["mag_band"] or "").strip().upper()
+                if band in {"V", "B"}:
+                    item["mag_band"] = band
             out_dso.append(item)
 
     out_bodies: list[dict] = []
@@ -797,6 +858,70 @@ def _phase_windows(
     return windows
 
 
+def visibility_summary(track: dict) -> dict:
+    """Kennzahlen: ueber Horizont vs. beobachtbar (Nacht ∩ Horizont)."""
+    windows = track.get("windows") if isinstance(track.get("windows"), list) else []
+    above = [slot for slot in windows if slot.get("light")]
+    observable = [slot for slot in windows if slot.get("light") == LIGHT_NIGHT]
+
+    def slot_minutes(slot: dict) -> float:
+        try:
+            start = datetime.fromisoformat(str(slot["start"]).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(slot["end"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+        return max(0.0, (end - start).total_seconds() / 60.0)
+
+    above_min = sum(slot_minutes(slot) for slot in above)
+    obs_min = sum(slot_minutes(slot) for slot in observable)
+    above_alts = [float(slot["max_alt"]) for slot in above if slot.get("max_alt") is not None]
+    obs_alts = [float(slot["max_alt"]) for slot in observable if slot.get("max_alt") is not None]
+    return {
+        "above_horizon_min": round(above_min, 1),
+        "above_horizon_h": round(above_min / 60.0, 2),
+        "above_max_alt": round(max(above_alts), 2) if above_alts else None,
+        "above_windows": above,
+        "observable_min": round(obs_min, 1),
+        "observable_h": round(obs_min / 60.0, 2),
+        "observable_max_alt": round(max(obs_alts), 2) if obs_alts else None,
+        "observable_windows": observable,
+        "twilight_min": track.get("twilight_min"),
+        "sunrise": track.get("sunrise"),
+        "sunset": track.get("sunset"),
+    }
+
+
+def observing_night_start_utc(
+    when: datetime,
+    *,
+    longitude_deg: float,
+    tz_offset_min: int | None = None,
+) -> datetime:
+    """Lokaler Mittag vor der Beobachtungsnacht von `when` (Mittag→Mittag).
+
+    Kalendertag 00:00–24:00 wuerde die Nacht an Mitternacht zerschneiden
+    (z.B. 20:00–02:00 und 02:00–03:30 als zwei Fenster).
+    """
+    when_utc = when.astimezone(timezone.utc)
+    if tz_offset_min is None:
+        tz_offset_min = int(round(float(longitude_deg) / 15.0 * 60.0))
+    offset = timedelta(minutes=int(tz_offset_min))
+    local = when_utc + offset
+    local_date = local.date()
+    if (local.hour, local.minute, local.second, local.microsecond) < (12, 0, 0, 0):
+        local_date = local_date - timedelta(days=1)
+    noon_as_utc_label = datetime(
+        local_date.year,
+        local_date.month,
+        local_date.day,
+        12,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+    return noon_as_utc_label - offset
+
+
 def object_track(
     *,
     ra_deg: float,
@@ -806,10 +931,17 @@ def object_track(
     when: datetime,
     profile: HorizonProfile | None = None,
     step_min: int = 15,
+    tz_offset_min: int | None = None,
 ) -> dict:
-    """Az/h ueber den Kalendertag (UTC), plus Zeitfenster ueber dem Horizont."""
+    """Az/h ueber die Beobachtungsnacht (lokal Mittag→Mittag), plus Zeitfenster."""
     when_utc = when.astimezone(timezone.utc)
-    day = when_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    if tz_offset_min is None:
+        tz_offset_min = int(round(float(longitude_deg) / 15.0 * 60.0))
+    day = observing_night_start_utc(
+        when_utc,
+        longitude_deg=longitude_deg,
+        tz_offset_min=tz_offset_min,
+    )
     stamps = [day + timedelta(minutes=index * step_min) for index in range((24 * 60) // step_min)]
     azs = np.empty(len(stamps), dtype=np.float64)
     alts = np.empty(len(stamps), dtype=np.float64)
@@ -830,18 +962,24 @@ def object_track(
         }
         for i in range(len(stamps))
     ]
-    in_day = [event for event in rises if day <= event < day + timedelta(days=1)]
-    in_set = [event for event in sets if day <= event < day + timedelta(days=1)]
-    return {
+    day_end = day + timedelta(days=1)
+    in_day = [event for event in rises if day <= event < day_end]
+    in_set = [event for event in sets if day <= event < day_end]
+    track = {
         "when": when_utc.isoformat(),
         "ra": ra_deg,
         "dec": dec_deg,
+        "night_start": day.isoformat(),
+        "tz_offset_min": int(tz_offset_min),
         "points": points,
         "windows": _phase_windows(stamps, above, lights, alts, step_min),
         "sunrise": in_day[0].isoformat() if in_day else None,
         "sunset": in_set[0].isoformat() if in_set else None,
         "twilight_min": TWILIGHT_MINUTES,
+        "step_min": step_min,
     }
+    track["summary"] = visibility_summary(track)
+    return track
 
 
 def main(argv: list[str] | None = None) -> int:

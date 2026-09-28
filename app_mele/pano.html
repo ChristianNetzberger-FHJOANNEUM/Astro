@@ -22,17 +22,20 @@
     #prefs label { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
     #prefs select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
                     border-radius: 4px; padding: 2px 6px; }
+    #prefs .dso-types { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; margin-top: 6px; }
+    #prefs .dso-types label { margin-top: 4px; font-size: 12px; }
+    #track-pin { max-width: 260px; display: none; }
+    #track-pin .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    #track-pin button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+                        padding: 7px 10px; cursor: pointer; font-size: 13px; }
     #info { position: absolute; z-index: 3; right: 12px; top: 96px; width: 280px;
             background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
             font-size: 13px; display: none; }
-    #nina { position: absolute; z-index: 3; right: 12px; bottom: 12px; width: 280px;
-            background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
-            font-size: 12px; line-height: 1.45; font-variant-numeric: tabular-nums; }
-    #nina strong { display: block; margin-bottom: 4px; font-size: 13px; }
-    #nina .ok { color: #5eead4; }
-    #nina .warn { color: #fbbf24; }
-    #nina .bad { color: #fb7185; }
-    #nina dl { margin: 0; display: grid; grid-template-columns: 4.2em 1fr; gap: 2px 8px; }
+    #nina { max-width: 300px; font-variant-numeric: tabular-nums; line-height: 1.45; }
+    #nina summary.ok { color: #5eead4; }
+    #nina summary.warn { color: #fbbf24; }
+    #nina summary.bad { color: #fb7185; }
+    #nina dl { margin: 8px 0 0; display: grid; grid-template-columns: 4.2em 1fr; gap: 2px 8px; }
     #nina dt { opacity: .7; }
     #nina dd { margin: 0; }
     #nina .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -50,6 +53,7 @@
     #labels span.mount-end { color: #fde047; font-weight: 700; }
     #labels span.target { color: #a3e635; font-weight: 700; }
     #nina label.debug { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    #nina .hint-mini { font-size: 11px; opacity: .75; margin: 8px 0 0; }
     #info h3 { margin: 0 0 8px; font-size: 15px; }
     #info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
     #info dt { opacity: .7; }
@@ -61,6 +65,11 @@
     #bar button:disabled { opacity: .38; cursor: not-allowed; }
     #hint, #sky-status { font-size: 12px; opacity: .92; }
     #hint { flex: 1 1 200px; }
+    #wifi-status { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+                   cursor: default; opacity: .95; }
+    #wifi-status.ok { color: #5eead4; }
+    #wifi-status.warn { color: #fbbf24; }
+    #wifi-status.bad { color: #fb7185; }
     #skybar label, #info label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
     #prefs .hint-mini, #info-windows { font-size: 12px; opacity: .85; margin: 8px 0 0; white-space: pre-wrap; }
     #info-legend { font-size: 12px; opacity: .9; margin: 8px 0 0; display: none; line-height: 1.45; }
@@ -78,6 +87,7 @@
       font-size: 12px; color: #7dd3fc; text-shadow: 0 0 5px #020617; white-space: nowrap; }
     #labels span.dso { color: #fbbf24; }
     #labels span.planet { color: #fdba74; font-weight: 600; }
+    #labels span.tonight { color: #4ade80; font-weight: 700; text-shadow: 0 0 6px rgba(34,197,94,.55); }
     #track-labels span { position: absolute; transform: translate(-50%, 90%);
       font-size: 11px; font-variant-numeric: tabular-nums; text-shadow: 0 0 5px #020617; white-space: nowrap; }
     #track-labels span.night { color: #5eead4; }
@@ -106,10 +116,12 @@
 <body>
   <div id="bar">
     <a href="/">Zurueck</a>
+    <a id="link-almanach" href="#">Almanach</a>
     <button data-tex="preview" type="button">1 Vorschau</button>
     <button data-tex="png" type="button">2 Transparentes PNG</button>
     <button data-tex="original" type="button">3 Original</button>
     <span id="hint">Ziehen: umsehen · Mausrad: Zoom</span>
+    <span id="wifi-status" title="WLAN">WLAN …</span>
   </div>
   <div id="skybar">
     <label><input id="chk-stars" type="checkbox" checked> Sterne</label>
@@ -117,6 +129,7 @@
     <label><input id="chk-messier" type="checkbox" checked> Messier</label>
     <label><input id="chk-ngc" type="checkbox"> NGC</label>
     <label><input id="chk-planets" type="checkbox" checked> Mond/Planeten</label>
+    <label><input id="chk-tonight" type="checkbox"> Tonight</label>
     <label>mag <input id="mag" type="range" min="0" max="9" step="0.5" value="5.5">
       <span id="mag-val">5.5</span></label>
     <input id="when" type="datetime-local">
@@ -147,7 +160,25 @@
           <option value="5">5°</option>
         </select>
       </label>
-      <p class="hint-mini">Gitter und Sterngroesse bleiben gespeichert. Aequator/Ekliptik folgen Zeit und Standort.</p>
+      <p class="hint-mini">DSO-Typen (Messier &amp; NGC, OpenNGC)</p>
+      <div class="dso-types">
+        <label><input id="dso-galaxy" type="checkbox" checked data-dso-type="galaxy"> Galaxien</label>
+        <label><input id="dso-globular" type="checkbox" checked data-dso-type="globular"> Kugelhaufen</label>
+        <label><input id="dso-open" type="checkbox" checked data-dso-type="open"> Offene Haufen</label>
+        <label><input id="dso-planetary" type="checkbox" checked data-dso-type="planetary"> Plan. Nebel</label>
+        <label><input id="dso-nebula" type="checkbox" checked data-dso-type="nebula"> Nebel</label>
+        <label><input id="dso-other" type="checkbox" checked data-dso-type="other"> Sonstiges</label>
+      </div>
+      <p class="hint-mini">Gitter, Kataloge und DSO-Typen bleiben gespeichert. Live-Zeit nicht.</p>
+    </details>
+    <details id="track-pin">
+      <summary id="track-pin-sum">Bahn aktiv</summary>
+      <p id="track-pin-name" class="hint-mini"></p>
+      <label><input id="chk-hours-pin" type="checkbox"> Stunden</label>
+      <div class="row">
+        <button id="btn-track-info" type="button">Objektinfo</button>
+        <button id="btn-track-clear" type="button">Bahn aus</button>
+      </div>
     </details>
     <details id="calib">
       <summary>Panorama-Azimut kalibrieren</summary>
@@ -173,6 +204,17 @@
         <button id="btn-horizon-gen" type="button">Horizontlinie generieren</button>
       </div>
     </details>
+    <details id="nina">
+      <summary id="nina-title">NINA / GTi</summary>
+      <dl id="nina-dl"></dl>
+      <p id="nina-goto-status" style="margin:8px 0 0;white-space:pre-wrap;"></p>
+      <label class="debug"><input id="chk-mount-trail" type="checkbox"> Mount-Spur (Debug)</label>
+      <div class="row">
+        <button id="btn-slew-stop" class="stop" type="button" disabled>STOP</button>
+        <button id="btn-mount-trail-clear" type="button" disabled>Spur loeschen</button>
+      </div>
+      <p class="hint-mini">Status-Polling alle 1&nbsp;s · Timeout 1,5&nbsp;s. Schwaches WLAN (Garten) kann kurz „Offline“ zeigen.</p>
+    </details>
   </div>
   <div id="info">
     <button id="info-close" type="button">x</button>
@@ -195,16 +237,6 @@
         <button id="btn-goto-yes" type="button">GoTo</button>
         <button id="btn-goto-no" type="button">Abbrechen</button>
       </div>
-    </div>
-  </div>
-  <div id="nina">
-    <strong id="nina-title">NINA</strong>
-    <dl id="nina-dl"></dl>
-    <p id="nina-goto-status" style="margin:8px 0 0;white-space:pre-wrap;"></p>
-    <label class="debug"><input id="chk-mount-trail" type="checkbox"> Mount-Spur (Debug)</label>
-    <div class="row">
-      <button id="btn-slew-stop" class="stop" type="button" disabled>STOP</button>
-      <button id="btn-mount-trail-clear" type="button" disabled>Spur loeschen</button>
     </div>
   </div>
   <div id="labels"></div>
@@ -242,6 +274,15 @@
     const whenEl = document.getElementById("when");
     if (params.get("lat")) latEl.value = params.get("lat");
     if (params.get("lon")) lonEl.value = params.get("lon");
+
+    document.getElementById("link-almanach").addEventListener("click", (event) => {
+      event.preventDefault();
+      const q = new URLSearchParams();
+      if (latEl.value) q.set("lat", latEl.value);
+      if (lonEl.value) q.set("lon", lonEl.value);
+      if (stem) q.set("stem", stem);
+      window.open(`/observe-view?${q}`, "_blank");
+    });
 
     function pad(value) { return String(value).padStart(2, "0"); }
     function toLocalInput(date) {
@@ -303,7 +344,10 @@
     let lastTrack = null;
     let pickables = [];
     let lastSky = null;
+    let tonightMarkers = [];
+    let tonightLoading = false;
     let selected = null;
+    let infoOpen = false;
     let starScale = 1;
     let dragMoved = 0;
 
@@ -792,13 +836,70 @@
         labelBox.appendChild(span);
         labelItems.push({ el: span, az: item.az, alt: item.alt });
       });
+      drawTonightHighlights();
       const stamp = data.when ? new Date(data.when) : currentWhen();
+      const tonightNote = document.getElementById("chk-tonight").checked && tonightMarkers.length
+        ? `  ·  Tonight ${tonightMarkers.length}`
+        : "";
       document.getElementById("sky-status").textContent =
-        `${stamp.toLocaleString()}  ·  ${data.stars.length} Sterne  ·  ${data.lines.length} Linien  ·  ${data.dso.length} DSO  ·  ${(data.bodies || []).length} Gestirn`;
+        `${stamp.toLocaleString()}  ·  ${data.stars.length} Sterne  ·  ${data.lines.length} Linien  ·  ${data.dso.length} DSO  ·  ${(data.bodies || []).length} Gestirn${tonightNote}`;
       if (selected) {
         const next = pickables.find((item) => sameObject(item, selected));
-        if (next) showInfo(next);
+        if (next) selected = next;
+        if (infoOpen) showInfo(next || selected);
         else if (document.getElementById("chk-track").checked) loadTrack();
+        updateTrackPin();
+      }
+    }
+
+    function drawTonightHighlights() {
+      if (!document.getElementById("chk-tonight").checked || !tonightMarkers.length) return;
+      const visible = tonightMarkers.filter((item) => Number.isFinite(item.az) && Number.isFinite(item.alt));
+      if (!visible.length) return;
+      addDiscs(visible, (item) => ({
+        r: item.above === false ? 0.35 : 0.2,
+        g: item.above === false ? 0.55 : 0.9,
+        b: item.above === false ? 0.35 : 0.35,
+        size: item.above === false ? 11 : 16,
+      }));
+      visible.forEach((item) => {
+        pickables.push({
+          ...item,
+          id: item.id || item.key,
+          kind: item.kind || "tonight",
+        });
+        const span = document.createElement("span");
+        span.textContent = item.name || item.key || "Tonight";
+        span.className = item.above === false ? "tonight below" : "tonight";
+        if (item.above === false) span.style.opacity = "0.45";
+        labelBox.appendChild(span);
+        labelItems.push({ el: span, az: item.az, alt: item.alt });
+      });
+    }
+
+    async function loadTonightMarkers() {
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || latEl.value === "" || lonEl.value === "") {
+        tonightMarkers = [];
+        return;
+      }
+      if (tonightLoading) return;
+      tonightLoading = true;
+      try {
+        const query = new URLSearchParams({
+          lat: String(lat),
+          lon: String(lon),
+          when: currentWhen().toISOString(),
+          stem,
+        });
+        const response = await fetch(`/observe/tonight/markers?${query}`);
+        const data = await response.json();
+        tonightMarkers = data.markers || [];
+      } catch (_err) {
+        tonightMarkers = [];
+      } finally {
+        tonightLoading = false;
       }
     }
 
@@ -1014,10 +1115,30 @@
     function addHourMarks(pts) {
       clearHours();
       if (!document.getElementById("chk-hours").checked) return;
-      (pts || []).forEach((item) => {
-        if (!item.when) return;
+      const list = pts || [];
+      // Exakte lokale Vollstunden (wie frueher bei UTC-Mitternacht-Start)
+      let marks = list.filter((item) => {
+        if (!item.when) return false;
         const stamp = new Date(item.when);
-        if (stamp.getMinutes() !== 0 || stamp.getSeconds() !== 0) return;
+        return stamp.getMinutes() === 0 && stamp.getSeconds() === 0;
+      });
+      // Fallback: naechster Sample je lokaler Stunde (bei Offset/Schritt-Raster)
+      if (!marks.length) {
+        const byHour = new Map();
+        list.forEach((item) => {
+          if (!item.when) return;
+          const stamp = new Date(item.when);
+          const key = `${stamp.getFullYear()}-${stamp.getMonth()}-${stamp.getDate()}-${stamp.getHours()}`;
+          const dist = Math.abs(stamp.getMinutes() * 60 + stamp.getSeconds());
+          const prev = byHour.get(key);
+          if (!prev || dist < prev.dist) byHour.set(key, { item, dist });
+        });
+        marks = [...byHour.values()]
+          .filter((entry) => entry.dist <= 20 * 60)
+          .map((entry) => entry.item);
+      }
+      marks.forEach((item) => {
+        const stamp = new Date(item.when);
         const style = trackStyle(item.light || "night", item.above);
         const mesh = new THREE.Mesh(
           new THREE.SphereGeometry(item.above ? 1.9 : 1.15, 10, 8),
@@ -1032,7 +1153,7 @@
         hourGroup.add(mesh);
         const span = document.createElement("span");
         span.className = `${item.light || "night"}${item.above ? "" : " below"}`;
-        span.textContent = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        span.textContent = stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
         trackLabelBox.appendChild(span);
         hourItems.push({ el: span, az: item.az, alt: item.alt });
       });
@@ -1057,14 +1178,18 @@
 
     function showInfo(item) {
       selected = item;
+      infoOpen = true;
       const box = document.getElementById("info");
       document.getElementById("info-title").textContent = objectTitle(item);
       const rows = [];
       const kind = item.kind === "star" ? "Stern" : (item.kind === "moon" ? "Mond" : (item.kind === "sun" ? "Sonne" : (item.kind === "planet" ? "Planet" : (item.kind || "DSO"))));
       rows.push(["Art", kind]);
-      if (item.mag != null) rows.push(["Groesse", Number(item.mag).toFixed(2) + " mag"]);
+      if (item.mag != null) {
+        const band = item.mag_band === "B" ? " (B)" : "";
+        rows.push(["Groesse", `${Number(item.mag).toFixed(2)} mag${band}`]);
+      }
       if (item.con) rows.push(["Sternbild", item.con]);
-      if (item.type) rows.push(["Typ", item.type]);
+      if (item.type) rows.push(["Typ", formatDsoType(item.type)]);
       if (item.hip) rows.push(["HIP", String(item.hip)]);
       if (item.id && item.id !== item.name) rows.push(["Katalog", item.id]);
       if (item.ra != null) rows.push(["RA", fmtRa(item.ra)]);
@@ -1085,6 +1210,7 @@
       box.style.display = "block";
       hideGotoConfirm();
       syncGotoButton();
+      updateTrackPin();
       if (document.getElementById("chk-track").checked) {
         loadTrack();
       } else {
@@ -1095,15 +1221,89 @@
     }
 
     function hideInfo() {
-      selected = null;
-      lastTrack = null;
+      infoOpen = false;
       document.getElementById("info").style.display = "none";
-      document.getElementById("chk-track").checked = false;
-      document.getElementById("info-windows").textContent = "";
-      document.getElementById("info-legend").style.display = "none";
       hideGotoConfirm();
       syncGotoButton();
+      const keepTrack = document.getElementById("chk-track").checked && selected;
+      if (!keepTrack) {
+        selected = null;
+        lastTrack = null;
+        document.getElementById("chk-track").checked = false;
+        document.getElementById("info-windows").textContent = "";
+        document.getElementById("info-legend").style.display = "none";
+        clearTrack();
+      }
+      updateTrackPin();
+    }
+
+    function updateTrackPin() {
+      const pin = document.getElementById("track-pin");
+      const keep = !infoOpen && document.getElementById("chk-track").checked && selected;
+      pin.style.display = keep ? "block" : "none";
+      if (keep) {
+        pin.open = true;
+        document.getElementById("track-pin-sum").textContent = `Bahn: ${objectTitle(selected)}`;
+        document.getElementById("track-pin-name").textContent =
+          selected.type ? formatDsoType(selected.type) : (selected.kind || "");
+        document.getElementById("chk-hours-pin").checked =
+          document.getElementById("chk-hours").checked;
+      }
+    }
+
+    function clearPinnedTrack() {
+      document.getElementById("chk-track").checked = false;
+      selected = null;
+      lastTrack = null;
+      infoOpen = false;
+      document.getElementById("info").style.display = "none";
+      document.getElementById("info-windows").textContent = "";
+      document.getElementById("info-legend").style.display = "none";
       clearTrack();
+      updateTrackPin();
+      syncGotoButton();
+    }
+
+    function formatDsoType(code) {
+      const map = {
+        G: "Galaxie",
+        GPair: "Galaxienpaar",
+        GTrpl: "Galaxientriplett",
+        GGroup: "Galaxiengruppe",
+        GCl: "Kugelsternhaufen",
+        OCl: "Offener Sternhaufen",
+        "*Ass": "Sternassoziation",
+        "Cl+N": "Haufen + Nebel",
+        PN: "Planetarischer Nebel",
+        Neb: "Nebel",
+        HII: "H-II-Gebiet",
+        EmN: "Emissionsnebel",
+        RfN: "Reflexionsnebel",
+        DrkN: "Dunkelnebel",
+        SNR: "Supernova-Ueberrest",
+        "*": "Stern",
+        "**": "Doppelstern",
+        Other: "Sonstiges",
+        Nova: "Nova",
+      };
+      return map[code] || code || "—";
+    }
+
+    function selectedDsoTypes() {
+      return [...document.querySelectorAll("[data-dso-type]")]
+        .filter((el) => el.checked)
+        .map((el) => el.dataset.dsoType);
+    }
+
+    function applyDsoTypeChecks(types) {
+      if (types == null) {
+        document.querySelectorAll("[data-dso-type]").forEach((el) => { el.checked = true; });
+        return;
+      }
+      const set = new Set(types);
+      document.querySelectorAll("[data-dso-type]").forEach((el) => {
+        el.checked = set.has(el.dataset.dsoType);
+      });
     }
 
     function emptyGroup(group) {
@@ -1570,6 +1770,7 @@
         lon: String(lon),
         when: currentWhen().toISOString(),
         stem,
+        tz_offset_min: String(-new Date().getTimezoneOffset()),
       });
       try {
         const response = await fetch(`/sky-track?${query}`);
@@ -1582,6 +1783,7 @@
         drawTrackPoints(data.points || []);
         addHourMarks(data.points || []);
         legend.style.display = "block";
+        updateTrackPin();
         const lines = [];
         if (data.sunrise || data.sunset) {
           const rise = data.sunrise ? new Date(data.sunrise).toLocaleTimeString() : "—";
@@ -1590,15 +1792,38 @@
         } else {
           lines.push("Sonne bleibt unter/ueber dem Horizont (keine Auf-/Untergaenge).");
         }
+        const sum = data.summary || {};
+        const fmtH = (h) => (h == null ? "—" : `${Number(h).toFixed(1)} h`);
+        const fmtAlt = (a) => (a == null ? "—" : `${Number(a).toFixed(1)}°`);
+        lines.push("");
+        lines.push(
+          `Beobachtbar (Nacht ∩ Horizont): ${fmtH(sum.observable_h)} · max h ${fmtAlt(sum.observable_max_alt)}`,
+        );
+        const obsWins = sum.observable_windows || [];
+        if (!obsWins.length) {
+          lines.push("  — in dieser Nacht nicht beobachtbar (Maske / unter Horizont).");
+        } else {
+          obsWins.forEach((slot) => {
+            const a = new Date(slot.start);
+            const b = new Date(slot.end);
+            lines.push(
+              `  ${a.toLocaleTimeString()}–${b.toLocaleTimeString()}  max h ${slot.max_alt}°`,
+            );
+          });
+        }
+        lines.push(
+          `Ueber Horizont gesamt: ${fmtH(sum.above_horizon_h)} · max h ${fmtAlt(sum.above_max_alt)}`,
+        );
         const windows = data.windows || [];
         if (!windows.length) {
           lines.push("An diesem Tag nicht ueber dem Horizont / der Maske.");
         } else {
+          lines.push("Fenster nach Licht:");
           windows.forEach((slot) => {
             const a = new Date(slot.start);
             const b = new Date(slot.end);
             lines.push(
-              `${lightLabel(slot.light)} ${a.toLocaleTimeString()}–${b.toLocaleTimeString()}  max h ${slot.max_alt}°`,
+              `  ${lightLabel(slot.light)} ${a.toLocaleTimeString()}–${b.toLocaleTimeString()}  max h ${slot.max_alt}°`,
             );
           });
         }
@@ -1626,6 +1851,13 @@
         grid_eq: document.getElementById("chk-eq").checked,
         grid_ecliptic: document.getElementById("chk-ecliptic").checked,
         horizon_points: document.getElementById("chk-horizon-points").checked,
+        tonight: document.getElementById("chk-tonight").checked,
+        show_stars: document.getElementById("chk-stars").checked,
+        show_const: document.getElementById("chk-const").checked,
+        show_messier: document.getElementById("chk-messier").checked,
+        show_ngc: document.getElementById("chk-ngc").checked,
+        show_planets: document.getElementById("chk-planets").checked,
+        dso_types: selectedDsoTypes(),
       };
       try {
         localStorage.setItem("mele-ui-prefs", JSON.stringify(payload));
@@ -1644,6 +1876,13 @@
             grid_eq: payload.grid_eq ? "1" : "0",
             grid_ecliptic: payload.grid_ecliptic ? "1" : "0",
             horizon_points: payload.horizon_points ? "1" : "0",
+            tonight: payload.tonight ? "1" : "0",
+            show_stars: payload.show_stars ? "1" : "0",
+            show_const: payload.show_const ? "1" : "0",
+            show_messier: payload.show_messier ? "1" : "0",
+            show_ngc: payload.show_ngc ? "1" : "0",
+            show_planets: payload.show_planets ? "1" : "0",
+            dso_types: (payload.dso_types || []).join(","),
           });
           await fetch(`/ui-prefs?${query}`, { method: "POST" });
         } catch (_err) {
@@ -1674,6 +1913,7 @@
       }
       if (data.track_hours != null) {
         document.getElementById("chk-hours").checked = Boolean(data.track_hours);
+        document.getElementById("chk-hours-pin").checked = Boolean(data.track_hours);
       }
       if (data.grid != null) {
         document.getElementById("chk-grid").checked = Boolean(data.grid);
@@ -1689,6 +1929,27 @@
       }
       if (data.horizon_points != null) {
         document.getElementById("chk-horizon-points").checked = Boolean(data.horizon_points);
+      }
+      if (data.tonight != null) {
+        document.getElementById("chk-tonight").checked = Boolean(data.tonight);
+      }
+      if (data.show_stars != null) {
+        document.getElementById("chk-stars").checked = Boolean(data.show_stars);
+      }
+      if (data.show_const != null) {
+        document.getElementById("chk-const").checked = Boolean(data.show_const);
+      }
+      if (data.show_messier != null) {
+        document.getElementById("chk-messier").checked = Boolean(data.show_messier);
+      }
+      if (data.show_ngc != null) {
+        document.getElementById("chk-ngc").checked = Boolean(data.show_ngc);
+      }
+      if (data.show_planets != null) {
+        document.getElementById("chk-planets").checked = Boolean(data.show_planets);
+      }
+      if (data.dso_types != null) {
+        applyDsoTypeChecks(data.dso_types);
       }
       drawGrid();
       drawHorizon();
@@ -1745,10 +2006,14 @@
         messier: document.getElementById("chk-messier").checked ? "1" : "0",
         ngc: document.getElementById("chk-ngc").checked ? "1" : "0",
         planets: document.getElementById("chk-planets").checked ? "1" : "0",
+        dso_types: selectedDsoTypes().join(","),
         stem,
       });
       status.textContent = "Lade Himmel …";
       try {
+        if (document.getElementById("chk-tonight").checked) {
+          await loadTonightMarkers();
+        }
         const response = await fetch(`/sky-overlay?${query}`);
         const data = await response.json();
         drawOverlay(data);
@@ -1867,14 +2132,45 @@
         clearTrack();
         document.getElementById("info-windows").textContent = "";
         document.getElementById("info-legend").style.display = "none";
+        updateTrackPin();
       }
     });
-    document.getElementById("chk-hours").addEventListener("change", () => {
+    function onHoursChange(checked) {
+      document.getElementById("chk-hours").checked = checked;
+      document.getElementById("chk-hours-pin").checked = checked;
       persistPrefs();
       if (lastTrack) addHourMarks(lastTrack.points || []);
+    }
+    document.getElementById("chk-hours").addEventListener("change", (event) => {
+      onHoursChange(event.target.checked);
+    });
+    document.getElementById("chk-hours-pin").addEventListener("change", (event) => {
+      onHoursChange(event.target.checked);
+    });
+    document.getElementById("btn-track-clear").addEventListener("click", clearPinnedTrack);
+    document.getElementById("btn-track-info").addEventListener("click", () => {
+      if (selected) showInfo(selected);
     });
     ["chk-stars", "chk-const", "chk-messier", "chk-ngc", "chk-planets", "mag", "when"].forEach((id) => {
-      document.getElementById(id).addEventListener("change", loadSky);
+      document.getElementById(id).addEventListener("change", () => {
+        if (id !== "when" && id !== "mag") persistPrefs();
+        if (id === "mag") persistPrefs();
+        loadSky();
+      });
+    });
+    document.querySelectorAll("[data-dso-type]").forEach((el) => {
+      el.addEventListener("change", () => {
+        persistPrefs();
+        loadSky();
+      });
+    });
+    document.getElementById("chk-tonight").addEventListener("change", async () => {
+      persistPrefs();
+      if (document.getElementById("chk-tonight").checked) {
+        await loadTonightMarkers();
+      }
+      if (lastSky) drawOverlay(lastSky);
+      else loadSky();
     });
     ["lat", "lon"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => {
@@ -2598,6 +2894,87 @@
       ninaTimer = setInterval(pollNinaMount, 1000);
     }
 
+    let wifiTimer = null;
+    let wifiBusy = false;
+
+    function wifiQualityClass(rssi) {
+      if (rssi == null) return "";
+      if (rssi >= -70) return "ok";
+      if (rssi >= -80) return "warn";
+      return "bad";
+    }
+
+    function formatWifiCompact(data) {
+      if (!data) return "WLAN ?";
+      if (data.stale && data.rssi_dbm == null) return "WLAN ?";
+      if (!data.connected) {
+        if (data.stale && data.rssi_dbm != null) return `WLAN ${data.rssi_dbm} dBm`;
+        return "WLAN offline";
+      }
+      if (data.rssi_dbm == null) return "WLAN ?";
+      return `WLAN ${data.rssi_dbm} dBm`;
+    }
+
+    function formatWifiTooltip(data) {
+      if (!data) return "WLAN";
+      const lines = ["WLAN"];
+      if (data.interface_name) lines.push(`Adapter: ${data.interface_name}`);
+      if (data.ssid) lines.push(`SSID: ${data.ssid}`);
+      if (data.bssid) lines.push(`BSSID: ${data.bssid}`);
+      if (data.rssi_dbm != null) {
+        if (data.rssi_source === "signal_quality_estimated") {
+          lines.push(`RSSI: ca. ${data.rssi_dbm} dBm`);
+          lines.push("Quelle: aus Windows Signal Quality geschaetzt");
+        } else {
+          lines.push(`RSSI: ${data.rssi_dbm} dBm`);
+          if (data.rssi_source === "native_rssi") lines.push("Quelle: Windows WLAN driver");
+          else if (data.rssi_source === "bss_rssi") lines.push("Quelle: Windows BSS-Liste (lRssi)");
+          else if (data.rssi_source) lines.push(`Quelle: ${data.rssi_source}`);
+        }
+      } else if (!data.connected) {
+        lines.push("Status: offline");
+      }
+      if (data.signal_quality_percent != null) {
+        lines.push(`Signal Quality: ${data.signal_quality_percent} %`);
+      }
+      if (data.rx_mbps != null) lines.push(`RX-Linkrate: ${data.rx_mbps} Mbit/s`);
+      if (data.tx_mbps != null) lines.push(`TX-Linkrate: ${data.tx_mbps} Mbit/s`);
+      if (data.channel != null) lines.push(`Kanal: ${data.channel}`);
+      if (data.stale) lines.push("(letzte Messung, veraltet)");
+      if (data.error) lines.push(`Hinweis: ${data.error}`);
+      return lines.join("\n");
+    }
+
+    function renderWifiStatus(data) {
+      const el = document.getElementById("wifi-status");
+      if (!el) return;
+      el.textContent = formatWifiCompact(data);
+      el.title = formatWifiTooltip(data);
+      let cls = wifiQualityClass(data && data.rssi_dbm);
+      if (data && !data.connected && !data.stale) cls = "bad";
+      el.className = cls;
+    }
+
+    async function pollWifiStatus() {
+      if (wifiBusy) return;
+      wifiBusy = true;
+      try {
+        const response = await fetch("/network/wifi");
+        const data = await response.json();
+        renderWifiStatus(data);
+      } catch (_err) {
+        renderWifiStatus({ connected: false, error: "Proxy nicht erreichbar", stale: false });
+      } finally {
+        wifiBusy = false;
+      }
+    }
+
+    function startWifiPolling() {
+      clearInterval(wifiTimer);
+      pollWifiStatus();
+      wifiTimer = setInterval(pollWifiStatus, 5000);
+    }
+
     document.getElementById("btn-goto").addEventListener("click", showGotoConfirm);
     document.getElementById("btn-goto-yes").addEventListener("click", executeGoto);
     document.getElementById("btn-goto-no").addEventListener("click", hideGotoConfirm);
@@ -2622,7 +2999,10 @@
 
     applyLook();
     load(urls[tex] ? tex : (urls.preview ? "preview" : "original"));
-    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls).then(startNinaPolling);
+    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls).then(() => {
+      startNinaPolling();
+      startWifiPolling();
+    });
     function tick() {
       requestAnimationFrame(tick);
       updateLabels();

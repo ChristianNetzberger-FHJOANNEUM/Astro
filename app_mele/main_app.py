@@ -6,16 +6,36 @@ import asyncio
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import urlencode
 
-from fastapi import Request
+from fastapi import Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from nicegui import app, run, ui
 
 from app_mele.layout import build_ui
 from app_mele.state import UiState
 from mele.catalog import object_track, query_overlay
+from mele.observe_almanac import (
+    build_almanac,
+    load_almanac_prefs,
+    load_lists_index,
+    load_tonight,
+    save_almanac_prefs,
+    save_tonight,
+    set_active_list,
+    tonight_markers,
+    upsert_list,
+)
+from mele.solar import (
+    next_solar_transit,
+    noaa_solar_noon,
+    shadow_length,
+    solar_diagnostics,
+    solar_transit,
+    solar_transits_for_year,
+    transit_to_dict,
+)
 from mele.prefs import load_prefs, prefs_path, save_prefs
 from mele.config import load_mele_settings, save_site
 from mele.observe import gps_from_jpeg, list_location_jpegs, resolve_observer
@@ -27,6 +47,13 @@ from mele.shadow_calibration import (
     store_calibration,
 )
 from mele.sites import load_photo_site, save_photo_site, sites_path
+from mele.locations import (
+    ensure_default_location,
+    get_active_location,
+    list_locations,
+    set_active_location,
+    upsert_location,
+)
 from mele.weather import WeatherError, load_forecast, weather_dir_for
 from mele.weather_journal import (
     SOURCE_ECOWITT,
@@ -37,6 +64,12 @@ from mele.weather_journal import (
     should_skip_forecast,
 )
 from mele.weather_local import parse_observation_payload
+from mele.network import (
+    format_wifi_compact,
+    format_wifi_tooltip,
+    get_wifi_status,
+    wifi_quality_class,
+)
 from mele.nina import NinaClient, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
@@ -122,6 +155,8 @@ def run_app(port: int | None = None) -> None:
     weather_dir.mkdir(parents=True, exist_ok=True)
     weather_html = (Path(__file__).resolve().parent / "weather.html").read_text(encoding="utf-8")
     help_html = (Path(__file__).resolve().parent / "help.html").read_text(encoding="utf-8")
+    observe_html = (Path(__file__).resolve().parent / "observe.html").read_text(encoding="utf-8")
+    tools_html = (Path(__file__).resolve().parent / "tools.html").read_text(encoding="utf-8")
     app.add_static_files("/mele-media", preview_dir)
     app.add_static_files("/mele-export", settings.horizon_dir)
     app.add_static_files("/mele-source", settings.media_dir)
@@ -141,6 +176,30 @@ def run_app(port: int | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — UI darf nie crashen
             return JSONResponse(
                 {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "mount": None}
+            )
+        return JSONResponse(status.to_dict())
+
+    @app.get("/network/wifi")
+    def network_wifi() -> JSONResponse:
+        """Aktive WLAN-Verbindung / RSSI (Windows Native WiFi). Nie Exception an UI."""
+        try:
+            status = get_wifi_status()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {
+                    "connected": False,
+                    "interface_name": None,
+                    "ssid": None,
+                    "bssid": None,
+                    "rssi_dbm": None,
+                    "rssi_source": None,
+                    "signal_quality_percent": None,
+                    "rx_mbps": None,
+                    "tx_mbps": None,
+                    "channel": None,
+                    "error": str(exc) or "WLAN-Abfrage fehlgeschlagen",
+                    "stale": False,
+                }
             )
         return JSONResponse(status.to_dict())
 
@@ -284,6 +343,322 @@ def run_app(port: int | None = None) -> None:
     def help_view() -> HTMLResponse:
         return HTMLResponse(help_html)
 
+    @app.get("/observe-view")
+    def observe_view() -> HTMLResponse:
+        return HTMLResponse(observe_html)
+
+    @app.get("/tools-view")
+    def tools_view() -> HTMLResponse:
+        return HTMLResponse(tools_html)
+
+    def _solar_site_args(
+        lat: float | None,
+        lon: float | None,
+        elevation_m: float | None,
+        timezone_name: str,
+    ) -> tuple[float, float, float, str] | JSONResponse:
+        site_lat = lat if lat is not None else settings.latitude_deg
+        site_lon = lon if lon is not None else settings.longitude_deg
+        if site_lat is None or site_lon is None:
+            return JSONResponse({"error": "lat/lon fehlen (Config oder Query)"}, status_code=400)
+        elev = float(elevation_m if elevation_m is not None else (settings.elevation_m or 0.0))
+        tz = (timezone_name or settings.timezone or "Europe/Vienna").strip() or "Europe/Vienna"
+        return float(site_lat), float(site_lon), elev, tz
+
+    @app.get("/solar/status")
+    def solar_status(
+        lat: float | None = None,
+        lon: float | None = None,
+        elevation_m: float | None = None,
+        timezone_name: str = Query("", alias="timezone"),
+    ) -> JSONResponse:
+        resolved = _solar_site_args(lat, lon, elevation_m, timezone_name)
+        if isinstance(resolved, JSONResponse):
+            return resolved
+        site_lat, site_lon, elev, tz = resolved
+        now = datetime.now(timezone.utc)
+        try:
+            from zoneinfo import ZoneInfo
+
+            local_now = now.astimezone(ZoneInfo(tz))
+            today = solar_transit(local_now.date(), site_lat, site_lon, elev, tz)
+            nxt = next_solar_transit(now, site_lat, site_lon, elev, tz)
+            today_noaa = noaa_solar_noon(local_now.date(), site_lat, site_lon, elev, tz)
+            diag = solar_diagnostics(local_now.date(), site_lat, site_lon, elev, tz)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        location_label = ""
+        for loc in list_locations(settings.horizon_dir):
+            if abs(loc.latitude_deg - site_lat) < 1e-5 and abs(loc.longitude_deg - site_lon) < 1e-5:
+                location_label = loc.label
+                break
+        shadow = shadow_length(1.0, float(today.altitude_deg))
+        return JSONResponse(
+            {
+                "latitude_deg": site_lat,
+                "longitude_deg": site_lon,
+                "elevation_m": elev,
+                "timezone": tz,
+                "location_label": location_label,
+                "now_utc": now.isoformat().replace("+00:00", "Z"),
+                "recommended_method": "astropy_hadec_zero",
+                "today": transit_to_dict(today),
+                "next": transit_to_dict(nxt),
+                "noaa_validation": today_noaa,
+                "seconds_to_next": max(0.0, (nxt.utc - now).total_seconds()),
+                "shadow_length_m_for_1m_pole": None if shadow is None else round(shadow, 3),
+                "diagnostics": diag,
+            }
+        )
+
+    @app.get("/solar/transit")
+    def solar_transit_api(
+        day: str = "",
+        lat: float | None = None,
+        lon: float | None = None,
+        elevation_m: float | None = None,
+        timezone_name: str = Query("", alias="timezone"),
+    ) -> JSONResponse:
+        resolved = _solar_site_args(lat, lon, elevation_m, timezone_name)
+        if isinstance(resolved, JSONResponse):
+            return resolved
+        site_lat, site_lon, elev, tz = resolved
+        try:
+            if day:
+                stamp = date.fromisoformat(day)
+            else:
+                from zoneinfo import ZoneInfo
+
+                stamp = datetime.now(timezone.utc).astimezone(ZoneInfo(tz)).date()
+            payload = transit_to_dict(solar_transit(stamp, site_lat, site_lon, elev, tz))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(payload)
+
+    @app.get("/solar/transits")
+    def solar_transits_api(
+        year: int | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+        elevation_m: float | None = None,
+        timezone_name: str = Query("", alias="timezone"),
+    ) -> JSONResponse:
+        resolved = _solar_site_args(lat, lon, elevation_m, timezone_name)
+        if isinstance(resolved, JSONResponse):
+            return resolved
+        site_lat, site_lon, elev, tz = resolved
+        yr = int(year or datetime.now(timezone.utc).year)
+        try:
+            days = [
+                transit_to_dict(item)
+                for item in solar_transits_for_year(yr, site_lat, site_lon, elev, tz)
+            ]
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "year": yr,
+                "latitude_deg": site_lat,
+                "longitude_deg": site_lon,
+                "elevation_m": elev,
+                "timezone": tz,
+                "days": days,
+            }
+        )
+
+    @app.get("/observe/almanac")
+    def observe_almanac(
+        lat: float | None = None,
+        lon: float | None = None,
+        when: str = "",
+        stem: str = "",
+        messier: int = 1,
+        star_mag: float | None = 3.0,
+        min_obs_min: float = 30.0,
+        step_min: int = 30,
+        tz_offset_min: int | None = None,
+    ) -> JSONResponse:
+        if lat is None or lon is None:
+            return JSONResponse({"error": "lat, lon noetig"}, status_code=400)
+        if when:
+            stamp = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = datetime.now(timezone.utc)
+        profile = None
+        if stem:
+            json_path = settings.horizon_dir / f"{stem}.horizon.json"
+            if json_path.is_file():
+                profile = load_profile(json_path)
+        star_limit: float | None
+        if star_mag is None or star_mag < 0:
+            star_limit = None
+        else:
+            star_limit = float(star_mag)
+        try:
+            payload = build_almanac(
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                when=stamp,
+                profile=profile,
+                db_path=settings.catalog_dir / "sky.sqlite",
+                messier=bool(messier),
+                star_mag_max=star_limit,
+                min_observable_min=float(min_obs_min or 0),
+                step_min=max(15, min(int(step_min or 30), 60)),
+                tz_offset_min=tz_offset_min,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        payload["stem"] = stem
+        return JSONResponse(payload)
+
+    @app.get("/observe/prefs")
+    def observe_prefs_get() -> JSONResponse:
+        prefs = load_almanac_prefs(settings.horizon_dir)
+        index = load_lists_index(settings.horizon_dir)
+        return JSONResponse({**prefs, "lists": index.get("lists"), "active": index.get("active")})
+
+    @app.post("/observe/prefs")
+    async def observe_prefs_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            prefs = save_almanac_prefs(settings.horizon_dir, body)
+            index = load_lists_index(settings.horizon_dir)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, **prefs, "lists": index.get("lists"), "active": index.get("active")})
+
+    @app.get("/observe/lists")
+    def observe_lists_get() -> JSONResponse:
+        return JSONResponse(load_lists_index(settings.horizon_dir))
+
+    @app.post("/observe/lists")
+    async def observe_lists_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        list_id = str(body.get("list_id") or body.get("id") or body.get("label") or "").strip()
+        label = str(body.get("label") or list_id).strip()
+        if not list_id and not label:
+            return JSONResponse({"ok": False, "error": "list_id oder label noetig"}, status_code=400)
+        make_active = body.get("make_active", True) not in (False, 0, "0", "false", "False")
+        try:
+            index = upsert_list(
+                settings.horizon_dir,
+                list_id=list_id or label,
+                label=label or list_id,
+                make_active=make_active,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, **index})
+
+    @app.post("/observe/lists/active")
+    async def observe_lists_active(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        list_id = str(body.get("list_id") or body.get("id") or "").strip()
+        if not list_id:
+            return JSONResponse({"ok": False, "error": "list_id noetig"}, status_code=400)
+        try:
+            index = set_active_list(settings.horizon_dir, list_id)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, **index})
+
+    @app.get("/observe/tonight")
+    def observe_tonight_get(stem: str = "", list_id: str = "") -> JSONResponse:
+        return JSONResponse(load_tonight(settings.horizon_dir, stem, list_id=list_id or None))
+
+    @app.get("/observe/tonight/markers")
+    def observe_tonight_markers(
+        lat: float | None = None,
+        lon: float | None = None,
+        when: str = "",
+        stem: str = "",
+        list_id: str = "",
+    ) -> JSONResponse:
+        if lat is None or lon is None:
+            return JSONResponse({"error": "lat, lon noetig"}, status_code=400)
+        if when:
+            stamp = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = datetime.now(timezone.utc)
+        profile = None
+        if stem:
+            json_path = settings.horizon_dir / f"{stem}.horizon.json"
+            if json_path.is_file():
+                profile = load_profile(json_path)
+        try:
+            payload = tonight_markers(
+                settings.horizon_dir,
+                stem=stem,
+                list_id=list_id or None,
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                when=stamp,
+                profile=profile,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(payload)
+
+    @app.post("/observe/tonight")
+    async def observe_tonight_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        objects = body.get("objects") if isinstance(body.get("objects"), list) else []
+        stem = str(body.get("stem") or "")
+        list_id = str(body.get("list_id") or "").strip() or None
+        label = str(body.get("label") or "").strip()
+        when_raw = body.get("when")
+        stamp = None
+        if when_raw:
+            try:
+                stamp = datetime.fromisoformat(str(when_raw).replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+            except ValueError:
+                stamp = None
+        lat = body.get("lat")
+        lon = body.get("lon")
+        try:
+            saved = save_tonight(
+                settings.horizon_dir,
+                objects,
+                list_id=list_id,
+                label=label,
+                stem=stem,
+                when=stamp,
+                latitude_deg=float(lat) if lat is not None else None,
+                longitude_deg=float(lon) if lon is not None else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, **saved})
+
     @app.get("/weather-data")
     def weather_data(lat: float | None = None, lon: float | None = None, refresh: int = 0) -> JSONResponse:
         if lat is None or lon is None:
@@ -412,6 +787,7 @@ def run_app(port: int | None = None) -> None:
         messier: int = 1,
         ngc: int = 0,
         planets: int = 1,
+        dso_types: str = "",
         stem: str = "",
     ) -> JSONResponse:
         if lat is None or lon is None:
@@ -437,6 +813,7 @@ def run_app(port: int | None = None) -> None:
             json_path = settings.horizon_dir / f"{stem}.horizon.json"
             if json_path.is_file():
                 profile = load_profile(json_path)
+        type_list = [p.strip() for p in dso_types.replace(";", ",").split(",") if p.strip()] or None
         payload = query_overlay(
             db_path=settings.catalog_dir / "sky.sqlite",
             latitude_deg=lat,
@@ -448,6 +825,7 @@ def run_app(port: int | None = None) -> None:
             messier=bool(messier),
             ngc=bool(ngc),
             planets=bool(planets),
+            dso_types=type_list,
             profile=profile,
         )
         return JSONResponse(payload)
@@ -460,6 +838,7 @@ def run_app(port: int | None = None) -> None:
         lon: float | None = None,
         when: str = "",
         stem: str = "",
+        tz_offset_min: int | None = None,
     ) -> JSONResponse:
         if ra is None or dec is None or lat is None or lon is None:
             return JSONResponse({"error": "ra, dec, lat, lon noetig"}, status_code=400)
@@ -482,6 +861,7 @@ def run_app(port: int | None = None) -> None:
                 longitude_deg=lon,
                 when=stamp,
                 profile=profile,
+                tz_offset_min=tz_offset_min,
             )
         )
 
@@ -499,6 +879,13 @@ def run_app(port: int | None = None) -> None:
         grid_eq: int | None = None,
         grid_ecliptic: int | None = None,
         horizon_points: int | None = None,
+        tonight: int | None = None,
+        show_stars: int | None = None,
+        show_const: int | None = None,
+        show_messier: int | None = None,
+        show_ngc: int | None = None,
+        show_planets: int | None = None,
+        dso_types: str | None = None,
     ) -> JSONResponse:
         updates = {}
         if star_scale is not None:
@@ -517,6 +904,20 @@ def run_app(port: int | None = None) -> None:
             updates["grid_ecliptic"] = bool(grid_ecliptic)
         if horizon_points is not None:
             updates["horizon_points"] = bool(horizon_points)
+        if tonight is not None:
+            updates["tonight"] = bool(tonight)
+        if show_stars is not None:
+            updates["show_stars"] = bool(show_stars)
+        if show_const is not None:
+            updates["show_const"] = bool(show_const)
+        if show_messier is not None:
+            updates["show_messier"] = bool(show_messier)
+        if show_ngc is not None:
+            updates["show_ngc"] = bool(show_ngc)
+        if show_planets is not None:
+            updates["show_planets"] = bool(show_planets)
+        if dso_types is not None:
+            updates["dso_types"] = [p.strip() for p in dso_types.replace(";", ",").split(",") if p.strip()]
         return JSONResponse(save_prefs(prefs_path(settings.horizon_dir), updates))
 
     @app.get("/site-coords")
@@ -815,10 +1216,24 @@ def run_app(port: int | None = None) -> None:
         return find_sun_excludes(rgb, src_w, src_h)
 
     def index() -> None:
-        state = UiState(
+        ensure_default_location(
+            settings.horizon_dir,
             latitude_deg=settings.latitude_deg,
             longitude_deg=settings.longitude_deg,
-            site_src="config" if settings.latitude_deg is not None else "none",
+            elevation_m=float(settings.elevation_m or 0.0),
+        )
+        active_loc = get_active_location(settings.horizon_dir)
+        start_lat = settings.latitude_deg
+        start_lon = settings.longitude_deg
+        start_src = "config" if settings.latitude_deg is not None else "none"
+        if active_loc is not None and (start_lat is None or start_lon is None):
+            start_lat = active_loc.latitude_deg
+            start_lon = active_loc.longitude_deg
+            start_src = "location"
+        state = UiState(
+            latitude_deg=start_lat,
+            longitude_deg=start_lon,
+            site_src=start_src,
         )
 
         def refresh() -> None:
@@ -1347,6 +1762,45 @@ def run_app(port: int | None = None) -> None:
         def on_open_help() -> None:
             ui.run_javascript("window.open('/help-view', '_blank')")
 
+        def on_open_observe() -> None:
+            if state.latitude_deg is None or state.longitude_deg is None:
+                ui.notify("Zuerst Standort setzen.", type="warning")
+                return
+            payload = {
+                "lat": f"{state.latitude_deg:.6f}",
+                "lon": f"{state.longitude_deg:.6f}",
+            }
+            if state.image_path is not None:
+                payload["stem"] = state.image_path.stem
+            query = urlencode(payload)
+            ui.run_javascript(f"window.open('/observe-view?{query}', '_blank')")
+
+        def on_open_tools() -> None:
+            if state.latitude_deg is None or state.longitude_deg is None:
+                ui.notify("Zuerst Standort im Hauptfenster setzen oder aus der Liste uebernehmen.", type="warning")
+                return
+            elev = float(settings.elevation_m or 0.0)
+            active = get_active_location(settings.horizon_dir)
+            loc_label = ""
+            if active is not None:
+                if (
+                    abs(active.latitude_deg - state.latitude_deg) < 1e-5
+                    and abs(active.longitude_deg - state.longitude_deg) < 1e-5
+                ):
+                    loc_label = active.label
+                    elev = float(active.elevation_m or elev)
+            payload: dict[str, str] = {
+                "lat": f"{state.latitude_deg:.6f}",
+                "lon": f"{state.longitude_deg:.6f}",
+                "elev": f"{elev:.1f}",
+                "tz": settings.timezone or "Europe/Vienna",
+                "site_src": state.site_src or "",
+            }
+            if loc_label:
+                payload["location"] = loc_label
+            query = urlencode(payload)
+            ui.run_javascript(f"window.open('/tools-view?{query}', '_blank')")
+
         def on_set_site(lat: float, lon: float, source: str) -> None:
             state.latitude_deg = lat
             state.longitude_deg = lon
@@ -1370,6 +1824,42 @@ def run_app(port: int | None = None) -> None:
                 state.status = f"Standard-Standort {lat:.5f}, {lon:.5f} (mele.yaml)"
             refresh_meta()
             ui.notify(state.status, type="positive")
+
+        def locations_list() -> list[tuple[str, str, float, float]]:
+            return [
+                (loc.id, loc.label, loc.latitude_deg, loc.longitude_deg)
+                for loc in list_locations(settings.horizon_dir)
+            ]
+
+        def active_location_id() -> str:
+            active = get_active_location(settings.horizon_dir)
+            return active.id if active is not None else ""
+
+        def on_apply_location(location_id: str) -> bool:
+            try:
+                loc = set_active_location(settings.horizon_dir, location_id)
+            except ValueError as exc:
+                ui.notify(str(exc), type="warning")
+                return False
+            on_set_site(loc.latitude_deg, loc.longitude_deg, "location")
+            state.status = f"Standort „{loc.label}“ uebernommen"
+            return True
+
+        def on_save_location(label: str, lat: float, lon: float) -> bool:
+            loc = upsert_location(
+                settings.horizon_dir,
+                label=label,
+                latitude_deg=lat,
+                longitude_deg=lon,
+                elevation_m=float(settings.elevation_m or 0.0),
+                make_active=True,
+            )
+            on_set_site(lat, lon, "location")
+            ui.notify(f"Standort „{loc.label}“ in Liste gespeichert", type="positive")
+            fill = state.refs.get("fill_location_select")
+            if callable(fill):
+                fill()
+            return True
 
         def geotagged() -> list[tuple[str, float | None, float | None]]:
             return [
@@ -1409,6 +1899,33 @@ def run_app(port: int | None = None) -> None:
                 ui.notify(f"GPS aus {dest.name}: {gps[0]:.5f}, {gps[1]:.5f}", type="positive")
             refresh_meta()
 
+        _WIFI_COLORS = {
+            "ok": "#5eead4",
+            "warn": "#fbbf24",
+            "bad": "#fb7185",
+            "": "#e2e8f0",
+        }
+
+        async def poll_wifi_status() -> None:
+            label = state.refs.get("wifi_label")
+            if label is None:
+                return
+            try:
+                status = await asyncio.to_thread(get_wifi_status)
+            except Exception:  # noqa: BLE001
+                return
+            text = format_wifi_compact(status)
+            tip = format_wifi_tooltip(status)
+            color = _WIFI_COLORS.get(wifi_quality_class(status.rssi_dbm), "#e2e8f0")
+            if not status.connected and not status.stale:
+                color = "#fb7185"
+            try:
+                label.text = text
+                label.style(f"color: {color}")
+                label.tooltip(tip)
+            except RuntimeError:
+                return
+
         build_ui(
             state=state,
             media_dir=settings.media_dir,
@@ -1430,18 +1947,26 @@ def run_app(port: int | None = None) -> None:
             on_open_pano=on_open_pano,
             on_open_weather=on_open_weather,
             on_open_help=on_open_help,
+            on_open_observe=on_open_observe,
+            on_open_tools=on_open_tools,
             on_set_site=on_set_site,
+            locations_fn=locations_list,
+            active_location_id_fn=active_location_id,
+            on_apply_location=on_apply_location,
+            on_save_location=on_save_location,
             geotagged_fn=geotagged,
             on_gps_upload=on_gps_upload,
             preview_url_fn=preview_url,
         )
         apply_weather_summary()
+        ui.timer(0.1, poll_wifi_status, once=True)
+        ui.timer(5.0, poll_wifi_status)
 
     ui.run(
         root=index,
         title="MeLE Astro-Computer",
         port=port,
-        host="127.0.0.1",
+        host=settings.ui_host,
         show=True,
         reload=False,
     )

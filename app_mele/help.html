@@ -78,6 +78,8 @@
       <h2>Beobachtung</h2>
       <a href="#wetter" data-page="wetter">Wetter &amp; Journal</a>
       <a href="#360" data-page="360">360-Ansicht</a>
+      <a href="#almanach" data-page="almanach">Almanach / Tonight</a>
+      <a href="#tools" data-page="tools">Tools / True North</a>
     </nav>
     <main>
       <article id="start" class="active">
@@ -200,6 +202,49 @@
         <p>Three.js lokal, Katalog SQLite, Mond/Planeten aus Ephemeride.
           Punktwolke fuer Horizont, GoTo (NINA), Prefs, Bahn eines Objekts.</p>
         <p>Taste 1/2/3: Vorschau / transparentes PNG / Original.</p>
+        <p>Bei Objektwahl: <strong>Beobachtbar (Nacht ∩ Horizont)</strong> vs.
+          Gesamtzeit ueber dem Horizont — inkl. max. Elevation.</p>
+      </article>
+
+      <article id="almanach">
+        <h1>Almanach / Beobachtungslisten</h1>
+        <p class="lead">Batch-Sichtbarkeit fuer Messier und helle Sterne gegen eure
+          echte Horizontmaske — Auswahl in benannten Listen speichern
+          (z.&nbsp;B. APO, Newton 10&quot;).</p>
+        <h2>Ablauf</h2>
+        <ol>
+          <li>Standort + Panorama (Horizontprofil) setzen</li>
+          <li>Button <em>Almanach</em> in der Haupt-App</li>
+          <li>Filter, Sortierung, „Nur Auswahl“ — werden in
+            <code>almanac-prefs.json</code> session-uebergreifend gemerkt</li>
+          <li><em>Almanach laden</em> — Kennzahlen immer neu fuer das gewaehlte Datum</li>
+          <li>Checkbox markiert Objekte in der <em>aktiven Liste</em></li>
+          <li><em>Liste speichern</em> schreibt
+            <code>observe-lists/{id}.json</code> (Objekt-IDs, nicht eingefrorene Zeiten)</li>
+        </ol>
+        <p><strong>Beobachtbar</strong> = ueber Horizontmaske <em>und</em> Nacht
+          (ohne Tag/Daemmerung ±1 h). Zeitraum ist die Beobachtungsnacht
+          (lokal Mittag→Mittag), damit Abend und Morgen nicht an Mitternacht
+          getrennt werden. Zeitformat 24h/12h speicherbar.</p>
+        <p>In der 360-Ansicht: Checkbox <em>Tonight</em> hebt die aktive Liste
+          gruen hervor. Mehrere Listen = verschiedene Setups/Ziele; Wechsel
+          ueber die Combobox. Am Folgetag: Liste bleibt, Dauer/Fenster/Elevation
+          werden neu berechnet.</p>
+      </article>
+
+      <article id="tools">
+        <h1>Tools / True North</h1>
+        <p class="lead">Eigenes Browserfenster fuer kleine astronomische Hilfsfunktionen —
+          ohne das Hauptfenster zu belasten. Aktuell: Sonnenmeridian.</p>
+        <h2>Sonnenmeridian</h2>
+        <p>Zeitpunkt, an dem der Sonnenmittelpunkt den lokalen Meridian kreuzt
+          (Stundenwinkel H&nbsp;=&nbsp;0). Auf der Nordhalbkugel Azimut ≈ 180°;
+          der Schatten eines lotrechten Stabes zeigt geografisch Nord.</p>
+        <p>Berechnung offline mit Astropy (<code>get_sun</code> / HADec, H&nbsp;=&nbsp;0).
+          Zeitzone <code>Europe/Vienna</code> via zoneinfo (CET/CEST).
+          NOAA Solar Noon nur als Validierung in der Diagnose.</p>
+        <p title="Berechneter Meridiandurchgang des Sonnenmittelpunkts. Die praktische Genauigkeit einer Schattenmessung wird u.a. durch Lotrechtigkeit des Stabes, Schattenkante und Untergrund begrenzt.">
+          Anzeige HH:MM:SS — praktische Schattenmessung ist grober.</p>
       </article>
     </main>
   </div>

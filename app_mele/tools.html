@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE Tools — True North</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #0b1220; color: #e2e8f0;
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center;
+           flex-wrap: wrap; padding: 10px 14px; background: rgba(15,23,42,.94);
+           border-bottom: 1px solid #1e293b; }
+    #bar a, #bar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+           padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px; }
+    main { padding: 16px 18px 48px; max-width: 960px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 16px; margin: 22px 0 8px; }
+    .meta, .hint { font-size: 13px; opacity: .85; }
+    .hint { margin-top: 8px; max-width: 42rem; }
+    .site-box { margin: 14px 0; padding: 12px 14px; background: #132033; border-radius: 8px;
+                border: 1px solid #334155; }
+    .site-box strong { color: #7dd3fc; }
+    .site-box .coords { font-variant-numeric: tabular-nums; font-size: 15px; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 10px 16px; }
+    .grid dt { font-size: 11px; opacity: .65; margin: 0; }
+    .grid dd { font-size: 18px; font-variant-numeric: tabular-nums; margin: 2px 0 0; }
+    #measure { display: none; border: 1px solid #fbbf24; background: #1c1917; }
+    #measure.active { display: block; }
+    #measure h2 { color: #fbbf24; margin-top: 0; }
+    #countdown { font-size: 28px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+    #phase { font-size: 20px; font-weight: 700; margin-top: 6px; }
+    label { font-size: 12px; opacity: .85; display: flex; flex-direction: column; gap: 4px; }
+    select, input { background: #111827; color: #e2e8f0; border: 1px solid #334155;
+                    border-radius: 4px; padding: 6px 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #1e293b;
+             font-variant-numeric: tabular-nums; }
+    th { opacity: .7; }
+    tr.today td { background: rgba(56, 189, 248, 0.12); }
+    #status { font-size: 13px; min-height: 1.2em; opacity: .85; }
+    #status.warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <a href="/">Zurueck</a>
+    <a href="/help-view#tools">Hilfe</a>
+    <button id="btn-refresh" type="button">Aktualisieren</button>
+    <span class="meta">True North · Sonnenmeridian (offline)</span>
+  </div>
+  <main>
+    <h1>True North / Sonnenmeridian</h1>
+    <div class="site-box" id="site-box">
+      <div class="meta">Verwendeter Standort (aus dem Hauptfenster)</div>
+      <div><strong id="site-name">—</strong></div>
+      <div class="coords" id="site-coords">GPS —</div>
+      <p class="meta" id="site-note" style="margin:6px 0 0;">
+        Die Berechnung nutzt genau diese Koordinaten. Standort im Hauptfenster aendern,
+        dann Tools erneut oeffnen oder Aktualisieren.
+      </p>
+    </div>
+    <p class="hint" title="Berechneter Meridiandurchgang des Sonnenmittelpunkts. Die praktische Genauigkeit einer Schattenmessung wird u.a. durch Lotrechtigkeit des Stabes, Schattenkante und Untergrund begrenzt.">
+      Berechneter Meridiandurchgang des Sonnenmittelpunkts (Stundenwinkel H&nbsp;=&nbsp;0).
+      Am Transit zeigt der Schatten eines senkrechten Stabes geografisch Nord (Azimut&nbsp;0°).
+      Praktische Messgenauigkeit ist begrenzter als die Anzeige in Sekunden.
+    </p>
+
+    <div class="panel" id="measure">
+      <h2>TRUE NORTH MESSUNG</h2>
+      <div>Sonnenmeridian in</div>
+      <div id="countdown">—</div>
+      <div id="phase"></div>
+      <p class="meta">Senkrechten Stab verwenden. Schatten zeigt beim Transit geografisch Nord.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Heute</h2>
+      <p class="meta">Scheinbarer Meridiandurchgang (Astropy). Für True-North-Markierung verwenden.</p>
+      <dl class="grid" id="today-grid"></dl>
+    </div>
+    <div class="panel">
+      <h2>Nächster Sonnenmeridian</h2>
+      <dl class="grid" id="next-grid"></dl>
+      <p class="meta" id="next-countdown">Countdown: —</p>
+    </div>
+
+    <details class="panel" id="algo-panel">
+      <summary style="cursor:pointer; font-size:16px; font-weight:600;">
+        Algorithmus &amp; Diagnose (aufklappen)
+      </summary>
+      <div id="algo-body" class="meta" style="margin-top:12px; white-space:pre-wrap; font-family:Consolas,monospace; font-size:12px; line-height:1.45;"></div>
+    </details>
+
+    <div class="panel">
+      <div style="display:flex; gap:12px; align-items:end; flex-wrap:wrap;">
+        <label>Jahr
+          <input id="year" type="number" min="2000" max="2100" step="1">
+        </label>
+        <button id="btn-year" type="button">Jahrestabelle laden</button>
+      </div>
+      <p id="status"></p>
+      <div style="max-height: 420px; overflow: auto;">
+        <table>
+          <thead>
+            <tr><th>Datum</th><th>Sonnenmeridian</th><th>TZ</th><th>Höhe</th><th>Azimut</th></tr>
+          </thead>
+          <tbody id="year-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const lat = params.get("lat") || "";
+    const lon = params.get("lon") || "";
+    const elev = params.get("elev") || params.get("elevation_m") || "";
+    const tz = params.get("tz") || "Europe/Vienna";
+    const locationName = params.get("location") || "";
+    const siteSrc = params.get("site_src") || "";
+    let nextUtcMs = null;
+    let statusData = null;
+
+    function srcLabel(src) {
+      if (src === "location") return "Standortliste";
+      if (src === "config") return "mele.yaml / manuell";
+      if (src === "exif") return "Handyfoto GPS";
+      if (src === "saved") return "gespeichert (Pano)";
+      return src || "Hauptfenster";
+    }
+
+    function showSiteBanner(data) {
+      const nameEl = document.getElementById("site-name");
+      const coordsEl = document.getElementById("site-coords");
+      const noteEl = document.getElementById("site-note");
+      const label = locationName || (data && data.location_label) || "aktueller Standort";
+      const la = (data && data.latitude_deg != null) ? data.latitude_deg : (lat ? Number(lat) : null);
+      const lo = (data && data.longitude_deg != null) ? data.longitude_deg : (lon ? Number(lon) : null);
+      const el = (data && data.elevation_m != null) ? data.elevation_m : (elev ? Number(elev) : null);
+      nameEl.textContent = label;
+      if (la != null && lo != null && Number.isFinite(la) && Number.isFinite(lo)) {
+        coordsEl.textContent =
+          `GPS  ${la.toFixed(6)}°, ${lo.toFixed(6)}°` +
+          (el != null && Number.isFinite(el) ? `  ·  ${el} m` : "") +
+          `  ·  ${(data && data.timezone) || tz}` +
+          `  ·  Quelle: ${srcLabel(siteSrc)}`;
+      } else {
+        coordsEl.textContent = "GPS fehlt — im Hauptfenster setzen";
+      }
+      noteEl.textContent =
+        "Berechnung mit genau diesen Koordinaten aus dem Hauptfenster. " +
+        "Anderen Standort waehlen → im Hauptfenster uebernehmen → Tools neu oeffnen oder Aktualisieren.";
+    }
+
+    function fmtLocal(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+    function fmtDate(isoOrDate) {
+      const d = new Date(isoOrDate);
+      return d.toLocaleDateString("de-AT", { day: "2-digit", month: "2-digit", year: "numeric" });
+    }
+    function fmtCountdown(ms) {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    }
+    function fillGrid(id, rows) {
+      const dl = document.getElementById(id);
+      dl.innerHTML = "";
+      rows.forEach(([k, v]) => {
+        const dt = document.createElement("dt");
+        dt.textContent = k;
+        const dd = document.createElement("dd");
+        dd.textContent = v;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+    }
+
+    function siteQuery() {
+      const q = new URLSearchParams({ timezone: tz });
+      if (lat) q.set("lat", lat);
+      if (lon) q.set("lon", lon);
+      if (elev) q.set("elevation_m", elev);
+      return q;
+    }
+
+    function renderDiagnostics(diag) {
+      const box = document.getElementById("algo-body");
+      if (!diag) {
+        box.textContent = "Keine Diagnose.";
+        return;
+      }
+      const algo = diag.algorithm || {};
+      const tr = diag.astropy_transit || {};
+      const noaa = diag.noaa_validation || {};
+      const lines = [
+        "=== Definition ===",
+        algo.definition || "",
+        "",
+        "=== Sonnen-Ephemeride ===",
+        algo.sun_ephemeris || "",
+        "",
+        "=== Bezugssystem ===",
+        algo.frame || "",
+        "",
+        "=== Solver ===",
+        algo.solver || "",
+        "",
+        "=== Rolle von NOAA ===",
+        algo.noaa_role || "",
+        "",
+        "=== Referenzen ===",
+        ...(algo.references || []),
+        "",
+        "=== Diagnose heute ===",
+        diag.interpretation || "",
+        `Δ (Astropy − NOAA) = ${diag.delta_astropy_minus_noaa_sec} s`,
+        `Empfehlung True North: ${diag.recommended_for_true_north}`,
+        "",
+        "--- Astropy Transit (Benutzer) ---",
+        `local ${tr.local || "—"}`,
+        `az ${tr.azimuth_deg}°  h ${tr.altitude_deg}°  H ${tr.hour_angle_deg}°`,
+        `method ${tr.method || "—"}`,
+        "",
+        "--- NOAA Solar Noon (Validierung) ---",
+        `local ${noaa.local || "—"}  EoT ${noaa.equation_of_time_min} min`,
+        `az ${noaa.azimuth_deg}°  h ${noaa.altitude_deg}°  H ${noaa.hour_angle_deg}°`,
+      ];
+      box.textContent = lines.join("\n");
+    }
+
+    async function loadStatus() {
+      const response = await fetch(`/solar/status?${siteQuery()}`);
+      const data = await response.json();
+      if (data.error) {
+        document.getElementById("site-name").textContent = "Fehler";
+        document.getElementById("site-coords").textContent = data.error;
+        return;
+      }
+      statusData = data;
+      showSiteBanner(data);
+      const today = data.today || {};
+      fillGrid("today-grid", [
+        ["Datum", today.date || "—"],
+        ["Sonnenmeridian", `${fmtLocal(today.local)} ${today.timezone_abbr || ""}`.trim()],
+        ["Sonnenazimut", today.azimuth_deg != null ? `${Number(today.azimuth_deg).toFixed(3)}°` : "—"],
+        ["Sonnenhöhe", today.altitude_deg != null ? `${Number(today.altitude_deg).toFixed(2)}°` : "—"],
+        ["Schattenrichtung", "0.000° (True North)"],
+        ["Methode", today.method || "astropy"],
+      ]);
+      const next = data.next || {};
+      nextUtcMs = next.utc ? new Date(next.utc).getTime() : null;
+      fillGrid("next-grid", [
+        ["Datum", next.date || "—"],
+        ["Sonnenmeridian", `${fmtLocal(next.local)} ${next.timezone_abbr || ""}`.trim()],
+        ["Sonnenazimut", next.azimuth_deg != null ? `${Number(next.azimuth_deg).toFixed(3)}°` : "—"],
+        ["Sonnenhöhe", next.altitude_deg != null ? `${Number(next.altitude_deg).toFixed(2)}°` : "—"],
+      ]);
+      renderDiagnostics(data.diagnostics);
+      tickCountdown();
+    }
+
+    function tickCountdown() {
+      const measure = document.getElementById("measure");
+      const cd = document.getElementById("countdown");
+      const phaseEl = document.getElementById("phase");
+      const nextCd = document.getElementById("next-countdown");
+      if (nextUtcMs == null) {
+        nextCd.textContent = "Countdown: —";
+        measure.classList.remove("active");
+        return;
+      }
+      const left = nextUtcMs - Date.now();
+      nextCd.textContent = left >= 0
+        ? `Countdown: ${fmtCountdown(left)}`
+        : "Countdown: Transit war heute — naechster geladen";
+      if (left >= 0 && left <= 5 * 60 * 1000) {
+        measure.classList.add("active");
+        cd.textContent = fmtCountdown(left);
+        const sec = left / 1000;
+        if (sec <= 0.5) phaseEl.textContent = "TRANSIT";
+        else if (sec <= 10) phaseEl.textContent = "T−10 s";
+        else if (sec <= 30) phaseEl.textContent = "T−30 s";
+        else if (sec <= 60) phaseEl.textContent = "T−60 s";
+        else phaseEl.textContent = "";
+      } else {
+        measure.classList.remove("active");
+      }
+    }
+
+    async function loadYear() {
+      const year = Number(document.getElementById("year").value) || new Date().getFullYear();
+      const status = document.getElementById("status");
+      status.textContent = "Berechne Jahrestabelle …";
+      status.className = "";
+      const q = siteQuery();
+      q.set("year", String(year));
+      try {
+        const response = await fetch(`/solar/transits?${q}`);
+        const data = await response.json();
+        if (data.error) {
+          status.textContent = data.error;
+          status.className = "warn";
+          return;
+        }
+        const body = document.getElementById("year-rows");
+        body.innerHTML = "";
+        const today = (statusData && statusData.today && statusData.today.date) || "";
+        (data.days || []).forEach((row) => {
+          const tr = document.createElement("tr");
+          if (row.date === today) tr.className = "today";
+          const cells = [
+            fmtDate(row.date + "T12:00:00"),
+            fmtLocal(row.local),
+            row.timezone_abbr || "",
+            row.altitude_deg != null ? `${Number(row.altitude_deg).toFixed(1)}°` : "—",
+            row.azimuth_deg != null ? `${Number(row.azimuth_deg).toFixed(2)}°` : "—",
+          ];
+          cells.forEach((text) => {
+            const td = document.createElement("td");
+            td.textContent = text;
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        status.textContent = `${(data.days || []).length} Tage · ${data.timezone}`;
+      } catch (_err) {
+        status.textContent = "Jahrestabelle fehlgeschlagen.";
+        status.className = "warn";
+      }
+    }
+
+    document.getElementById("year").value = String(new Date().getFullYear());
+    document.getElementById("btn-refresh").addEventListener("click", () => loadStatus());
+    document.getElementById("btn-year").addEventListener("click", () => loadYear());
+    loadStatus();
+    setInterval(tickCountdown, 250);
+  </script>
+</body>
+</html>

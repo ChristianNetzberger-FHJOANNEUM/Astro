@@ -1,4 +1,6 @@
 ui_port: 8082
+# LAN-Zugriff (iPad im Heim-WLAN): 0.0.0.0 — nur lokal: 127.0.0.1
+ui_host: 0.0.0.0
 media_dir: media
 # Handyfotos mit GPS-EXIF, getrennt von den 360-Panos in media/.
 gps_dir: media/GPS-locations
@@ -9,6 +11,7 @@ preview_width: 2000
 # Zeitzone fuer naive EXIF-Aufnahmezeit (sonst lokale PC-Zeit).
 latitude_deg:
 longitude_deg:
+elevation_m: 250
 timezone: Europe/Vienna
 catalog_dir: data/catalogs
 # NINA Advanced API (READ ONLY in Phase 1). Default lokal auf dem MeLE-PC.

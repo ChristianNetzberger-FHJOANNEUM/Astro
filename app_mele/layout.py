@@ -123,7 +123,13 @@ def build_ui(
     on_open_pano: Callable[[], None],
     on_open_weather: Callable[[], None],
     on_open_help: Callable[[], None],
+    on_open_observe: Callable[[], None],
+    on_open_tools: Callable[[], None],
     on_set_site: Callable[[float, float, str], None],
+    locations_fn: Callable[[], list[tuple[str, str, float, float]]],
+    active_location_id_fn: Callable[[], str],
+    on_apply_location: Callable[[str], bool],
+    on_save_location: Callable[[str, float, float], bool],
     geotagged_fn: Callable[[], list[tuple[str, float | None, float | None]]],
     on_gps_upload: Callable[..., None],
     preview_url_fn: Callable[[], str | None],
@@ -148,6 +154,9 @@ def build_ui(
                 sky_cover_label = ui.label("Himmel: —").classes("text-subtitle2")
                 weather_label = ui.label("Wetter: —").classes("text-caption")
                 state.refs["weather_label"] = weather_label
+                wifi_label = ui.label("WLAN …").classes("text-caption")
+                wifi_label.tooltip("WLAN-Status wird geladen …")
+                state.refs["wifi_label"] = wifi_label
                 ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
                     "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
                 )
@@ -156,6 +165,12 @@ def build_ui(
                 )
                 ui.button("Hilfe", icon="help", on_click=on_open_help).props("flat dense").tooltip(
                     "Wiki: Horizont, Einnorden, Hybrid, Wetter-Journal"
+                )
+                ui.button("Almanach", icon="event", on_click=on_open_observe).props("flat dense").tooltip(
+                    "Sichtbarkeit Messier/Sterne · Tonight-Liste"
+                )
+                ui.button("Tools", icon="explore", on_click=on_open_tools).props("flat dense").tooltip(
+                    "True North / Sonnenmeridian (offline)"
                 )
             cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
                 "text-caption font-mono whitespace-pre-wrap"
@@ -208,10 +223,25 @@ def build_ui(
             north_label = ui.label().classes("text-body1 q-mt-md")
             range_label = ui.label().classes("text-caption")
             site_label = ui.label().classes("text-caption q-mt-sm")
+            ui.label("Beobachterstandorte").classes("text-caption q-mt-sm")
+            loc_select = ui.select(
+                options={"": "Standort waehlen …"},
+                value="",
+            ).classes("w-full").props("dense")
+            with ui.row().classes("w-full items-end no-wrap q-gutter-xs"):
+                loc_name_in = ui.input("Name", placeholder="z.B. Garten, Sternwarte").classes("w-40").props("dense")
+                ui.button("Uebernehmen", icon="place", on_click=lambda: _apply_selected_location()).props(
+                    "flat dense"
+                ).tooltip("Ausgewaehlten Listen-Standort in Breite/Laenge uebernehmen")
+                ui.button("In Liste", icon="playlist_add", on_click=lambda: _save_named_location()).props(
+                    "flat dense"
+                ).tooltip("Aktuelle Koordinaten unter Name in die Standortliste speichern")
             with ui.row().classes("w-full items-end no-wrap q-gutter-xs"):
                 lat_in = ui.number("Breite", value=state.latitude_deg, format="%.6f").classes("w-28").props("dense")
                 lon_in = ui.number("Laenge", value=state.longitude_deg, format="%.6f").classes("w-28").props("dense")
-                ui.button("Speichern", icon="save", on_click=lambda: _save_typed_site()).props("flat dense")
+                ui.button("Speichern", icon="save", on_click=lambda: _save_typed_site()).props("flat dense").tooltip(
+                    "Nach configs/mele.yaml schreiben (Default-Standort)"
+                )
             map_btn = ui.button("Karte pruefen (OSM)", icon="map", on_click=lambda: _open_osm()).props("flat dense")
             site_select = ui.select(
                 options={"": "Handyfoto in media/GPS-locations waehlen"},
@@ -223,7 +253,7 @@ def build_ui(
                 on_upload=on_gps_upload,
             ).props('accept=".jpg,.jpeg,image/jpeg" dense').classes("w-full")
             ui.label(
-                "Nur Originale mit Ortung. Freigabe/Export streicht oft das GPS."
+                "Liste: benannte Standorte. Handyfoto: GPS aus EXIF. Speichern: mele.yaml."
             ).classes("text-caption")
 
             def _open_osm() -> None:
@@ -241,6 +271,46 @@ def build_ui(
                 lat_in.value = state.latitude_deg
                 lon_in.value = state.longitude_deg
                 map_btn.visible = state.latitude_deg is not None and state.longitude_deg is not None
+
+            def _fill_location_select() -> None:
+                options: dict[str, str] = {"": "Standort waehlen …"}
+                for loc_id, label, lat, lon in locations_fn():
+                    options[loc_id] = f"{label}  ({lat:.5f}, {lon:.5f})"
+                active_id = active_location_id_fn()
+                loc_select.options = options
+                if active_id and active_id in options:
+                    loc_select.value = active_id
+                loc_select.update()
+
+            def _apply_selected_location() -> None:
+                loc_id = str(loc_select.value or "")
+                if not loc_id:
+                    ui.notify("Zuerst einen Standort in der Liste waehlen.", type="warning")
+                    return
+                if on_apply_location(loc_id):
+                    _sync_site_inputs()
+                    _fill_location_select()
+
+            def _save_named_location() -> None:
+                name = str(loc_name_in.value or "").strip()
+                if not name:
+                    # Falls Auswahl existiert, deren Label aktualisieren
+                    loc_id = str(loc_select.value or "")
+                    if loc_id:
+                        for item_id, label, _lat, _lon in locations_fn():
+                            if item_id == loc_id:
+                                name = label
+                                break
+                if not name:
+                    ui.notify("Namen fuer den Standort eingeben (z.B. Garten).", type="warning")
+                    return
+                if lat_in.value is None or lon_in.value is None:
+                    ui.notify("Breite und Laenge setzen.", type="warning")
+                    return
+                if on_save_location(name, float(lat_in.value), float(lon_in.value)):
+                    loc_name_in.value = ""
+                    _sync_site_inputs()
+                    _fill_location_select()
 
             def _save_typed_site() -> None:
                 if lat_in.value is None or lon_in.value is None:
@@ -280,10 +350,12 @@ def build_ui(
                 ui.notify("Datei nicht gefunden.", type="warning")
 
             site_select.on_value_change(_on_site_photo)
+            _fill_location_select()
             _fill_site_select()
             _sync_site_inputs()
             state.refs["sync_site_inputs"] = _sync_site_inputs
             state.refs["fill_site_select"] = _fill_site_select
+            state.refs["fill_location_select"] = _fill_location_select
             method_box = ui.column().classes("w-full q-mt-sm")
             ui.separator()
             ui.label("Himmelsgrid").classes("text-subtitle2")
