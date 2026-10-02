@@ -28,13 +28,111 @@
     #track-pin .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     #track-pin button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
                         padding: 7px 10px; cursor: pointer; font-size: 13px; }
-    #info { position: absolute; z-index: 3; right: 12px; top: 96px; width: 280px;
+    #info { position: absolute; z-index: 3; right: 12px; top: 96px; width: 300px;
+            max-height: calc(100vh - 120px); overflow-y: auto;
             background: rgba(15,23,42,.92); padding: 10px 12px; border-radius: 6px;
             font-size: 13px; display: none; }
+    #info-imaging { display: none; margin-top: 10px; padding-top: 8px;
+                    border-top: 1px solid #334155; font-size: 12px; }
+    #info-imaging h4 { margin: 0 0 6px; font-size: 13px; color: #7dd3fc; }
+    #info-imaging .img-sum { margin: 0 0 8px; opacity: .9; white-space: pre-wrap; }
+    #info-imaging .img-list { margin: 0 0 8px; padding: 0; list-style: none; }
+    #info-imaging .img-list li { margin: 0 0 6px; padding: 6px 7px;
+      background: rgba(15,23,42,.55); border: 1px solid #334155; border-radius: 4px; }
+    #info-imaging .img-meta { opacity: .8; font-size: 11px; margin-top: 2px; }
+    #info-imaging .img-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    #info-imaging details.img-form { margin: 0 0 8px; }
+    #info-imaging details.img-form summary { cursor: pointer; font-weight: 600; opacity: .95; }
+    #info-imaging .img-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+    #info-imaging .img-grid label { display: flex; flex-direction: column; gap: 2px;
+      white-space: normal; font-size: 11px; opacity: .9; }
+    #info-imaging .img-grid label.span2 { grid-column: 1 / -1; }
+    #info-imaging input, #info-imaging select, #info-imaging textarea {
+      background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+      border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%; box-sizing: border-box; }
+    #info-imaging textarea { min-height: 42px; resize: vertical; }
+    #info-imaging button {
+      color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+      padding: 5px 8px; cursor: pointer; font-size: 12px; }
+    #info-imaging .img-icon-btn {
+      width: 2rem; height: 2rem; padding: 0; font-size: 14px; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #info-imaging .img-icon-btn.capture { background: #475569; }
+    #info-imaging .img-icon-btn.capture.run {
+      background: #16a34a; box-shadow: 0 0 0 2px rgba(74,222,128,.45);
+    }
+    #info-imaging .img-icon-btn.capture.done { background: #15803d; }
+    #info-imaging .img-busy-glass {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1.4rem; height: 1.4rem; font-size: 14px; line-height: 1;
+      opacity: .95; user-select: none;
+      animation: img-hourglass 1.1s steps(2, end) infinite;
+    }
+    @keyframes img-hourglass {
+      0% { transform: rotate(0deg); }
+      50% { transform: rotate(180deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #info-imaging .session-pick-row { margin: 0 0 8px; display: flex; gap: 6px; align-items: center; }
+    #info-imaging .session-pick-row select { flex: 1; min-width: 0; }
+    #info-imaging #img-session-detail {
+      margin: 0 0 8px; padding: 6px 7px;
+      background: rgba(15,23,42,.55); border: 1px solid #334155; border-radius: 4px;
+    }
+    #info-imaging #img-session-detail.empty { opacity: .7; font-size: 11px; }
+    #info-imaging .img-preview-wrap {
+      margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155;
+    }
+    #info-imaging .img-preview-wrap .img-preview-label {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 6px; margin-bottom: 4px; font-size: 11px; opacity: .9;
+    }
+    #info-imaging .img-preview-wrap img {
+      display: block; width: 100%; max-height: 220px; object-fit: contain;
+      background: #020617; border-radius: 3px; border: 1px solid #1e293b;
+    }
+    #info-imaging .img-preview-stage {
+      position: relative; width: 100%; cursor: crosshair; user-select: none;
+    }
+    #info-imaging .img-preview-stage img.overview {
+      max-height: 220px;
+    }
+    #info-imaging .img-roi-rect {
+      position: absolute; border: 1px solid #fbbf24; background: rgba(251,191,36,.15);
+      pointer-events: none; display: none;
+    }
+    #info-imaging .img-focus-box {
+      margin-top: 6px; padding-top: 6px; border-top: 1px dashed #334155;
+    }
+    #info-imaging .img-focus-box img {
+      max-height: 280px; image-rendering: pixelated;
+    }
+    #info-imaging .img-preview-hint {
+      margin: 2px 0 0; font-size: 10px; opacity: .65;
+    }
+    #info-imaging .img-preview-meta {
+      margin: 4px 0 0; font-size: 10px; opacity: .75; line-height: 1.35;
+      word-break: break-word;
+    }
+    #info-imaging .img-preview-empty { font-size: 11px; opacity: .65; margin-top: 6px; }
+    #info-imaging .img-status { margin: 4px 0 0; font-size: 11px; opacity: .85; white-space: pre-wrap; }
+    #info-imaging .arch-local { color: #fbbf24; }
+    #info-imaging .arch-archived { color: #5eead4; }
+    #info-imaging .arch-pending { color: #93c5fd; }
+    #info-imaging .arch-missing { color: #fb7185; }
     #nina { max-width: 300px; font-variant-numeric: tabular-nums; line-height: 1.45; }
     #nina summary.ok { color: #5eead4; }
     #nina summary.warn { color: #fbbf24; }
     #nina summary.bad { color: #fb7185; }
+    #nina .led {
+      display: inline-block; width: 0.7em; height: 0.7em; border-radius: 50%;
+      margin-right: 0.4em; vertical-align: -0.05em;
+      background: #64748b; box-shadow: inset 0 0 0 1px rgba(15,23,42,.55);
+    }
+    #nina summary.ok .led { background: #34d399; }
+    #nina summary.warn .led { background: #fbbf24; }
+    #nina summary.bad .led { background: #f43f5e; }
     #nina dl { margin: 8px 0 0; display: grid; grid-template-columns: 4.2em 1fr; gap: 2px 8px; }
     #nina dt { opacity: .7; }
     #nina dd { margin: 0; }
@@ -139,7 +237,7 @@
     <button data-step="-3600" type="button">-1h</button>
     <button data-step="3600" type="button">+1h</button>
     <button data-step="86400" type="button">+1d</button>
-    <label><input id="chk-live" type="checkbox"> Live</label>
+    <label><input id="chk-live" type="checkbox" checked> Live</label>
     <label>lat <input id="lat" type="number" step="0.0001"></label>
     <label>lon <input id="lon" type="number" step="0.0001"></label>
     <span id="sky-status"></span>
@@ -169,7 +267,7 @@
         <label><input id="dso-nebula" type="checkbox" checked data-dso-type="nebula"> Nebel</label>
         <label><input id="dso-other" type="checkbox" checked data-dso-type="other"> Sonstiges</label>
       </div>
-      <p class="hint-mini">Gitter, Kataloge und DSO-Typen bleiben gespeichert. Live-Zeit nicht.</p>
+      <p class="hint-mini">Gitter, Kataloge und DSO-Typen bleiben gespeichert. Live startet immer an.</p>
     </details>
     <details id="track-pin">
       <summary id="track-pin-sum">Bahn aktiv</summary>
@@ -205,7 +303,7 @@
       </div>
     </details>
     <details id="nina">
-      <summary id="nina-title">NINA / GTi</summary>
+      <summary id="nina-title"><span class="led" aria-hidden="true"></span><span id="nina-title-text">NINA / GTi</span></summary>
       <dl id="nina-dl"></dl>
       <p id="nina-goto-status" style="margin:8px 0 0;white-space:pre-wrap;"></p>
       <label class="debug"><input id="chk-mount-trail" type="checkbox"> Mount-Spur (Debug)</label>
@@ -213,13 +311,88 @@
         <button id="btn-slew-stop" class="stop" type="button" disabled>STOP</button>
         <button id="btn-mount-trail-clear" type="button" disabled>Spur loeschen</button>
       </div>
-      <p class="hint-mini">Status-Polling alle 1&nbsp;s · Timeout 1,5&nbsp;s. Schwaches WLAN (Garten) kann kurz „Offline“ zeigen.</p>
+      <p class="hint-mini">Polling: NINA Advanced API (<code>mount/info</code>) alle 1&nbsp;s · Timeout 1,5&nbsp;s — nicht die Montierung direkt.
+        LED: rot = NINA offline · gelb = NINA ok, Mount nein · grün = NINA + Mount ok.
+        Schwaches WLAN kann kurz „Offline“ zeigen.</p>
     </details>
   </div>
   <div id="info">
     <button id="info-close" type="button">x</button>
     <h3 id="info-title">Objekt</h3>
     <dl id="info-dl"></dl>
+    <div id="info-imaging">
+      <h4>Imaging / Kamera</h4>
+      <p class="img-sum" id="img-sum"></p>
+      <h4>Profile</h4>
+      <ul class="img-list" id="img-profiles"></ul>
+      <details class="img-form" id="img-profile-form-box">
+        <summary>Profil anlegen / bearbeiten</summary>
+        <form id="img-profile-form" class="img-grid">
+          <input type="hidden" id="img-profile-id" value="">
+          <label class="span2">Label <input id="img-profile-label" required placeholder="z.B. ASI585 60s"></label>
+          <label class="span2">Equipment <input id="img-profile-equipment" placeholder="ZWO ASI585MC Pro"></label>
+          <label>Belichtung [s] <input id="img-profile-exposure" type="number" step="any" min="0"></label>
+          <label>Frames <input id="img-profile-frames" type="number" step="1" min="1" value="1"></label>
+          <label>ISO <input id="img-profile-iso" type="number" step="1" min="0"></label>
+          <label>Gain <input id="img-profile-gain" type="number" step="any"></label>
+          <label>Offset <input id="img-profile-offset" type="number" step="1"></label>
+          <label>Binning <input id="img-profile-binning" value="1x1"></label>
+          <label class="span2">Filter <input id="img-profile-filter"></label>
+          <label class="span2">Notizen <textarea id="img-profile-notes"></textarea></label>
+          <div class="span2 img-actions">
+            <button type="submit">Speichern</button>
+            <button type="button" id="img-profile-reset">Neu</button>
+          </div>
+        </form>
+      </details>
+      <h4>Sessions</h4>
+      <div class="session-pick-row">
+        <select id="img-session-pick" title="Geplante Session wählen">
+          <option value="">(keine Session)</option>
+        </select>
+        <button type="button" id="img-session-new" class="img-icon-btn" title="Neue Session anlegen">＋</button>
+      </div>
+      <div id="img-session-detail" class="empty">Keine Session ausgewählt.</div>
+      <details class="img-form" id="img-session-form-box">
+        <summary id="img-session-form-sum">Session anlegen / bearbeiten</summary>
+        <form id="img-session-form" class="img-grid">
+          <input type="hidden" id="img-session-edit-id" value="">
+          <label class="span2">Profil
+            <select id="img-session-profile"></select>
+          </label>
+          <label>Frames geplant <input id="img-session-planned" type="number" step="1" min="0"></label>
+          <label>Frames fertig <input id="img-session-completed" type="number" step="1" min="0" value="0"></label>
+          <label>Belichtung [s] <input id="img-session-exposure" type="number" step="any" min="0"></label>
+          <label>Gain <input id="img-session-gain" type="number" step="any"></label>
+          <label>ISO <input id="img-session-iso" type="number" step="1" min="0"></label>
+          <label>Offset <input id="img-session-offset" type="number" step="1"></label>
+          <label>Binning <input id="img-session-binning" value="1x1"></label>
+          <label>Filter <input id="img-session-filter"></label>
+          <label class="span2">Equipment <input id="img-session-equipment"></label>
+          <label>Archiv
+            <select id="img-session-archive">
+              <option value="local">nur lokal</option>
+              <option value="pending">Archiv ausstehend</option>
+              <option value="archived">NAS</option>
+              <option value="missing">fehlt</option>
+            </select>
+          </label>
+          <label class="span2">Lokalpfad <input id="img-session-local" placeholder="C:\Astro\Capture\Mele\…\s00042"></label>
+          <label class="span2">Archivpfad <input id="img-session-archive-path" placeholder="\\NAS\Astro\…"></label>
+          <label class="span2">Notizen <textarea id="img-session-notes"></textarea></label>
+          <div class="span2 img-actions">
+            <button type="submit" id="img-session-save">Session speichern</button>
+            <button type="button" id="img-session-cancel-edit" style="display:none;">Abbrechen</button>
+          </div>
+        </form>
+      </details>
+      <p class="img-status" id="img-status"></p>
+      <p class="hint-mini" style="margin:6px 0 0;font-size:11px;opacity:.75;">
+        Session wählen → Detail + Aktionen (✎ ▶ 🗑).
+        <strong>＋</strong> neben der Liste = neue Session (Formular leer + Profil).
+        Offenes Formular folgt der Auswahl beim Browse (außer nach ＋).
+      </p>
+    </div>
     <label><input id="chk-track" type="checkbox"> Bahn an diesem Tag</label>
     <label><input id="chk-hours" type="checkbox"> Stunden</label>
     <p id="info-legend">
@@ -291,7 +464,7 @@
     function currentWhen() {
       return whenEl.value ? new Date(whenEl.value) : new Date();
     }
-    whenEl.value = toLocalInput(photoWhen ? new Date(photoWhen) : new Date());
+    whenEl.value = toLocalInput(new Date());
     if (!photoWhen) document.getElementById("btn-photo").disabled = true;
 
     document.querySelectorAll("#bar button").forEach((btn) => {
@@ -1176,6 +1349,858 @@
       return "Objekt";
     }
 
+    let imagingCatalogKey = null;
+    let imagingDisplayName = "";
+    let imagingSuggestedLocal = "";
+    let imagingSuggestedArchive = "";
+    let imagingLoadToken = 0;
+    let imagingProfilesCache = [];
+    let imagingSessionsCache = [];
+    let imagingSelectedSessionId = null;
+    let imagingCapturingSessionId = null;
+    /** null | "capture" | "preview" — Sanduhr neben ▶ */
+    let imagingBusyPhase = null;
+    let imagingSessionEditing = false;
+    let imagingSessionCreating = false;
+
+    /** Stabiler Soft-Key fuer Profile/Sessions — DSO, Sterne, Gestirne. */
+    function imagingKey(item) {
+      if (!item) return null;
+      if (item.kind === "messier" || item.kind === "ngc") {
+        return item.id ? String(item.id) : null;
+      }
+      if (item.kind === "star") {
+        if (item.hip != null && item.hip !== "") return `HIP${item.hip}`;
+        if (item.name) return `STAR:${String(item.name).trim()}`;
+        if (item.ra != null && item.dec != null) {
+          return `STAR:${Number(item.ra).toFixed(4)}_${Number(item.dec).toFixed(4)}`;
+        }
+        return null;
+      }
+      if (item.kind === "planet" || item.kind === "moon" || item.kind === "sun") {
+        const name = item.name || item.id || item.kind;
+        return `${item.kind}:${name}`;
+      }
+      if (item.id) return String(item.id);
+      if (item.hip != null && item.hip !== "") return `HIP${item.hip}`;
+      return null;
+    }
+
+    function isImagingCatalogItem(item) {
+      return !!imagingKey(item);
+    }
+
+    function clearImagingPanel() {
+      imagingCatalogKey = null;
+      imagingDisplayName = "";
+      imagingSuggestedLocal = "";
+      imagingSuggestedArchive = "";
+      const box = document.getElementById("info-imaging");
+      box.style.display = "none";
+      document.getElementById("img-sum").textContent = "";
+      document.getElementById("img-profiles").innerHTML = "";
+      document.getElementById("img-status").textContent = "";
+      resetProfileForm();
+      imagingSessionsCache = [];
+      imagingSelectedSessionId = null;
+      imagingCapturingSessionId = null;
+      document.getElementById("img-session-pick").innerHTML =
+        '<option value="">(keine Session)</option>';
+      document.getElementById("img-session-detail").className = "empty";
+      document.getElementById("img-session-detail").textContent = "Keine Session ausgewählt.";
+      resetSessionForm();
+    }
+
+    function formatIntegration(seconds) {
+      const total = Math.max(0, Math.round(Number(seconds) || 0));
+      if (total <= 0) return "0m";
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+
+    function formatSessionDate(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+      return d.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" });
+    }
+
+    function archiveLabel(status) {
+      if (status === "archived") return "NAS";
+      if (status === "pending") return "Archiv ausstehend";
+      if (status === "missing") return "fehlt";
+      return "nur lokal";
+    }
+
+    function resetProfileForm() {
+      document.getElementById("img-profile-id").value = "";
+      document.getElementById("img-profile-label").value = "";
+      document.getElementById("img-profile-equipment").value = "";
+      document.getElementById("img-profile-exposure").value = "";
+      document.getElementById("img-profile-frames").value = "1";
+      document.getElementById("img-profile-iso").value = "";
+      document.getElementById("img-profile-gain").value = "";
+      document.getElementById("img-profile-offset").value = "";
+      document.getElementById("img-profile-binning").value = "1x1";
+      document.getElementById("img-profile-filter").value = "";
+      document.getElementById("img-profile-notes").value = "";
+    }
+
+    function fillProfileForm(profile) {
+      document.getElementById("img-profile-id").value = profile.id || "";
+      document.getElementById("img-profile-label").value = profile.label || "";
+      document.getElementById("img-profile-equipment").value = profile.equipment || "";
+      document.getElementById("img-profile-exposure").value =
+        profile.exposure_s != null ? profile.exposure_s : "";
+      document.getElementById("img-profile-frames").value = profile.frames || 1;
+      document.getElementById("img-profile-iso").value = profile.iso != null ? profile.iso : "";
+      document.getElementById("img-profile-gain").value = profile.gain != null ? profile.gain : "";
+      document.getElementById("img-profile-offset").value =
+        profile.offset_adu != null ? profile.offset_adu : "";
+      document.getElementById("img-profile-binning").value = profile.binning || "1x1";
+      document.getElementById("img-profile-filter").value = profile.filter_name || "";
+      document.getElementById("img-profile-notes").value = profile.notes || "";
+      document.getElementById("img-profile-form-box").open = true;
+    }
+
+    function optionalNumber(id) {
+      const raw = document.getElementById(id).value.trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function applyProfileToSessionForm(profile) {
+      if (!profile) return;
+      document.getElementById("img-session-planned").value =
+        profile.frames != null ? profile.frames : "";
+      document.getElementById("img-session-exposure").value =
+        profile.exposure_s != null ? profile.exposure_s : "";
+      document.getElementById("img-session-gain").value =
+        profile.gain != null ? profile.gain : "";
+      document.getElementById("img-session-iso").value =
+        profile.iso != null ? profile.iso : "";
+      document.getElementById("img-session-offset").value =
+        profile.offset_adu != null ? profile.offset_adu : "";
+      document.getElementById("img-session-binning").value = profile.binning || "1x1";
+      document.getElementById("img-session-filter").value = profile.filter_name || "";
+      document.getElementById("img-session-equipment").value = profile.equipment || "";
+    }
+
+    /** Profil → Session-Felder. force=true bei Profilwechsel; sonst nur wenn Belichtung leer. */
+    function syncSessionFormFromSelectedProfile(force = false) {
+      const id = document.getElementById("img-session-profile").value.trim();
+      if (!id) return;
+      const profile = imagingProfilesCache.find((p) => String(p.id) === id);
+      if (!profile) return;
+      const expEmpty = !document.getElementById("img-session-exposure").value.trim();
+      if (force || expEmpty) applyProfileToSessionForm(profile);
+    }
+
+    function setSessionFormReadonly(readonly) {
+      const ids = [
+        "img-session-profile", "img-session-planned", "img-session-completed",
+        "img-session-exposure", "img-session-gain", "img-session-iso",
+        "img-session-offset", "img-session-binning", "img-session-filter",
+        "img-session-equipment", "img-session-archive", "img-session-local",
+        "img-session-archive-path", "img-session-notes",
+      ];
+      ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = readonly;
+      });
+    }
+
+    function resetSessionForm() {
+      imagingSessionEditing = false;
+      imagingSessionCreating = false;
+      document.getElementById("img-session-edit-id").value = "";
+      document.getElementById("img-session-form-sum").textContent = "Session anlegen / bearbeiten";
+      document.getElementById("img-session-save").textContent = "Session speichern";
+      document.getElementById("img-session-cancel-edit").style.display = "none";
+      setSessionFormReadonly(false);
+      document.getElementById("img-session-planned").value = "";
+      document.getElementById("img-session-completed").value = "0";
+      document.getElementById("img-session-exposure").value = "";
+      document.getElementById("img-session-gain").value = "";
+      document.getElementById("img-session-iso").value = "";
+      document.getElementById("img-session-offset").value = "";
+      document.getElementById("img-session-binning").value = "1x1";
+      document.getElementById("img-session-filter").value = "";
+      document.getElementById("img-session-equipment").value = "";
+      document.getElementById("img-session-notes").value = "";
+      document.getElementById("img-session-archive").value = "local";
+      document.getElementById("img-session-local").value = imagingSuggestedLocal || "";
+      document.getElementById("img-session-archive-path").value = "";
+      syncSessionFormFromSelectedProfile(true);
+    }
+
+    function startNewSessionForm() {
+      imagingSessionCreating = true;
+      imagingSessionEditing = false;
+      document.getElementById("img-session-edit-id").value = "";
+      document.getElementById("img-session-form-sum").textContent = "Neue Session anlegen";
+      document.getElementById("img-session-save").textContent = "Session speichern";
+      document.getElementById("img-session-cancel-edit").style.display = "";
+      setSessionFormReadonly(false);
+      document.getElementById("img-session-planned").value = "";
+      document.getElementById("img-session-completed").value = "0";
+      document.getElementById("img-session-exposure").value = "";
+      document.getElementById("img-session-gain").value = "";
+      document.getElementById("img-session-iso").value = "";
+      document.getElementById("img-session-offset").value = "";
+      document.getElementById("img-session-binning").value = "1x1";
+      document.getElementById("img-session-filter").value = "";
+      document.getElementById("img-session-equipment").value = "";
+      document.getElementById("img-session-notes").value = "";
+      document.getElementById("img-session-archive").value = "local";
+      document.getElementById("img-session-local").value = imagingSuggestedLocal || "";
+      document.getElementById("img-session-archive-path").value = imagingSuggestedArchive || "";
+      // Einzelnes Profil vorauswählen und Parameter übernehmen
+      const sel = document.getElementById("img-session-profile");
+      if (!sel.value && imagingProfilesCache.length === 1) {
+        sel.value = String(imagingProfilesCache[0].id);
+      }
+      syncSessionFormFromSelectedProfile(true);
+      document.getElementById("img-session-form-box").open = true;
+      document.getElementById("img-status").textContent =
+        "Neue Session: Profil prüfen, ggf. anpassen, dann speichern.";
+    }
+
+    function sessionOptionLabel(s) {
+      const sid = s.id != null ? `s${String(s.id).padStart(5, "0")}` : "?";
+      const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
+      const fr = `${s.frames_completed || 0}/${s.frames_planned != null ? s.frames_planned : "?"}`;
+      return `${sid} · ${formatSessionDate(s.started_utc)} · ${exp} · ${fr} Fr`;
+    }
+
+    function fillSessionEdit(session) {
+      imagingSessionEditing = true;
+      imagingSessionCreating = false;
+      const sid = session.id != null ? `s${String(session.id).padStart(5, "0")}` : "";
+      document.getElementById("img-session-edit-id").value = session.id || "";
+      document.getElementById("img-session-form-sum").textContent = `Session bearbeiten ${sid}`;
+      document.getElementById("img-session-save").textContent = "Änderungen speichern";
+      document.getElementById("img-session-cancel-edit").style.display = "";
+      setSessionFormReadonly(false);
+      if (session.profile_id != null) {
+        document.getElementById("img-session-profile").value = String(session.profile_id);
+      } else {
+        document.getElementById("img-session-profile").value = "";
+      }
+      document.getElementById("img-session-planned").value =
+        session.frames_planned != null ? session.frames_planned : "";
+      document.getElementById("img-session-completed").value = session.frames_completed || 0;
+      document.getElementById("img-session-exposure").value =
+        session.exposure_s != null ? session.exposure_s : "";
+      document.getElementById("img-session-gain").value =
+        session.gain != null ? session.gain : "";
+      document.getElementById("img-session-iso").value =
+        session.iso != null ? session.iso : "";
+      document.getElementById("img-session-offset").value =
+        session.offset_adu != null ? session.offset_adu : "";
+      document.getElementById("img-session-binning").value = session.binning || "1x1";
+      document.getElementById("img-session-filter").value = session.filter_name || "";
+      document.getElementById("img-session-equipment").value = session.equipment || "";
+      document.getElementById("img-session-archive").value = session.archive_status || "local";
+      document.getElementById("img-session-local").value = session.local_path || "";
+      document.getElementById("img-session-archive-path").value = session.archive_path || "";
+      document.getElementById("img-session-notes").value = session.notes || "";
+      document.getElementById("img-session-form-box").open = true;
+    }
+
+    function renderSelectedSessionDetail() {
+      const box = document.getElementById("img-session-detail");
+      const sid = imagingSelectedSessionId;
+      const s = imagingSessionsCache.find((x) => String(x.id) === String(sid));
+      if (!s) {
+        box.className = "empty";
+        box.textContent = "Keine Session ausgewählt.";
+        return;
+      }
+      const frames = s.frames_completed || 0;
+      const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
+      const integ = s.integration_s != null
+        ? formatIntegration(s.integration_s)
+        : formatIntegration((s.exposure_s || 0) * frames);
+      const arch = s.archive_status || "local";
+      const code = s.id != null ? `s${String(s.id).padStart(5, "0")}` : "";
+      const capturing = String(imagingCapturingSessionId) === String(s.id);
+      const busy = capturing && imagingBusyPhase;
+      const done = frames > 0;
+      let capClass = "img-icon-btn capture";
+      if (capturing) capClass += " run";
+      else if (done) capClass += " done";
+
+      box.className = "";
+      box.innerHTML =
+        `<div><strong>${formatSessionDate(s.started_utc)}</strong> <code>${code}</code> ` +
+        `${frames} × ${exp} · ${integ} ` +
+        `<span class="arch-${arch}">✓ ${archiveLabel(arch)}</span></div>` +
+        `<div class="img-meta">${s.local_path || "(kein Lokalpfad)"}` +
+        (s.archive_path ? `<br>${s.archive_path}` : "") +
+        (s.equipment ? `<br>${s.equipment}` : "") +
+        (s.notes ? `<br>${s.notes}` : "") +
+        `</div>`;
+      const actions = document.createElement("div");
+      actions.className = "img-actions";
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "img-icon-btn";
+      editBtn.title = "Bearbeiten";
+      editBtn.textContent = "✎";
+      editBtn.addEventListener("click", () => fillSessionEdit(s));
+      const capBtn = document.createElement("button");
+      capBtn.type = "button";
+      capBtn.className = capClass;
+      const busyTip = imagingBusyPhase === "preview"
+        ? "Warte auf Preview…"
+        : (imagingBusyPhase === "capture" ? "Capture läuft…" : "");
+      capBtn.title = busyTip || (done ? "Erneut capturen" : "NINA Capture");
+      capBtn.textContent = "▶";
+      capBtn.disabled = capturing;
+      capBtn.addEventListener("click", () => captureImagingSession(s));
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "img-icon-btn danger";
+      delBtn.title = "Löschen";
+      delBtn.textContent = "🗑";
+      delBtn.addEventListener("click", () => deleteImagingSession(s.id));
+      actions.appendChild(editBtn);
+      actions.appendChild(capBtn);
+      if (busy) {
+        const glass = document.createElement("span");
+        glass.className = "img-busy-glass";
+        glass.title = busyTip;
+        glass.setAttribute("aria-label", busyTip);
+        glass.textContent = "⏳";
+        actions.appendChild(glass);
+      }
+      actions.appendChild(delBtn);
+      box.appendChild(actions);
+
+      const previewWrap = document.createElement("div");
+      previewWrap.className = "img-preview-wrap";
+      previewWrap.id = "img-session-preview";
+      previewWrap.innerHTML = `<div class="img-preview-empty">Letztes Bild wird geladen…</div>`;
+      box.appendChild(previewWrap);
+      loadSessionPreview(s.id, previewWrap);
+    }
+
+    function formatFitsPreviewMeta(header) {
+      if (!header || typeof header !== "object") return "";
+      const bits = [];
+      const exptime = header.EXPTIME ?? header.EXPOSURE;
+      if (exptime != null && exptime !== "") bits.push(`${exptime}s`);
+      if (header.GAIN != null && header.GAIN !== "") bits.push(`gain ${header.GAIN}`);
+      if (header.ISO != null && header.ISO !== "") bits.push(`ISO ${header.ISO}`);
+      const cam = header.INSTRUME || header.CAMERA || header.TELESCOP;
+      if (cam) bits.push(String(cam));
+      const when = header["DATE-OBS"] || header.DATE;
+      if (when) bits.push(String(when));
+      const naxis1 = header.NAXIS1;
+      const naxis2 = header.NAXIS2;
+      if (naxis1 && naxis2) bits.push(`${naxis1}×${naxis2}`);
+      const bayer = header.BAYERPAT || header.COLORTYP;
+      if (bayer) bits.push(String(bayer));
+      return bits.join(" · ");
+    }
+
+    async function loadSessionPreview(sessionId, wrapEl, opts) {
+      const wrap = wrapEl || document.getElementById("img-session-preview");
+      if (!wrap || !sessionId) return;
+      const force = opts && opts.force;
+      const stretch = (opts && opts.stretch) || "auto";
+      try {
+        let response;
+        if (force) {
+          response = await fetch(`/astro/sessions/${sessionId}/preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ stretch, force: true }),
+          });
+        } else {
+          response = await fetch(`/astro/sessions/${sessionId}/preview`);
+        }
+        const data = await response.json();
+        if (String(imagingSelectedSessionId) !== String(sessionId)) return;
+        if (!response.ok || !data.ok) {
+          wrap.innerHTML =
+            `<div class="img-preview-empty">${data.error || "Kein Preview"}</div>`;
+          return;
+        }
+        const label = document.createElement("div");
+        label.className = "img-preview-label";
+        const title = document.createElement("span");
+        const colorTag = data.color ? " · Farbe" : "";
+        const bayerTag = data.bayer ? ` · ${data.bayer}` : "";
+        title.textContent = `Letztes Bild${colorTag}${bayerTag}`;
+        const stretchBtn = document.createElement("button");
+        stretchBtn.type = "button";
+        stretchBtn.textContent = "Neu stretchen";
+        stretchBtn.title = "Auto-Stretch / Debayer erneut";
+        stretchBtn.addEventListener("click", async () => {
+          stretchBtn.disabled = true;
+          stretchBtn.textContent = "…";
+          await loadSessionPreview(sessionId, wrap, { force: true, stretch: "auto" });
+        });
+        label.appendChild(title);
+        label.appendChild(stretchBtn);
+
+        const stage = document.createElement("div");
+        stage.className = "img-preview-stage";
+        const img = document.createElement("img");
+        img.className = "overview";
+        img.alt = "Session-Preview";
+        img.draggable = false;
+        img.src = data.preview_url || `/astro/sessions/${sessionId}/preview/file`;
+        const roiRect = document.createElement("div");
+        roiRect.className = "img-roi-rect";
+        stage.appendChild(img);
+        stage.appendChild(roiRect);
+
+        const hint = document.createElement("div");
+        hint.className = "img-preview-hint";
+        hint.textContent = "Klick oder Ziehe für Fokus-ROI (volle Auflösung, 2×)";
+
+        const meta = document.createElement("div");
+        meta.className = "img-preview-meta";
+        const fromHeader = formatFitsPreviewMeta(data.header);
+        const sizeBits = [];
+        if (data.width && data.height) sizeBits.push(`${data.width}×${data.height} px`);
+        if (data.source_width && data.source_height) {
+          sizeBits.push(`src ${data.source_width}×${data.source_height}`);
+        }
+        if (data.stretch && data.stretch.mode) sizeBits.push(data.stretch.mode);
+        if (data.stretch && data.stretch.debayer) sizeBits.push(`debayer ${data.stretch.debayer}`);
+        let sourceName = "";
+        if (data.source_path) {
+          const parts = String(data.source_path).replace(/\\/g, "/").split("/");
+          sourceName = parts[parts.length - 1] || "";
+        }
+        meta.textContent = [sourceName, fromHeader, sizeBits.join(" · ")].filter(Boolean).join("\n");
+
+        const focusBox = document.createElement("div");
+        focusBox.className = "img-focus-box";
+        focusBox.style.display = "none";
+
+        wrap.innerHTML = "";
+        wrap.appendChild(label);
+        wrap.appendChild(stage);
+        wrap.appendChild(hint);
+        if (meta.textContent) wrap.appendChild(meta);
+        wrap.appendChild(focusBox);
+
+        wirePreviewRoi(sessionId, img, roiRect, focusBox, data);
+      } catch (err) {
+        if (String(imagingSelectedSessionId) !== String(sessionId)) return;
+        wrap.innerHTML =
+          `<div class="img-preview-empty">${String(err.message || err)}</div>`;
+      }
+    }
+
+    function wirePreviewRoi(sessionId, img, roiRect, focusBox, previewData) {
+      let drag = null;
+      const ROI_SIZE = 512;
+
+      function localPoint(ev) {
+        const rect = img.getBoundingClientRect();
+        return {
+          x: ev.clientX - rect.left,
+          y: ev.clientY - rect.top,
+          dw: rect.width,
+          dh: rect.height,
+        };
+      }
+
+      function showRoiAt(cx, cy, dw, dh) {
+        const pw = previewData.width || img.naturalWidth || 1;
+        const ph = previewData.height || img.naturalHeight || 1;
+        const sw = previewData.source_width || pw;
+        const sh = previewData.source_height || ph;
+        const scale = Math.min(dw / pw, dh / ph);
+        const rw = pw * scale;
+        const rh = ph * scale;
+        const ox = (dw - rw) / 2;
+        const oy = (dh - rh) / 2;
+        const roiDisp = Math.max(16, (ROI_SIZE * scale * pw) / sw);
+        const left = Math.min(Math.max(cx - roiDisp / 2, ox), ox + rw - roiDisp);
+        const top = Math.min(Math.max(cy - roiDisp / 2, oy), oy + rh - roiDisp);
+        roiRect.style.display = "block";
+        roiRect.style.left = `${left}px`;
+        roiRect.style.top = `${top}px`;
+        roiRect.style.width = `${roiDisp}px`;
+        roiRect.style.height = `${roiDisp}px`;
+      }
+
+      async function requestRoi(cx, cy, dw, dh) {
+        focusBox.style.display = "block";
+        focusBox.innerHTML = `<div class="img-preview-empty">⏳ Fokus-ROI…</div>`;
+        document.getElementById("img-status").textContent = "Fokus-ROI wird gerechnet…";
+        try {
+          const response = await fetch(`/astro/sessions/${sessionId}/preview/roi`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              preview_x: cx,
+              preview_y: cy,
+              preview_w: previewData.width || img.naturalWidth,
+              preview_h: previewData.height || img.naturalHeight,
+              display_w: dw,
+              display_h: dh,
+              size: ROI_SIZE,
+              scale: 2,
+              stretch: "auto",
+            }),
+          });
+          const data = await response.json();
+          if (String(imagingSelectedSessionId) !== String(sessionId)) return;
+          if (!response.ok || !data.ok) {
+            focusBox.innerHTML =
+              `<div class="img-preview-empty">${data.error || "ROI fehlgeschlagen"}</div>`;
+            document.getElementById("img-status").textContent =
+              data.error || "ROI fehlgeschlagen";
+            return;
+          }
+          const flabel = document.createElement("div");
+          flabel.className = "img-preview-label";
+          flabel.innerHTML = "<span>Fokus (1:1 · 2×)</span>";
+          const fimg = document.createElement("img");
+          fimg.alt = "Fokus-ROI";
+          fimg.src = data.preview_url;
+          const fmeta = document.createElement("div");
+          fmeta.className = "img-preview-meta";
+          const r = data.roi || {};
+          fmeta.textContent =
+            `${data.width}×${data.height} px` +
+            (r.width ? ` · ROI ${r.width}×${r.height} @ ${r.x},${r.y}` : "") +
+            (data.color ? " · Farbe" : "");
+          focusBox.innerHTML = "";
+          focusBox.appendChild(flabel);
+          focusBox.appendChild(fimg);
+          focusBox.appendChild(fmeta);
+          document.getElementById("img-status").textContent = "Fokus-ROI ok";
+        } catch (err) {
+          focusBox.innerHTML =
+            `<div class="img-preview-empty">${String(err.message || err)}</div>`;
+        }
+      }
+
+      img.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        const p = localPoint(ev);
+        drag = p;
+        showRoiAt(p.x, p.y, p.dw, p.dh);
+        img.setPointerCapture?.(ev.pointerId);
+      });
+      img.addEventListener("pointermove", (ev) => {
+        if (!drag) return;
+        const p = localPoint(ev);
+        showRoiAt(p.x, p.y, p.dw, p.dh);
+      });
+      img.addEventListener("pointerup", async (ev) => {
+        if (!drag) return;
+        const p = localPoint(ev);
+        drag = null;
+        showRoiAt(p.x, p.y, p.dw, p.dh);
+        await requestRoi(p.x, p.y, p.dw, p.dh);
+      });
+      img.addEventListener("pointercancel", () => { drag = null; });
+    }
+
+    function renderImaging(data) {
+      const profiles = data.profiles || [];
+      imagingProfilesCache = profiles;
+      const sessions = data.sessions || [];
+      imagingSuggestedLocal = data.suggested_local_path || "";
+      imagingSuggestedArchive = data.suggested_archive_path || "";
+      const key = imagingCatalogKey || data.catalog_key || "—";
+      const nice = imagingDisplayName || data.display_name || "";
+      const label = nice && nice !== key ? `${nice} (${key})` : key;
+      const sum = document.getElementById("img-sum");
+      sum.textContent =
+        `Objekt: ${label}\n` +
+        `${profiles.length} Profil(e) · ${sessions.length} Session(s)\n` +
+        `Gesamtintegration: ${formatIntegration(data.total_integration_s)}\n` +
+        `Lokal: ${data.local_capture_root || "—"}\n` +
+        `Archiv: ${data.archive_root || "—"}`;
+
+      const profileUl = document.getElementById("img-profiles");
+      profileUl.innerHTML = "";
+      if (!profiles.length) {
+        const empty = document.createElement("li");
+        empty.textContent = "Noch keine Profile.";
+        profileUl.appendChild(empty);
+      }
+      profiles.forEach((p) => {
+        const li = document.createElement("li");
+        const bits = [];
+        if (p.exposure_s != null) bits.push(`${p.exposure_s}s`);
+        if (p.frames) bits.push(`${p.frames}×`);
+        if (p.iso != null) bits.push(`ISO ${p.iso}`);
+        if (p.gain != null) bits.push(`gain ${p.gain}`);
+        if (p.filter_name) bits.push(p.filter_name);
+        if (p.equipment) bits.push(p.equipment);
+        li.innerHTML = `<strong>${p.label || "Profil"}</strong>` +
+          `<div class="img-meta">${bits.join(" · ") || "—"}</div>`;
+        const actions = document.createElement("div");
+        actions.className = "img-actions";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.textContent = "Bearbeiten";
+        editBtn.addEventListener("click", () => fillProfileForm(p));
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "danger";
+        delBtn.textContent = "Löschen";
+        delBtn.addEventListener("click", () => deleteImagingProfile(p.id));
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        li.appendChild(actions);
+        profileUl.appendChild(li);
+      });
+
+      const sel = document.getElementById("img-session-profile");
+      const prev = sel.value;
+      sel.innerHTML = "";
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "(Profil wählen — Parameter werden übernommen)";
+      sel.appendChild(none);
+      profiles.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = String(p.id);
+        opt.textContent = p.label || `Profil ${p.id}`;
+        sel.appendChild(opt);
+      });
+      if (prev && [...sel.options].some((o) => o.value === prev)) {
+        sel.value = prev;
+      } else if (profiles.length === 1) {
+        sel.value = String(profiles[0].id);
+      }
+      if (!imagingSessionEditing) syncSessionFormFromSelectedProfile(false);
+
+      imagingSessionsCache = sessions;
+      const pick = document.getElementById("img-session-pick");
+      const prevSession = imagingSelectedSessionId != null
+        ? String(imagingSelectedSessionId)
+        : pick.value;
+      pick.innerHTML = "";
+      const noneS = document.createElement("option");
+      noneS.value = "";
+      noneS.textContent = sessions.length ? "(Session wählen)" : "(keine Sessions)";
+      pick.appendChild(noneS);
+      sessions.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = String(s.id);
+        opt.textContent = sessionOptionLabel(s);
+        pick.appendChild(opt);
+      });
+      if (prevSession && [...pick.options].some((o) => o.value === prevSession)) {
+        pick.value = prevSession;
+        imagingSelectedSessionId = Number(prevSession);
+      } else if (sessions.length) {
+        pick.value = String(sessions[0].id);
+        imagingSelectedSessionId = sessions[0].id;
+      } else {
+        pick.value = "";
+        imagingSelectedSessionId = null;
+      }
+      renderSelectedSessionDetail();
+
+      if (!imagingSessionEditing) {
+        if (!document.getElementById("img-session-local").value && imagingSuggestedLocal) {
+          document.getElementById("img-session-local").value = imagingSuggestedLocal;
+        }
+        if (!document.getElementById("img-session-archive-path").value && imagingSuggestedArchive) {
+          document.getElementById("img-session-archive-path").placeholder = imagingSuggestedArchive;
+        }
+      }
+    }
+
+    async function loadImaging(catalogKey, displayName) {
+      const token = ++imagingLoadToken;
+      imagingCatalogKey = catalogKey;
+      imagingDisplayName = displayName || "";
+      const box = document.getElementById("info-imaging");
+      box.style.display = "block";
+      document.getElementById("img-status").textContent = "Lade Imaging-Daten…";
+      try {
+        const qs = imagingDisplayName
+          ? `?name=${encodeURIComponent(imagingDisplayName)}`
+          : "";
+        const response = await fetch(`/astro/object/${encodeURIComponent(catalogKey)}${qs}`);
+        const data = await response.json();
+        if (token !== imagingLoadToken) return;
+        if (!response.ok || data.error) {
+          document.getElementById("img-status").textContent =
+            data.error || `Fehler ${response.status}`;
+          return;
+        }
+        renderImaging(data);
+        document.getElementById("img-status").textContent = "";
+      } catch (err) {
+        if (token !== imagingLoadToken) return;
+        document.getElementById("img-status").textContent =
+          `Imaging nicht erreichbar: ${err.message || err}`;
+      }
+    }
+
+    async function refreshImaging() {
+      if (imagingCatalogKey) await loadImaging(imagingCatalogKey, imagingDisplayName);
+    }
+
+    async function deleteImagingProfile(profileId) {
+      if (!window.confirm("Profil löschen?")) return;
+      document.getElementById("img-status").textContent = "Lösche Profil…";
+      try {
+        const response = await fetch(`/astro/profiles/${profileId}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          document.getElementById("img-status").textContent = data.error || "Löschen fehlgeschlagen";
+          return;
+        }
+        resetProfileForm();
+        await refreshImaging();
+      } catch (err) {
+        document.getElementById("img-status").textContent = String(err.message || err);
+      }
+    }
+
+    async function deleteImagingSession(sessionId) {
+      if (!window.confirm("Session löschen?")) return;
+      document.getElementById("img-status").textContent = "Lösche Session…";
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          document.getElementById("img-status").textContent = data.error || "Löschen fehlgeschlagen";
+          return;
+        }
+        if (String(imagingSelectedSessionId) === String(sessionId)) {
+          imagingSelectedSessionId = null;
+        }
+        await refreshImaging();
+      } catch (err) {
+        document.getElementById("img-status").textContent = String(err.message || err);
+      }
+    }
+
+    async function captureImagingSession(session) {
+      if (!imagingCatalogKey || !session || !session.id) return;
+      if (imagingCapturingSessionId) return;
+      imagingCapturingSessionId = session.id;
+      imagingBusyPhase = "capture";
+      imagingSelectedSessionId = session.id;
+      renderSelectedSessionDetail();
+      document.getElementById("img-status").textContent =
+        "NINA Capture läuft… (Sanduhr = wartet auf Frame + Preview)";
+      try {
+        const response = await fetch("/astro/nina/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            catalog_key: imagingCatalogKey,
+            display_name: imagingDisplayName || "",
+            session_id: session.id,
+            profile_id: session.profile_id,
+            exposure_s: session.exposure_s,
+            gain: session.gain,
+            local_path: session.local_path || imagingSuggestedLocal,
+            archive_path: session.archive_path || imagingSuggestedArchive,
+            frames: 1,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          document.getElementById("img-status").textContent =
+            data.error || data.capture?.error || "Capture fehlgeschlagen";
+          return;
+        }
+        const n = data.session?.frames_completed;
+        const folder = data.session_folder || "";
+        let status =
+          `Capture → ${imagingDisplayName || imagingCatalogKey}` +
+          (folder ? ` [${folder}]` : "") +
+          (n != null ? ` (${n} Frame(s))` : "");
+        if (data.preview && data.preview.ok) {
+          status += " · Preview ok";
+        } else if (data.preview_error) {
+          status += ` · Preview: ${data.preview_error}`;
+        }
+        document.getElementById("img-status").textContent = status;
+        imagingBusyPhase = "preview";
+        await refreshImaging();
+        renderSelectedSessionDetail();
+        // Nach Capture auf FITS/Preview warten (neuestes FITS nach mtime)
+        await waitForSessionPreview(session.id, {
+          attempts: data.preview && data.preview.ok ? 2 : 16,
+          delayMs: 2000,
+        });
+      } catch (err) {
+        document.getElementById("img-status").textContent = String(err.message || err);
+      } finally {
+        imagingCapturingSessionId = null;
+        imagingBusyPhase = null;
+        renderSelectedSessionDetail();
+      }
+    }
+
+    function sleepMs(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function waitForSessionPreview(sessionId, opts) {
+      const attempts = (opts && opts.attempts) || 8;
+      const delayMs = (opts && opts.delayMs) || 2000;
+      imagingBusyPhase = "preview";
+      if (String(imagingCapturingSessionId) === String(sessionId)) {
+        renderSelectedSessionDetail();
+      }
+      for (let i = 0; i < attempts; i++) {
+        if (String(imagingSelectedSessionId) !== String(sessionId)) return;
+        const wrap = document.getElementById("img-session-preview");
+        if (!wrap) {
+          await sleepMs(delayMs);
+          continue;
+        }
+        wrap.innerHTML =
+          `<div class="img-preview-empty">⏳ Warte auf neuestes FITS / Preview… (${i + 1}/${attempts})</div>`;
+        document.getElementById("img-status").textContent =
+          `Preview: neuestes FITS im Session-Ordner… (${i + 1}/${attempts})`;
+        try {
+          const response = await fetch(`/astro/sessions/${sessionId}/preview`);
+          const data = await response.json();
+          if (response.ok && data.ok && data.preview_url) {
+            await loadSessionPreview(sessionId, wrap);
+            const name = data.source_path
+              ? String(data.source_path).replace(/\\/g, "/").split("/").pop()
+              : "";
+            document.getElementById("img-status").textContent =
+              name ? `Preview ok ← ${name}` : "Preview ok";
+            return;
+          }
+          if (data.error && !String(data.error).includes("Kein FITS")) {
+            wrap.innerHTML = `<div class="img-preview-empty">${data.error}</div>`;
+            document.getElementById("img-status").textContent = `Preview: ${data.error}`;
+            return;
+          }
+        } catch (err) {
+          wrap.innerHTML = `<div class="img-preview-empty">${String(err.message || err)}</div>`;
+          document.getElementById("img-status").textContent = String(err.message || err);
+          return;
+        }
+        if (i + 1 < attempts) await sleepMs(delayMs);
+      }
+      const wrap = document.getElementById("img-session-preview");
+      if (wrap && String(imagingSelectedSessionId) === String(sessionId)) {
+        wrap.innerHTML =
+          `<div class="img-preview-empty">Kein FITS im Session-Ordner — in NINA prüfen, ob gespeichert wurde.</div>`;
+      }
+    }
+
     function showInfo(item) {
       selected = item;
       infoOpen = true;
@@ -1211,6 +2236,12 @@
       hideGotoConfirm();
       syncGotoButton();
       updateTrackPin();
+      if (isImagingCatalogItem(item)) {
+        const display = (item.name && String(item.name).trim()) || "";
+        loadImaging(imagingKey(item), display);
+      } else {
+        clearImagingPanel();
+      }
       if (document.getElementById("chk-track").checked) {
         loadTrack();
       } else {
@@ -1233,6 +2264,7 @@
         document.getElementById("info-windows").textContent = "";
         document.getElementById("info-legend").style.display = "none";
         clearTrack();
+        clearImagingPanel();
       }
       updateTrackPin();
     }
@@ -1260,6 +2292,7 @@
       document.getElementById("info-windows").textContent = "";
       document.getElementById("info-legend").style.display = "none";
       clearTrack();
+      clearImagingPanel();
       updateTrackPin();
       syncGotoButton();
     }
@@ -2093,6 +3126,7 @@
     });
     document.getElementById("chk-live").addEventListener("change", (event) => {
       clearInterval(liveTimer);
+      liveTimer = 0;
       if (event.target.checked) {
         whenEl.value = toLocalInput(new Date());
         loadSky();
@@ -2102,6 +3136,16 @@
         }, 15000);
       }
     });
+
+    function startLivePolling() {
+      const chk = document.getElementById("chk-live");
+      chk.checked = true;
+      clearInterval(liveTimer);
+      liveTimer = setInterval(() => {
+        whenEl.value = toLocalInput(new Date());
+        loadSky();
+      }, 15000);
+    }
     const magEl = document.getElementById("mag");
     const magVal = document.getElementById("mag-val");
     function syncMagLabel() {
@@ -2125,6 +3169,150 @@
       persistPrefs();
     });
     document.getElementById("info-close").addEventListener("click", hideInfo);
+    document.getElementById("img-profile-reset").addEventListener("click", resetProfileForm);
+    document.getElementById("img-profile-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!imagingCatalogKey) return;
+      const body = {
+        catalog_key: imagingCatalogKey,
+        label: document.getElementById("img-profile-label").value.trim(),
+        equipment: document.getElementById("img-profile-equipment").value.trim(),
+        exposure_s: optionalNumber("img-profile-exposure"),
+        frames: optionalNumber("img-profile-frames") || 1,
+        iso: optionalNumber("img-profile-iso"),
+        gain: optionalNumber("img-profile-gain"),
+        offset_adu: optionalNumber("img-profile-offset"),
+        binning: document.getElementById("img-profile-binning").value.trim() || "1x1",
+        filter_name: document.getElementById("img-profile-filter").value.trim(),
+        notes: document.getElementById("img-profile-notes").value.trim(),
+      };
+      const pid = document.getElementById("img-profile-id").value.trim();
+      if (pid) body.id = Number(pid);
+      document.getElementById("img-status").textContent = "Speichere Profil…";
+      try {
+        const response = await fetch("/astro/profiles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          document.getElementById("img-status").textContent = data.error || "Speichern fehlgeschlagen";
+          return;
+        }
+        resetProfileForm();
+        document.getElementById("img-profile-form-box").open = false;
+        await refreshImaging();
+      } catch (err) {
+        document.getElementById("img-status").textContent = String(err.message || err);
+      }
+    });
+    document.getElementById("img-session-profile").addEventListener("change", () => {
+      syncSessionFormFromSelectedProfile(true);
+    });
+    document.getElementById("img-session-pick").addEventListener("change", () => {
+      const v = document.getElementById("img-session-pick").value.trim();
+      imagingSelectedSessionId = v ? Number(v) : null;
+      renderSelectedSessionDetail();
+      // Browse: Formular nur nachziehen, wenn nicht gerade „Neue Session“
+      const formOpen = document.getElementById("img-session-form-box").open;
+      if (formOpen && !imagingSessionCreating && imagingSelectedSessionId != null) {
+        const s = imagingSessionsCache.find(
+          (x) => String(x.id) === String(imagingSelectedSessionId),
+        );
+        if (s) fillSessionEdit(s);
+      } else if (formOpen && !imagingSessionCreating && imagingSelectedSessionId == null) {
+        resetSessionForm();
+      }
+    });
+    document.getElementById("img-session-new").addEventListener("click", () => {
+      startNewSessionForm();
+    });
+    document.getElementById("img-session-form-box").addEventListener("toggle", () => {
+      const box = document.getElementById("img-session-form-box");
+      if (!box.open) return;
+      if (imagingSessionCreating) return;
+      if (imagingSelectedSessionId != null) {
+        const s = imagingSessionsCache.find(
+          (x) => String(x.id) === String(imagingSelectedSessionId),
+        );
+        if (s) {
+          fillSessionEdit(s);
+          return;
+        }
+      }
+      if (!imagingSessionEditing) syncSessionFormFromSelectedProfile(false);
+    });
+    document.getElementById("img-session-cancel-edit").addEventListener("click", () => {
+      resetSessionForm();
+      document.getElementById("img-session-form-box").open = false;
+    });
+    document.getElementById("img-session-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!imagingCatalogKey) return;
+      const editId = document.getElementById("img-session-edit-id").value.trim();
+      const profileRaw = document.getElementById("img-session-profile").value.trim();
+      if (!editId && !profileRaw) {
+        document.getElementById("img-status").textContent = "Bitte zuerst ein Profil wählen.";
+        return;
+      }
+      if (!editId && profileRaw) {
+        const profile = imagingProfilesCache.find((p) => String(p.id) === profileRaw);
+        if (profile && optionalNumber("img-session-exposure") == null) {
+          applyProfileToSessionForm(profile);
+        }
+      }
+      if (optionalNumber("img-session-exposure") == null) {
+        document.getElementById("img-status").textContent =
+          "Belichtung fehlt — bitte Profil wählen oder Wert eintragen.";
+        return;
+      }
+      const body = {
+        catalog_key: imagingCatalogKey,
+        display_name: imagingDisplayName || "",
+        profile_id: profileRaw ? Number(profileRaw) : null,
+        frames_planned: optionalNumber("img-session-planned"),
+        frames_completed: optionalNumber("img-session-completed") || 0,
+        exposure_s: optionalNumber("img-session-exposure"),
+        gain: optionalNumber("img-session-gain"),
+        iso: optionalNumber("img-session-iso"),
+        offset_adu: optionalNumber("img-session-offset"),
+        binning: document.getElementById("img-session-binning").value.trim(),
+        filter_name: document.getElementById("img-session-filter").value.trim(),
+        equipment: document.getElementById("img-session-equipment").value.trim(),
+        local_path: document.getElementById("img-session-local").value.trim(),
+        archive_path: document.getElementById("img-session-archive-path").value.trim(),
+        archive_status: document.getElementById("img-session-archive").value || "local",
+        notes: document.getElementById("img-session-notes").value.trim(),
+      };
+      document.getElementById("img-status").textContent = editId
+        ? "Aktualisiere Session…"
+        : "Speichere Session…";
+      try {
+        const response = await fetch(
+          editId ? `/astro/sessions/${editId}` : "/astro/sessions",
+          {
+            method: editId ? "PUT" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          document.getElementById("img-status").textContent = data.error || "Speichern fehlgeschlagen";
+          return;
+        }
+        if (data.session?.id != null) {
+          imagingSelectedSessionId = data.session.id;
+        }
+        imagingSessionCreating = false;
+        document.getElementById("img-session-form-box").open = false;
+        resetSessionForm();
+        await refreshImaging();
+      } catch (err) {
+        document.getElementById("img-status").textContent = String(err.message || err);
+      }
+    });
     document.getElementById("chk-track").addEventListener("change", (event) => {
       if (event.target.checked) loadTrack();
       else {
@@ -2821,24 +4009,34 @@
     function renderNinaStatus(data) {
       lastNinaStatus = data;
       const title = document.getElementById("nina-title");
+      const titleText = document.getElementById("nina-title-text");
       const dl = document.getElementById("nina-dl");
       dl.innerHTML = "";
       const rows = [];
       if (!data || !data.api_online) {
         title.className = "bad";
-        title.textContent = "NINA: Offline";
+        titleText.textContent = "NINA API offline";
+        title.title = "NINA Advanced API nicht erreichbar (REST). Montierung wird nicht abgefragt.";
+        rows.push(["NINA", "offline (REST)"]);
+        rows.push(["Mount", "unbekannt"]);
         if (data && data.error) rows.push(["Info", data.error]);
         if (mountTrailEnabled()) redrawMountMarkers(null);
         else clearMountMarker();
       } else if (!data.mount || !data.mount.connected) {
         title.className = "warn";
-        title.textContent = "NINA / GTi: Disconnected";
+        titleText.textContent = "NINA ok · Mount nein";
+        title.title = "NINA laeuft, meldet aber Mount disconnected (kein ASCOM/WLAN zur Montierung).";
+        rows.push(["NINA", "online"]);
+        rows.push(["Mount", "disconnected"]);
         if (mountTrailEnabled()) redrawMountMarkers(null);
         else clearMountMarker();
       } else {
         const mount = data.mount;
         title.className = "ok";
-        title.textContent = "NINA / GTi: Connected";
+        titleText.textContent = "NINA + Mount online";
+        title.title = "NINA Advanced API erreichbar und Mount Connected=true.";
+        rows.push(["NINA", "online"]);
+        rows.push(["Mount", "connected"]);
         const ra = mount.right_ascension_string || fmtMountRa(mount.right_ascension_hours);
         const dec = mount.declination_string || fmtMountDec(mount.declination_deg);
         rows.push(["RA", ra || "—"]);
@@ -2999,7 +4197,12 @@
 
     applyLook();
     load(urls[tex] ? tex : (urls.preview ? "preview" : "original"));
-    restorePrefs().then(restoreSite).then(loadSky).then(loadHorizonControls).then(() => {
+    restorePrefs().then(restoreSite).then(() => {
+      whenEl.value = toLocalInput(new Date());
+      document.getElementById("chk-live").checked = true;
+      return loadSky();
+    }).then(loadHorizonControls).then(() => {
+      startLivePolling();
       startNinaPolling();
       startWifiPolling();
     });

@@ -159,6 +159,33 @@ def format_dec(dec_deg: float) -> str:
     return f"{sign}{d:02d}° {m:02d}' {s:04.1f}\""
 
 
+def format_latitude(lat_deg: float) -> str:
+    """Geographische Breite als Grad/Minuten/Sekunden mit N/S."""
+    hemi = "N" if lat_deg >= 0 else "S"
+    return f"{_format_dms_abs(lat_deg)} {hemi}"
+
+
+def format_longitude(lon_deg: float) -> str:
+    """Geographische Laenge als Grad/Minuten/Sekunden mit E/W."""
+    hemi = "E" if lon_deg >= 0 else "W"
+    return f"{_format_dms_abs(lon_deg)} {hemi}"
+
+
+def _format_dms_abs(deg: float) -> str:
+    value = abs(float(deg))
+    d = int(value)
+    minutes = (value - d) * 60.0
+    m = int(minutes)
+    s = (minutes - m) * 60.0
+    if s >= 59.95:
+        s = 0.0
+        m += 1
+    if m >= 60:
+        m = 0
+        d += 1
+    return f"{d:02d}° {m:02d}' {s:04.1f}\""
+
+
 def format_angle(deg: float) -> str:
     sign = "-" if deg < 0 else ""
     value = abs(deg)

@@ -9,13 +9,21 @@ preview_width: 2000
 # Beobachterstandort fuer RA/Dec (Ost positiv). Osmo-GPS ist ungueltig.
 # Handyfoto mit Ortung nach media/GPS-locations legen, in der UI waehlen.
 # Zeitzone fuer naive EXIF-Aufnahmezeit (sonst lokale PC-Zeit).
-latitude_deg:
-longitude_deg:
+latitude_deg: 48.254750
 elevation_m: 250
 timezone: Europe/Vienna
 catalog_dir: data/catalogs
-# NINA Advanced API (READ ONLY in Phase 1). Default lokal auf dem MeLE-PC.
+# Imaging-Profile/Sessions (getrennt von sky.sqlite)
+astro_manager_db: data/catalogs/astro_manager.sqlite
+# Aufnahme lokal: C:\Astro\Capture\Mele\… (neben anderen Capture-Ordnern); Archiv spaeter NAS
+local_capture_root: C:/Astro/Capture/Mele
+archive_root: //NAS/Astro/Capture/Mele
+# NINA Advanced API (REST). Default lokal auf dem MeLE-PC.
 nina_base_url: http://localhost:1888/v2/api
+# NINA Desktop-App (normal installiert).
+nina_exe: C:/Program Files/N.I.N.A. - Nighttime Imaging 'N' Astronomy/NINA.exe
+# SynScan Pro (Skywatcher-Montierung). Verzeichnis oder Pfad zur .exe.
+synscan_pro_exe: C:/Astro/SW/synscanpro_windows_2611/SynScanPro/SynScanPro.exe
 # GeoSphere-Forecast-Journal (stündlich via Task Scheduler / CLI).
 weather_journal_enabled: true
 weather_journal_interval_h: 1
@@ -24,3 +32,4 @@ local_weather:
   enabled: false
   provider: ecowitt
   label: Garten
+longitude_deg: 14.366140

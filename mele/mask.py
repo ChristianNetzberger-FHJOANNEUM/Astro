@@ -168,8 +168,14 @@ def mask_tint_data_uri(mask: np.ndarray, height: int | None = None) -> str:
 
 
 def crop_sky_preview(full_preview: Path, dest: Path) -> tuple[Path, int, int]:
-    image = Image.open(full_preview).convert("RGB")
+    with Image.open(full_preview) as raw:
+        raw.load()  # Truncated-JPEG hier failen lassen, nicht erst beim Crop
+        image = raw.convert("RGB")
     width, height = image.size
     sky_h = max(1, height // 2)
-    image.crop((0, 0, width, sky_h)).save(dest, quality=85)
+    cropped = image.crop((0, 0, width, sky_h))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    cropped.save(tmp, format="JPEG", quality=85)
+    tmp.replace(dest)
     return dest, width, sky_h

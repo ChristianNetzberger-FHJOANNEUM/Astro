@@ -20,8 +20,10 @@ def test_upsert_and_active(tmp_path: Path) -> None:
         latitude_deg=48.254175,
         longitude_deg=14.366140,
         elevation_m=250,
+        pano_stem="garten360",
     )
     assert garten.id == "garten"
+    assert garten.pano_stem == "garten360"
     mobile = upsert_location(
         tmp_path,
         label="Sternwarte West",
@@ -34,7 +36,20 @@ def test_upsert_and_active(tmp_path: Path) -> None:
     assert active is not None
     assert active.id == "sternwarte-west"
     set_active_location(tmp_path, "garten")
-    assert get_active_location(tmp_path).id == "garten"
+    again = get_active_location(tmp_path)
+    assert again is not None
+    assert again.id == "garten"
+    assert again.pano_stem == "garten360"
+    # Stem beibehalten, wenn nicht uebergeben
+    upsert_location(
+        tmp_path,
+        label="Garten",
+        latitude_deg=48.254175,
+        longitude_deg=14.366140,
+        elevation_m=250,
+        make_active=True,
+    )
+    assert get_active_location(tmp_path).pano_stem == "garten360"
     assert len(list_locations(tmp_path)) == 2
 
 

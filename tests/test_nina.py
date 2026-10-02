@@ -191,3 +191,111 @@ def test_parse_command_mount_not_connected() -> None:
     assert result.ok is False
     assert result.status_code == 409
     assert "not connected" in result.error
+
+
+def test_parse_camera_connected() -> None:
+    from mele.nina import parse_camera_payload
+
+    status = parse_camera_payload(
+        {
+            "Response": {
+                "Connected": True,
+                "Name": "ASI585MC Pro",
+                "DeviceId": "ASCOM.ASICamera2.Camera",
+                "Gain": 100,
+                "GainMin": 0,
+                "GainMax": 510,
+                "IsExposing": False,
+                "Temperature": -5.2,
+                "CoolerOn": True,
+                "CanSetGain": True,
+                "XBinning": 1,
+                "YBinning": 1,
+            },
+            "Success": True,
+            "StatusCode": 200,
+        }
+    )
+    assert status.api_online is True
+    assert status.camera is not None
+    assert status.camera.connected is True
+    assert status.camera.name == "ASI585MC Pro"
+    assert status.camera.gain == 100
+    assert status.camera.bin_x == 1
+    assert status.camera.cooler_on is True
+
+
+def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_get(self, path, params=None, *, timeout_s=None):  # noqa: ANN001
+        del self, timeout_s
+        calls.append((path, params))
+        return 200, {"Success": True, "Response": "Capture started", "StatusCode": 200, "Error": ""}, ""
+
+    monkeypatch.setattr(NinaClient, "_get", fake_get)
+    result = NinaClient().capture(
+        duration_s=5.0,
+        gain=2.0,
+        target_name="Altair",
+        save=True,
+        wait_for_result=False,
+    )
+    assert result.ok is True
+    assert calls[0][0] == "/equipment/camera/capture"
+    assert calls[0][1]["duration"] == "5"
+    assert calls[0][1]["gain"] == "2"
+    assert calls[0][1]["targetName"] == "Altair"
+    assert calls[0][1]["save"] == "true"
+
+
+def test_set_image_file_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_get(self, path, params=None, *, timeout_s=None):  # noqa: ANN001
+        del self, timeout_s
+        calls.append((path, params))
+        return 200, {"Success": True, "Response": "Updated setting", "StatusCode": 200, "Error": ""}, ""
+
+    monkeypatch.setattr(NinaClient, "_get", fake_get)
+    result = NinaClient().set_image_file_path(r"C:\Astro\Capture\Mele\Altair\2026-10-02")
+    assert result.ok is True
+    assert calls[0][0] == "/profile/change-value"
+    assert calls[0][1]["settingpath"] == "ImageFileSettings-FilePath"
+    assert calls[0][1]["newValue"] == r"C:\Astro\Capture\Mele\Altair\2026-10-02"
+
+
+def test_sync_snapshot_controls(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_get(self, path, params=None, *, timeout_s=None):  # noqa: ANN001
+        del self, timeout_s
+        calls.append((path, params))
+        return 200, {"Success": True, "Response": "Updated setting", "StatusCode": 200, "Error": ""}, ""
+
+    monkeypatch.setattr(NinaClient, "_get", fake_get)
+    results = NinaClient().sync_snapshot_controls(exposure_s=6.0, gain=2.0)
+    assert results["exposure"].ok is True
+    assert results["gain"].ok is True
+    assert calls[0][1]["settingpath"] == "SnapShotControlSettings-ExposureDuration"
+    assert calls[0][1]["newValue"] == "6"
+    assert calls[1][1]["settingpath"] == "SnapShotControlSettings-Gain"
+    assert calls[1][1]["newValue"] == "2"
+
+
+def test_prepare_mele_image_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_get(self, path, params=None, *, timeout_s=None):  # noqa: ANN001
+        del self, timeout_s
+        calls.append((path, params))
+        return 200, {"Success": True, "Response": "Updated setting", "StatusCode": 200, "Error": ""}, ""
+
+    monkeypatch.setattr(NinaClient, "_get", fake_get)
+    dest = NinaClient().prepare_mele_image_destination(r"C:\Astro\Capture\Mele\Altair\2026-10-02\s00042")
+    assert dest["path"].ok and dest["pattern"].ok
+    assert calls[0][1]["settingpath"] == "ImageFileSettings-FilePath"
+    assert calls[1][1]["settingpath"] == "ImageFileSettings-FilePattern"
+    assert "TARGETNAME" not in calls[1][1]["newValue"]
+    assert "DATEMINUS12" not in calls[1][1]["newValue"]
+    assert "IMAGETYPE" in calls[1][1]["newValue"]

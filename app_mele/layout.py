@@ -11,7 +11,7 @@ from nicegui import ui
 from app_mele.state import UiState
 from mele.horizon import overlay_svg, profile_belongs_to, sample_profile, sky_obstruction
 from mele.mask import mask_tint_data_uri
-from mele.sky import format_pointer, preview_to_horizontal
+from mele.sky import format_latitude, format_longitude, format_pointer, preview_to_horizontal
 
 FORMULAS_MD = """
 #### Projektion (equirektangular, 360° × 180°)
@@ -126,7 +126,9 @@ def build_ui(
     on_open_observe: Callable[[], None],
     on_open_tools: Callable[[], None],
     on_set_site: Callable[[float, float, str], None],
-    locations_fn: Callable[[], list[tuple[str, str, float, float]]],
+    on_start_synscan: Callable[[], None],
+    on_start_nina: Callable[[], None],
+    locations_fn: Callable[[], list[tuple[str, str, float, float, str]]],
     active_location_id_fn: Callable[[], str],
     on_apply_location: Callable[[str], bool],
     on_save_location: Callable[[str, float, float], bool],
@@ -155,8 +157,10 @@ def build_ui(
                 weather_label = ui.label("Wetter: —").classes("text-caption")
                 state.refs["weather_label"] = weather_label
                 wifi_label = ui.label("WLAN …").classes("text-caption")
-                wifi_label.tooltip("WLAN-Status wird geladen …")
+                with wifi_label:
+                    wifi_tip = ui.tooltip("WLAN-Status wird geladen …")
                 state.refs["wifi_label"] = wifi_label
+                state.refs["wifi_tooltip"] = wifi_tip
                 ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
                     "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
                 )
@@ -172,6 +176,28 @@ def build_ui(
                 ui.button("Tools", icon="explore", on_click=on_open_tools).props("flat dense").tooltip(
                     "True North / Sonnenmeridian (offline)"
                 )
+                with ui.row().classes("items-center no-wrap q-gutter-xs"):
+                    nina_led = ui.html(
+                        '<span style="display:inline-block;width:0.7em;height:0.7em;'
+                        "border-radius:50%;background:#64748b;"
+                        'box-shadow:inset 0 0 0 1px rgba(15,23,42,.55);"></span>'
+                    )
+                    state.refs["nina_led"] = nina_led
+                    ui.button("NINA", icon="camera", on_click=on_start_nina).props("flat dense").tooltip(
+                        "NINA starten. LED gruen = NINA.exe laeuft bereits."
+                    )
+                with ui.row().classes("items-center no-wrap q-gutter-xs"):
+                    synscan_led = ui.html(
+                        '<span style="display:inline-block;width:0.7em;height:0.7em;'
+                        "border-radius:50%;background:#64748b;"
+                        'box-shadow:inset 0 0 0 1px rgba(15,23,42,.55);"></span>'
+                    )
+                    state.refs["synscan_led"] = synscan_led
+                    ui.button("SynScan", icon="settings_remote", on_click=on_start_synscan).props(
+                        "flat dense"
+                    ).tooltip(
+                        "SynScan Pro starten (Skywatcher-Montierung). LED gruen = laeuft bereits."
+                    )
             cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
                 "text-caption font-mono whitespace-pre-wrap"
             )
@@ -235,7 +261,9 @@ def build_ui(
                 ).tooltip("Ausgewaehlten Listen-Standort in Breite/Laenge uebernehmen")
                 ui.button("In Liste", icon="playlist_add", on_click=lambda: _save_named_location()).props(
                     "flat dense"
-                ).tooltip("Aktuelle Koordinaten unter Name in die Standortliste speichern")
+                ).tooltip(
+                    "Koordinaten + aktuell gewaehltes Panorama unter Name speichern (fuer Session-Start)"
+                )
             with ui.row().classes("w-full items-end no-wrap q-gutter-xs"):
                 lat_in = ui.number("Breite", value=state.latitude_deg, format="%.6f").classes("w-28").props("dense")
                 lon_in = ui.number("Laenge", value=state.longitude_deg, format="%.6f").classes("w-28").props("dense")
@@ -253,7 +281,8 @@ def build_ui(
                 on_upload=on_gps_upload,
             ).props('accept=".jpg,.jpeg,image/jpeg" dense').classes("w-full")
             ui.label(
-                "Liste: benannte Standorte. Handyfoto: GPS aus EXIF. Speichern: mele.yaml."
+                "Liste: Standort + optional verknuepftes 360-Foto. Beim Speichern muss das Panorama "
+                "ausgewaehlt sein. Naechste Session laedt Standort und Foto automatisch."
             ).classes("text-caption")
 
             def _open_osm() -> None:
@@ -274,8 +303,9 @@ def build_ui(
 
             def _fill_location_select() -> None:
                 options: dict[str, str] = {"": "Standort waehlen …"}
-                for loc_id, label, lat, lon in locations_fn():
-                    options[loc_id] = f"{label}  ({lat:.5f}, {lon:.5f})"
+                for loc_id, label, lat, lon, pano_stem in locations_fn():
+                    pano_note = f" · {pano_stem}" if pano_stem else ""
+                    options[loc_id] = f"{label}  ({lat:.5f}, {lon:.5f}){pano_note}"
                 active_id = active_location_id_fn()
                 loc_select.options = options
                 if active_id and active_id in options:
@@ -297,7 +327,7 @@ def build_ui(
                     # Falls Auswahl existiert, deren Label aktualisieren
                     loc_id = str(loc_select.value or "")
                     if loc_id:
-                        for item_id, label, _lat, _lon in locations_fn():
+                        for item_id, label, _lat, _lon, _stem in locations_fn():
                             if item_id == loc_id:
                                 name = label
                                 break
@@ -652,7 +682,9 @@ def build_ui(
                 "pano": "360-Ansicht",
             }.get(state.site_src, state.site_src)
             site_label.text = (
-                f"Standort  {state.latitude_deg:.4f}°, {state.longitude_deg:.4f}°  ({src})"
+                f"Standort  {state.latitude_deg:.4f}°, {state.longitude_deg:.4f}°"
+                f"  ·  {format_latitude(state.latitude_deg)}, {format_longitude(state.longitude_deg)}"
+                f"  ({src})"
             )
         if state.photo_when is not None:
             site_label.text += state.photo_when.astimezone().strftime("  ·  Pano %Y-%m-%d %H:%M")

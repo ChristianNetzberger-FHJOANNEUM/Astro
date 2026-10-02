@@ -10,7 +10,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import urlencode
 
 from fastapi import Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from nicegui import app, run, ui
 
 from app_mele.layout import build_ui
@@ -64,12 +64,44 @@ from mele.weather_journal import (
     should_skip_forecast,
 )
 from mele.weather_local import parse_observation_payload
+from mele.astro_manager import (
+    bump_session_capture,
+    create_session,
+    delete_profile,
+    delete_session,
+    ensure_manager_db,
+    ensure_session_subdir,
+    folder_slug,
+    get_profile,
+    get_session,
+    list_profiles,
+    list_sessions,
+    object_summary,
+    resolve_imaging_params,
+    session_dir_slug,
+    suggested_archive_session_dir,
+    suggested_local_session_dir,
+    update_session,
+    update_session_paths,
+    upsert_profile,
+)
+from mele.preview_service import (
+    PreviewError,
+    StretchParams,
+    find_latest_focus,
+    preview_for_session,
+    roi_preview_for_session,
+    session_preview_status,
+    wait_and_preview,
+)
 from mele.network import (
     format_wifi_compact,
     format_wifi_tooltip,
     get_wifi_status,
     wifi_quality_class,
 )
+from mele.synscan import get_synscan_status, start_synscan
+from mele.nina_launch import get_nina_app_status, start_nina_app
 from mele.nina import NinaClient, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
@@ -103,6 +135,24 @@ from mele.mask import (
 )
 
 HIT_RADIUS_PREVIEW = 14.0
+
+
+def _optional_float_body(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int_body(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _call(fn: Callable | None) -> None:
@@ -163,10 +213,618 @@ def run_app(port: int | None = None) -> None:
     app.add_static_files("/mele-static", Path(__file__).resolve().parent / "static")
     pano_html = (Path(__file__).resolve().parent / "pano.html").read_text(encoding="utf-8")
     nina = NinaClient(settings.nina_base_url)
+    ensure_manager_db(settings.astro_manager_db)
 
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
         return HTMLResponse(pano_html)
+
+    @app.get("/astro/object/{catalog_key}")
+    def astro_object(catalog_key: str, name: str = "") -> JSONResponse:
+        """Imaging-Profile + Sessions fuer ein Katalogobjekt (z.B. M31, HIP97649)."""
+        try:
+            display = name.strip() or None
+            summary = object_summary(catalog_key, db_path=settings.astro_manager_db)
+            summary["display_name"] = display
+            summary["folder_slug"] = folder_slug(catalog_key, display)
+            summary["suggested_local_path"] = str(
+                suggested_local_session_dir(
+                    catalog_key,
+                    local_root=settings.local_capture_root,
+                    display_name=display,
+                )
+            )
+            summary["suggested_archive_path"] = str(
+                suggested_archive_session_dir(
+                    catalog_key,
+                    archive_root=settings.archive_root,
+                    display_name=display,
+                )
+            )
+            summary["local_capture_root"] = str(settings.local_capture_root)
+            summary["archive_root"] = str(settings.archive_root)
+            return JSONResponse(summary)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc), "catalog_key": catalog_key}, status_code=500)
+
+    @app.get("/astro/profiles")
+    def astro_profiles_get(catalog_key: str = "") -> JSONResponse:
+        if not catalog_key.strip():
+            return JSONResponse({"error": "catalog_key fehlt"}, status_code=400)
+        rows = list_profiles(catalog_key, db_path=settings.astro_manager_db)
+        return JSONResponse({"catalog_key": catalog_key, "profiles": [p.to_dict() for p in rows]})
+
+    @app.post("/astro/profiles")
+    async def astro_profiles_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            profile = upsert_profile(
+                catalog_key=str(body.get("catalog_key") or ""),
+                label=str(body.get("label") or ""),
+                profile_id=int(body["id"]) if body.get("id") not in (None, "") else None,
+                equipment=str(body.get("equipment") or ""),
+                exposure_s=_optional_float_body(body.get("exposure_s")),
+                gain=_optional_float_body(body.get("gain")),
+                iso=_optional_int_body(body.get("iso")),
+                offset_adu=_optional_int_body(body.get("offset_adu")),
+                binning=str(body.get("binning") or "1x1"),
+                filter_name=str(body.get("filter_name") or ""),
+                frames=int(body.get("frames") or 1),
+                notes=str(body.get("notes") or ""),
+                db_path=settings.astro_manager_db,
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "profile": profile.to_dict()})
+
+    @app.delete("/astro/profiles/{profile_id}")
+    def astro_profiles_delete(profile_id: int) -> JSONResponse:
+        ok = delete_profile(profile_id, db_path=settings.astro_manager_db)
+        return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+    @app.get("/astro/sessions")
+    def astro_sessions_get(catalog_key: str = "") -> JSONResponse:
+        if not catalog_key.strip():
+            return JSONResponse({"error": "catalog_key fehlt"}, status_code=400)
+        rows = list_sessions(catalog_key, db_path=settings.astro_manager_db)
+        return JSONResponse({"catalog_key": catalog_key, "sessions": [s.to_dict() for s in rows]})
+
+    @app.post("/astro/sessions")
+    async def astro_sessions_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            session = create_session(
+                catalog_key=str(body.get("catalog_key") or ""),
+                profile_id=_optional_int_body(body.get("profile_id")),
+                started_utc=str(body.get("started_utc") or "") or None,
+                frames_planned=_optional_int_body(body.get("frames_planned")),
+                frames_completed=int(body.get("frames_completed") or 0),
+                exposure_s=_optional_float_body(body.get("exposure_s")),
+                gain=_optional_float_body(body.get("gain")),
+                iso=_optional_int_body(body.get("iso")),
+                offset_adu=_optional_int_body(body.get("offset_adu")),
+                binning=str(body.get("binning") or ""),
+                filter_name=str(body.get("filter_name") or ""),
+                equipment=str(body.get("equipment") or ""),
+                local_path="",
+                archive_path="",
+                archive_status=str(body.get("archive_status") or "local"),
+                notes=str(body.get("notes") or ""),
+                db_path=settings.astro_manager_db,
+                apply_profile=True,
+            )
+            # Nach ID: kanonische Session-Ordner …/Datum/s#####/
+            display = str(body.get("display_name") or "").strip() or None
+            local = str(body.get("local_path") or "").strip()
+            archive = str(body.get("archive_path") or "").strip()
+            if local:
+                local_path = str(ensure_session_subdir(local, session.id))
+            else:
+                local_path = str(
+                    suggested_local_session_dir(
+                        session.catalog_key,
+                        local_root=settings.local_capture_root,
+                        display_name=display,
+                        session_id=session.id,
+                    )
+                )
+            if archive:
+                archive_path = str(ensure_session_subdir(archive, session.id))
+            else:
+                archive_path = str(
+                    suggested_archive_session_dir(
+                        session.catalog_key,
+                        archive_root=settings.archive_root,
+                        display_name=display,
+                        session_id=session.id,
+                    )
+                )
+            session = update_session_paths(
+                session.id,
+                local_path=local_path,
+                archive_path=archive_path,
+                notes=session.notes,
+                db_path=settings.astro_manager_db,
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "session": session.to_dict()})
+
+    @app.delete("/astro/sessions/{session_id}")
+    def astro_sessions_delete(session_id: int) -> JSONResponse:
+        ok = delete_session(session_id, db_path=settings.astro_manager_db)
+        return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+    @app.put("/astro/sessions/{session_id}")
+    async def astro_sessions_put(session_id: int, request: Request) -> JSONResponse:
+        """Session bearbeiten (Parameter vor Capture anpassen)."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            session = update_session(
+                session_id,
+                profile_id=_optional_int_body(body.get("profile_id")),
+                frames_planned=_optional_int_body(body.get("frames_planned")),
+                frames_completed=_optional_int_body(body.get("frames_completed")),
+                exposure_s=_optional_float_body(body.get("exposure_s")),
+                gain=_optional_float_body(body.get("gain")),
+                iso=_optional_int_body(body.get("iso")),
+                offset_adu=_optional_int_body(body.get("offset_adu")),
+                binning=None if body.get("binning") is None else str(body.get("binning") or ""),
+                filter_name=None if body.get("filter_name") is None else str(body.get("filter_name") or ""),
+                equipment=None if body.get("equipment") is None else str(body.get("equipment") or ""),
+                local_path=(
+                    None
+                    if body.get("local_path") is None
+                    else str(ensure_session_subdir(str(body.get("local_path") or ""), session_id))
+                ),
+                archive_path=(
+                    None
+                    if body.get("archive_path") is None
+                    else str(ensure_session_subdir(str(body.get("archive_path") or ""), session_id))
+                ),
+                archive_status=None if body.get("archive_status") is None else str(body.get("archive_status") or ""),
+                notes=None if body.get("notes") is None else str(body.get("notes") or ""),
+                db_path=settings.astro_manager_db,
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, "session": session.to_dict()})
+
+    def _stretch_params_from_body(body: dict | None) -> StretchParams:
+        raw = body if isinstance(body, dict) else {}
+        return StretchParams(
+            mode=str(raw.get("stretch") or raw.get("mode") or "auto"),
+            percentile=float(raw.get("percentile") or 99.5),
+            black=_optional_float_body(raw.get("black")),
+            white=_optional_float_body(raw.get("white")),
+            asinh_a=float(raw.get("asinh_a") or 0.1),
+        )
+
+    def _session_preview_payload(session_id: int, result) -> dict:
+        mtime = int(result.preview_path.stat().st_mtime) if result.preview_path.is_file() else 0
+        kind = getattr(result, "kind", "overview") or "overview"
+        if kind == "focus":
+            url = f"/astro/sessions/{session_id}/preview/focus/file?v={mtime}"
+        else:
+            url = f"/astro/sessions/{session_id}/preview/file?v={mtime}"
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "preview_url": url,
+            **result.to_dict(),
+        }
+
+    @app.get("/astro/sessions/{session_id}/preview")
+    async def astro_session_preview_get(
+        session_id: int,
+        generate: bool = Query(True),
+    ) -> JSONResponse:
+        """Neuestes Session-Preview (bei Bedarf aus FITS erzeugen). FITS unverändert."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        status = session_preview_status(local)
+        if not generate:
+            return JSONResponse({"ok": True, "session_id": session_id, **status})
+        try:
+            result = await run.io_bound(lambda: preview_for_session(local, force=False))
+        except PreviewError as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc), "session_id": session_id, **status},
+                status_code=404,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(_session_preview_payload(session_id, result))
+
+    @app.post("/astro/sessions/{session_id}/preview")
+    async def astro_session_preview_post(session_id: int, request: Request) -> JSONResponse:
+        """Preview neu stretchen (force). Body: stretch/mode, black, white, percentile."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        params = _stretch_params_from_body(body)
+        force = body.get("force", True)
+        if isinstance(force, str):
+            force = force.strip().lower() not in ("0", "false", "no")
+        try:
+            result = await run.io_bound(
+                lambda: preview_for_session(local, stretch=params, force=bool(force))
+            )
+        except PreviewError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(_session_preview_payload(session_id, result))
+
+    @app.get("/astro/sessions/{session_id}/preview/file", response_model=None)
+    def astro_session_preview_file(session_id: int):
+        """JPEG ausliefern (Cache-Bust via ?v=)."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        status = session_preview_status(local)
+        path = status.get("preview_path")
+        if not path or not Path(path).is_file():
+            return JSONResponse({"ok": False, "error": "Kein Preview"}, status_code=404)
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            filename=Path(path).name,
+        )
+
+    @app.post("/astro/sessions/{session_id}/preview/roi")
+    async def astro_session_preview_roi(session_id: int, request: Request) -> JSONResponse:
+        """Fokus-ROI aus FITS (volle Auflösung im Ausschnitt, Debayer nur im Crop)."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        params = _stretch_params_from_body(body)
+        scale = float(body.get("scale") or 2.0)
+        roi_w = int(body.get("width") or body.get("size") or 512)
+        roi_h = int(body.get("height") or body.get("size") or roi_w)
+        try:
+            result = await run.io_bound(
+                lambda: roi_preview_for_session(
+                    local,
+                    x=_optional_int_body(body.get("x")),
+                    y=_optional_int_body(body.get("y")),
+                    width=roi_w,
+                    height=roi_h,
+                    preview_x=_optional_float_body(body.get("preview_x")),
+                    preview_y=_optional_float_body(body.get("preview_y")),
+                    preview_w=_optional_int_body(body.get("preview_w")),
+                    preview_h=_optional_int_body(body.get("preview_h")),
+                    display_w=_optional_float_body(body.get("display_w")),
+                    display_h=_optional_float_body(body.get("display_h")),
+                    stretch=params,
+                    scale=scale,
+                )
+            )
+        except PreviewError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(_session_preview_payload(session_id, result))
+
+    @app.get("/astro/sessions/{session_id}/preview/focus/file", response_model=None)
+    def astro_session_preview_focus_file(session_id: int):
+        """Letztes Fokus-ROI-JPEG ausliefern."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        path = find_latest_focus(local)
+        if path is None or not path.is_file():
+            return JSONResponse({"ok": False, "error": "Kein Fokus-Preview"}, status_code=404)
+        return FileResponse(path, media_type="image/jpeg", filename=path.name)
+
+    @app.post("/astro/nina/capture")
+    async def astro_nina_capture(request: Request) -> JSONResponse:
+        """Light-Frame: Profil-Defaults, Session-Override, Ordner …/s{id}/, NINA speichern."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+
+        catalog_key = str(body.get("catalog_key") or "").strip()
+        display_name = str(body.get("display_name") or "").strip()
+        profile_id = _optional_int_body(body.get("profile_id"))
+        exposure_override = _optional_float_body(body.get("exposure_s"))
+        gain_override = _optional_float_body(body.get("gain"))
+        frames_override = _optional_int_body(body.get("frames"))
+        reuse_session_id = _optional_int_body(body.get("session_id"))
+
+        existing = None
+        if reuse_session_id is not None:
+            existing = get_session(reuse_session_id, db_path=settings.astro_manager_db)
+            if existing is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"Unbekannte Session: {reuse_session_id}"},
+                    status_code=404,
+                )
+            catalog_key = catalog_key or existing.catalog_key
+            if profile_id is None:
+                profile_id = existing.profile_id
+
+        profile = None
+        if profile_id is not None:
+            profile = get_profile(profile_id, db_path=settings.astro_manager_db)
+            if profile is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"Unbekanntes Profil: {profile_id}"},
+                    status_code=404,
+                )
+            catalog_key = catalog_key or profile.catalog_key
+
+        params = resolve_imaging_params(
+            profile=profile,
+            session=existing,
+            exposure_s=exposure_override,
+            gain=gain_override,
+            frames=frames_override,
+        )
+        exposure_s = params["exposure_s"]
+        gain = params["gain"]
+
+        if not catalog_key:
+            return JSONResponse({"ok": False, "error": "catalog_key fehlt"}, status_code=400)
+        if exposure_s is None or exposure_s < 0:
+            return JSONResponse(
+                {"ok": False, "error": "Belichtung fehlt (weder Session noch Profil)"},
+                status_code=400,
+            )
+
+        target = display_name or catalog_key
+        # Neue Session zuerst anlegen → echte Session-ID im Ordnerpfad
+        session: object | None = existing
+        if existing is None:
+            try:
+                session = create_session(
+                    catalog_key=catalog_key,
+                    profile_id=profile.id if profile else profile_id,
+                    frames_planned=int(params["frames"]),
+                    frames_completed=0,
+                    exposure_s=float(exposure_s),
+                    gain=params.get("gain"),
+                    iso=params.get("iso"),
+                    binning=str(params.get("binning") or ""),
+                    filter_name=str(params.get("filter_name") or ""),
+                    equipment=str(params.get("equipment") or ""),
+                    local_path="",
+                    archive_path="",
+                    archive_status="local",
+                    notes=f"NINA capture → {target}",
+                    db_path=settings.astro_manager_db,
+                    apply_profile=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"ok": False, "error": f"Session anlegen: {exc}"}, status_code=500)
+
+        assert session is not None
+        sid = int(session.id)  # type: ignore[attr-defined]
+
+        # Immer kanonisch: …/Target/Datum/s#####/ — alte Pfade ohne s##### nachziehen
+        canonical_local = str(
+            suggested_local_session_dir(
+                catalog_key,
+                local_root=settings.local_capture_root,
+                display_name=display_name or None,
+                session_id=sid,
+            )
+        )
+        canonical_archive = str(
+            suggested_archive_session_dir(
+                catalog_key,
+                archive_root=settings.archive_root,
+                display_name=display_name or None,
+                session_id=sid,
+            )
+        )
+        body_local = str(body.get("local_path") or "").strip()
+        body_archive = str(body.get("archive_path") or "").strip()
+        existing_local = (existing.local_path if existing else "") or ""
+        existing_archive = (existing.archive_path if existing else "") or ""
+        raw_local = body_local or existing_local or canonical_local
+        raw_archive = body_archive or existing_archive or canonical_archive
+        local_path = str(ensure_session_subdir(raw_local, sid))
+        archive_path = str(ensure_session_subdir(raw_archive, sid))
+
+        try:
+            session = update_session_paths(
+                sid,
+                local_path=local_path,
+                archive_path=archive_path,
+                db_path=settings.astro_manager_db,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": f"Session-Pfad: {exc}"}, status_code=500)
+
+        cam = nina.get_camera_info()
+        if not cam.api_online:
+            return JSONResponse(
+                {"ok": False, "api_online": False, "error": cam.error or "NINA offline", "camera": None},
+                status_code=502,
+            )
+        if cam.camera is None or not cam.camera.connected:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "api_online": True,
+                    "error": cam.error or "Kamera in NINA nicht verbunden",
+                    "camera": None if cam.camera is None else cam.camera.to_dict(),
+                },
+                status_code=409,
+            )
+
+        try:
+            Path(local_path).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"Lokalpfad nicht anlegbar: {exc}", "local_path": local_path},
+                status_code=500,
+            )
+
+        dest = nina.prepare_mele_image_destination(local_path)
+        if not dest["path"].ok:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": dest["path"].error or "NINA Image File Path fehlgeschlagen",
+                    "destination": {k: v.to_dict() for k, v in dest.items()},
+                    "local_path": local_path,
+                },
+                status_code=502,
+            )
+        if not dest["pattern"].ok:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": dest["pattern"].error or "NINA File Pattern fehlgeschlagen",
+                    "destination": {k: v.to_dict() for k, v in dest.items()},
+                    "local_path": local_path,
+                },
+                status_code=502,
+            )
+
+        snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
+        target_for_nina = f"{target}_{session_dir_slug(sid)}"
+
+        try:
+            # Auf fertiges Frame warten — sonst liegt noch kein FITS fürs Preview vor
+            result = nina.capture(
+                duration_s=float(exposure_s),
+                gain=gain,
+                image_type="LIGHT",
+                save=True,
+                target_name=target_for_nina,
+                wait_for_result=True,
+                omit_image=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+        if result.ok:
+            try:
+                if existing is not None:
+                    note = str(existing.notes or "")
+                    n = int(existing.frames_completed or 0) + 1
+                    if "Wiederholung" not in note:
+                        note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
+                    session = bump_session_capture(
+                        sid, frames_delta=1, db_path=settings.astro_manager_db
+                    )
+                    session = update_session_paths(
+                        sid,
+                        local_path=local_path,
+                        archive_path=archive_path,
+                        notes=note,
+                        db_path=settings.astro_manager_db,
+                    )
+                else:
+                    session = bump_session_capture(
+                        sid, frames_delta=1, db_path=settings.astro_manager_db
+                    )
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "capture": result.to_dict(),
+                        "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
+                        "warning": f"Capture ok, Session-Update fehlgeschlagen: {exc}",
+                        "camera": cam.camera.to_dict(),
+                        "local_path": local_path,
+                    }
+                )
+
+        preview_payload: dict | None = None
+        preview_error: str | None = None
+        if result.ok:
+            # NINA kann die Datei kurz nach waitForResult noch finalisieren
+            wait_s = min(120.0, max(15.0, float(exposure_s) + 20.0))
+            try:
+                prev = await run.io_bound(
+                    lambda: wait_and_preview(local_path, timeout_s=wait_s, force=True)
+                )
+                preview_payload = _session_preview_payload(sid, prev)
+            except PreviewError as exc:
+                preview_error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                preview_error = f"Preview fehlgeschlagen: {exc}"
+
+        status = 200 if result.ok else 502
+        return JSONResponse(
+            {
+                "ok": result.ok,
+                "capture": result.to_dict(),
+                "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
+                "camera": cam.camera.to_dict(),
+                "image_file_path": local_path,
+                "session_folder": session_dir_slug(sid),
+                "resolved_params": params,
+                "destination": {k: v.to_dict() for k, v in dest.items()},
+                "snap_sync": {k: v.to_dict() for k, v in snap_sync.items()},
+                "reused_session": existing is not None,
+                "preview": preview_payload,
+                "preview_error": preview_error,
+                "error": result.error,
+                "note": (
+                    f"Ordner …/{session_dir_slug(sid)}/; "
+                    "Profil-Defaults mit Session-Override; "
+                    "Wiederholen bleibt in derselben Session-ID."
+                ),
+            },
+            status_code=status,
+        )
 
     @app.get("/nina/mount")
     def nina_mount() -> JSONResponse:
@@ -176,6 +834,17 @@ def run_app(port: int | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — UI darf nie crashen
             return JSONResponse(
                 {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "mount": None}
+            )
+        return JSONResponse(status.to_dict())
+
+    @app.get("/nina/camera")
+    def nina_camera() -> JSONResponse:
+        """Kamera-Status via NINA Advanced API."""
+        try:
+            status = nina.get_camera_info()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "camera": None}
             )
         return JSONResponse(status.to_dict())
 
@@ -1165,11 +1834,29 @@ def run_app(port: int | None = None) -> None:
         return settings.horizon_dir / f"{image_path.stem}.horizon.mask.png"
 
     def _prepare_preview(image_path: Path) -> tuple[int, int, int, int]:
-        _, width, height, src_w, src_h = ensure_preview(
-            image_path, preview_path_for(image_path), settings.preview_width
-        )
-        crop_sky_preview(preview_path_for(image_path), sky_preview_path_for(image_path))
-        return width, height, src_w, src_h
+        dest = preview_path_for(image_path)
+        sky = sky_preview_path_for(image_path)
+        last_exc: OSError | None = None
+        for attempt in range(2):
+            try:
+                _, width, height, src_w, src_h = ensure_preview(
+                    image_path, dest, settings.preview_width
+                )
+                crop_sky_preview(dest, sky)
+                return width, height, src_w, src_h
+            except OSError as exc:
+                last_exc = exc
+                # Abgeschnittenes/korruptes Preview löschen und einmal neu erzeugen
+                for p in (dest, sky):
+                    try:
+                        p.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if attempt == 0:
+                    continue
+                raise
+        assert last_exc is not None
+        raise last_exc
 
     def _detect_auto(path: Path, north_x: float):
         return detect_horizon(path, north_x=north_x)
@@ -1223,13 +1910,15 @@ def run_app(port: int | None = None) -> None:
             elevation_m=float(settings.elevation_m or 0.0),
         )
         active_loc = get_active_location(settings.horizon_dir)
-        start_lat = settings.latitude_deg
-        start_lon = settings.longitude_deg
-        start_src = "config" if settings.latitude_deg is not None else "none"
-        if active_loc is not None and (start_lat is None or start_lon is None):
+        # Aktiver Listen-Standort ist Session-Default; yaml nur Fallback.
+        if active_loc is not None:
             start_lat = active_loc.latitude_deg
             start_lon = active_loc.longitude_deg
             start_src = "location"
+        else:
+            start_lat = settings.latitude_deg
+            start_lon = settings.longitude_deg
+            start_src = "config" if settings.latitude_deg is not None else "none"
         state = UiState(
             latitude_deg=start_lat,
             longitude_deg=start_lon,
@@ -1343,15 +2032,22 @@ def run_app(port: int | None = None) -> None:
                 state.north_x,
             )
 
-        async def on_select_image(name: str) -> None:
+        async def on_select_image(name: str, *, keep_site: bool = False) -> None:
             path = settings.media_dir / name
             if not path.is_file():
                 ui.notify(f"Nicht gefunden: {name}", type="warning")
                 return
+            keep_lat = state.latitude_deg
+            keep_lon = state.longitude_deg
+            keep_src = state.site_src
             state.image_path = path
             observer = resolve_observer(path, settings)
             stored = load_photo_site(sites_path(settings.horizon_dir), path.stem)
-            if stored is not None:
+            if keep_site and keep_lat is not None and keep_lon is not None:
+                state.latitude_deg = keep_lat
+                state.longitude_deg = keep_lon
+                state.site_src = keep_src or "location"
+            elif stored is not None:
                 state.latitude_deg = stored.latitude_deg
                 state.longitude_deg = stored.longitude_deg
                 state.site_src = stored.source or "saved"
@@ -1372,8 +2068,14 @@ def run_app(port: int | None = None) -> None:
                 width, height, src_w, src_h = await run.io_bound(_prepare_preview, path)
             except OSError as exc:
                 state.status = f"Vorschau fehlgeschlagen: {exc}"
-                ui.notify(str(exc), type="negative")
-                refresh()
+                try:
+                    ui.notify(str(exc), type="negative")
+                except RuntimeError:
+                    pass
+                try:
+                    refresh()
+                except RuntimeError:
+                    pass
                 return
             state.preview_width = width
             state.preview_height = height
@@ -1399,7 +2101,19 @@ def run_app(port: int | None = None) -> None:
             _ensure_mask()
             refresh_image()
             refresh_meta()
-            ui.timer(0.05, lambda: _call(state.refs.get("refresh_files")), once=True)
+            _call(state.refs.get("refresh_files"))
+
+        def _queue_select_image(name: str, *, keep_site: bool = False) -> None:
+            # Timer-Callback direkt awaiten (nicht create_task), sonst fehlt der NiceGUI-Slot.
+            async def _run() -> None:
+                await on_select_image(name, keep_site=keep_site)
+
+            ui.timer(0.05, _run, once=True)
+
+        def _pano_stem_for_save() -> str:
+            if state.image_path is None:
+                return ""
+            return state.image_path.stem
 
         async def on_detect() -> None:
             if state.image_path is None:
@@ -1825,9 +2539,9 @@ def run_app(port: int | None = None) -> None:
             refresh_meta()
             ui.notify(state.status, type="positive")
 
-        def locations_list() -> list[tuple[str, str, float, float]]:
+        def locations_list() -> list[tuple[str, str, float, float, str]]:
             return [
-                (loc.id, loc.label, loc.latitude_deg, loc.longitude_deg)
+                (loc.id, loc.label, loc.latitude_deg, loc.longitude_deg, loc.pano_stem)
                 for loc in list_locations(settings.horizon_dir)
             ]
 
@@ -1843,19 +2557,31 @@ def run_app(port: int | None = None) -> None:
                 return False
             on_set_site(loc.latitude_deg, loc.longitude_deg, "location")
             state.status = f"Standort „{loc.label}“ uebernommen"
+            if loc.pano_stem:
+                media = _media_for_stem(loc.pano_stem)
+                if media is not None:
+                    _queue_select_image(media.name, keep_site=True)
+                else:
+                    ui.notify(
+                        f"Verknuepftes Panorama „{loc.pano_stem}“ fehlt in media/.",
+                        type="warning",
+                    )
             return True
 
         def on_save_location(label: str, lat: float, lon: float) -> bool:
+            stem = _pano_stem_for_save()
             loc = upsert_location(
                 settings.horizon_dir,
                 label=label,
                 latitude_deg=lat,
                 longitude_deg=lon,
                 elevation_m=float(settings.elevation_m or 0.0),
+                pano_stem=stem,
                 make_active=True,
             )
             on_set_site(lat, lon, "location")
-            ui.notify(f"Standort „{loc.label}“ in Liste gespeichert", type="positive")
+            note = f" + Panorama {stem}" if stem else " (kein Panorama verknuepft — zuerst Foto waehlen)"
+            ui.notify(f"Standort „{loc.label}“ gespeichert{note}", type="positive")
             fill = state.refs.get("fill_location_select")
             if callable(fill):
                 fill()
@@ -1919,12 +2645,102 @@ def run_app(port: int | None = None) -> None:
             color = _WIFI_COLORS.get(wifi_quality_class(status.rssi_dbm), "#e2e8f0")
             if not status.connected and not status.stale:
                 color = "#fb7185"
+            tip_el = state.refs.get("wifi_tooltip")
             try:
+                # Client nach Tab-Close nicht mehr anfassen
+                client = getattr(label, "client", None)
+                if client is not None and getattr(client, "deleted", False):
+                    return
                 label.text = text
                 label.style(f"color: {color}")
-                label.tooltip(tip)
+                if tip_el is not None:
+                    tip_el.text = tip
+                else:
+                    label.props(f'title="{tip.replace(chr(34), chr(39))}"')
             except RuntimeError:
                 return
+
+        def _set_app_led(ref_key: str, *, running: bool, exe_exists: bool, tip: str) -> None:
+            led = state.refs.get(ref_key)
+            if led is None:
+                return
+            color = "#34d399" if running else "#64748b"
+            if not exe_exists:
+                color = "#f43f5e"
+            tip_safe = (
+                str(tip)
+                .replace("&", "&amp;")
+                .replace('"', "&quot;")
+                .replace("<", "&lt;")
+            )
+            html = (
+                f'<span title="{tip_safe}" style="display:inline-block;width:0.7em;height:0.7em;'
+                f"border-radius:50%;background:{color};"
+                'box-shadow:inset 0 0 0 1px rgba(15,23,42,.55);"></span>'
+            )
+            try:
+                led.content = html
+            except RuntimeError:
+                return
+            except AttributeError:
+                try:
+                    led.set_content(html)
+                except Exception:  # noqa: BLE001
+                    return
+
+        async def poll_synscan_status() -> None:
+            try:
+                status = await asyncio.to_thread(get_synscan_status, settings.synscan_pro_exe)
+            except Exception:  # noqa: BLE001
+                return
+            tip = "SynScan Pro laeuft" if status.running else "SynScan Pro nicht gestartet"
+            if not status.exe_exists:
+                tip = f"SynScanPro.exe fehlt: {status.exe_path}"
+            elif status.error:
+                tip = status.error
+            _set_app_led(
+                "synscan_led",
+                running=status.running,
+                exe_exists=status.exe_exists,
+                tip=tip,
+            )
+
+        async def poll_nina_app_status() -> None:
+            try:
+                status = await asyncio.to_thread(get_nina_app_status, settings.nina_exe)
+            except Exception:  # noqa: BLE001
+                return
+            tip = "NINA laeuft" if status.running else "NINA nicht gestartet"
+            if not status.exe_exists:
+                tip = f"NINA.exe fehlt: {status.exe_path}"
+            elif status.error:
+                tip = status.error
+            _set_app_led(
+                "nina_led",
+                running=status.running,
+                exe_exists=status.exe_exists,
+                tip=tip,
+            )
+
+        def on_start_synscan() -> None:
+            result = start_synscan(settings.synscan_pro_exe)
+            if result.ok and result.already_running:
+                ui.notify("SynScan Pro laeuft bereits.", type="info")
+            elif result.ok:
+                ui.notify("SynScan Pro gestartet.", type="positive")
+            else:
+                ui.notify(result.error or "SynScan-Start fehlgeschlagen", type="negative")
+            ui.timer(0.4, poll_synscan_status, once=True)
+
+        def on_start_nina() -> None:
+            result = start_nina_app(settings.nina_exe)
+            if result.ok and result.already_running:
+                ui.notify("NINA laeuft bereits.", type="info")
+            elif result.ok:
+                ui.notify("NINA gestartet.", type="positive")
+            else:
+                ui.notify(result.error or "NINA-Start fehlgeschlagen", type="negative")
+            ui.timer(0.4, poll_nina_app_status, once=True)
 
         build_ui(
             state=state,
@@ -1950,6 +2766,8 @@ def run_app(port: int | None = None) -> None:
             on_open_observe=on_open_observe,
             on_open_tools=on_open_tools,
             on_set_site=on_set_site,
+            on_start_synscan=on_start_synscan,
+            on_start_nina=on_start_nina,
             locations_fn=locations_list,
             active_location_id_fn=active_location_id,
             on_apply_location=on_apply_location,
@@ -1961,6 +2779,15 @@ def run_app(port: int | None = None) -> None:
         apply_weather_summary()
         ui.timer(0.1, poll_wifi_status, once=True)
         ui.timer(5.0, poll_wifi_status)
+        ui.timer(0.2, poll_synscan_status, once=True)
+        ui.timer(3.0, poll_synscan_status)
+        ui.timer(0.3, poll_nina_app_status, once=True)
+        ui.timer(3.0, poll_nina_app_status)
+        # Default-Standort: verknuepftes 360-Panorama beim Session-Start laden
+        if active_loc is not None and active_loc.pano_stem:
+            media = _media_for_stem(active_loc.pano_stem)
+            if media is not None:
+                _queue_select_image(media.name, keep_site=True)
 
     ui.run(
         root=index,

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from mele.sky import (
     az_alt_to_radec,
     format_dec,
+    format_latitude,
+    format_longitude,
     format_pointer,
     format_ra,
     preview_to_horizontal,
@@ -38,6 +40,11 @@ def test_north_celestial_pole_at_az_zero_alt_latitude() -> None:
 def test_format_ra_dec_and_pointer_without_site() -> None:
     assert format_ra(0.0).startswith("00h")
     assert format_dec(48.2).startswith("+48°")
+    assert format_latitude(48.2).endswith("N")
+    assert "48°" in format_latitude(48.2)
+    assert format_longitude(16.4).endswith("E")
+    assert format_latitude(-33.87).endswith("S")
+    assert format_longitude(-58.38).endswith("W")
     text = format_pointer(10.0, 5.0, latitude_deg=None, longitude_deg=None)
     assert "Az" in text
     assert "Standort" in text

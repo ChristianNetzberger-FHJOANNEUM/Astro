@@ -1,6 +1,7 @@
 """Benannte Beobachterstandorte (Garten, mobile Einsaetze).
 
 Getrennt von sites.json (GPS pro 360-Foto-Stem).
+Optional: pano_stem verknuepft den Standort mit einem 360-Foto in media/.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ class ObserverLocation:
     latitude_deg: float
     longitude_deg: float
     elevation_m: float = 0.0
+    pano_stem: str = ""
     updated: str = ""
 
 
@@ -40,8 +42,30 @@ def _slug(value: str) -> str:
     return text or DEFAULT_ID
 
 
+def _clean_pano_stem(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or any(part in text for part in ("/", "\\", "..")):
+        return ""
+    # Dateiname ohne Endung erlauben
+    if text.lower().endswith((".jpg", ".jpeg")):
+        text = Path(text).stem
+    return text
+
+
 def _empty_payload() -> dict[str, Any]:
     return {"version": LOCATIONS_SCHEMA, "active": "", "locations": []}
+
+
+def _location_dict(loc: ObserverLocation) -> dict[str, Any]:
+    return {
+        "id": loc.id,
+        "label": loc.label,
+        "latitude_deg": round(loc.latitude_deg, 6),
+        "longitude_deg": round(loc.longitude_deg, 6),
+        "elevation_m": round(loc.elevation_m, 1),
+        "pano_stem": loc.pano_stem,
+        "updated": loc.updated,
+    }
 
 
 def _parse_location(item: dict[str, Any]) -> ObserverLocation | None:
@@ -64,6 +88,7 @@ def _parse_location(item: dict[str, Any]) -> ObserverLocation | None:
         latitude_deg=lat,
         longitude_deg=lon,
         elevation_m=elev,
+        pano_stem=_clean_pano_stem(item.get("pano_stem")),
         updated=str(item.get("updated") or ""),
     )
 
@@ -88,16 +113,7 @@ def load_locations_index(horizon_dir: Path) -> dict[str, Any]:
         if loc is None or loc.id in seen:
             continue
         seen.add(loc.id)
-        cleaned.append(
-            {
-                "id": loc.id,
-                "label": loc.label,
-                "latitude_deg": round(loc.latitude_deg, 6),
-                "longitude_deg": round(loc.longitude_deg, 6),
-                "elevation_m": round(loc.elevation_m, 1),
-                "updated": loc.updated,
-            }
-        )
+        cleaned.append(_location_dict(loc))
     active = _slug(str(raw.get("active") or "")) if raw.get("active") else ""
     if active and active not in seen:
         active = cleaned[0]["id"] if cleaned else ""
@@ -115,16 +131,8 @@ def save_locations_index(horizon_dir: Path, index: dict[str, Any]) -> dict[str, 
         if loc is None or loc.id in seen:
             continue
         seen.add(loc.id)
-        payload_rows.append(
-            {
-                "id": loc.id,
-                "label": loc.label,
-                "latitude_deg": round(loc.latitude_deg, 6),
-                "longitude_deg": round(loc.longitude_deg, 6),
-                "elevation_m": round(loc.elevation_m, 1),
-                "updated": loc.updated or datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        stamp = loc.updated or datetime.now(timezone.utc).isoformat()
+        payload_rows.append({**_location_dict(loc), "updated": stamp})
     active = str(index.get("active") or "")
     if active:
         active = _slug(active)
@@ -174,22 +182,28 @@ def upsert_location(
     longitude_deg: float,
     elevation_m: float = 0.0,
     location_id: str | None = None,
+    pano_stem: str | None = None,
     make_active: bool = True,
 ) -> ObserverLocation:
     index = load_locations_index(horizon_dir)
     loc_id = _slug(location_id or label)
     nice = (label or loc_id).strip() or loc_id
     stamp = datetime.now(timezone.utc).isoformat()
+    prev_stem = ""
     found = False
     for item in index["locations"]:
         if item.get("id") == loc_id:
+            prev_stem = _clean_pano_stem(item.get("pano_stem"))
             item["label"] = nice
             item["latitude_deg"] = round(float(latitude_deg), 6)
             item["longitude_deg"] = round(float(longitude_deg), 6)
             item["elevation_m"] = round(float(elevation_m or 0.0), 1)
+            if pano_stem is not None:
+                item["pano_stem"] = _clean_pano_stem(pano_stem)
             item["updated"] = stamp
             found = True
             break
+    stem = _clean_pano_stem(pano_stem) if pano_stem is not None else prev_stem
     if not found:
         index["locations"].append(
             {
@@ -198,6 +212,7 @@ def upsert_location(
                 "latitude_deg": round(float(latitude_deg), 6),
                 "longitude_deg": round(float(longitude_deg), 6),
                 "elevation_m": round(float(elevation_m or 0.0), 1),
+                "pano_stem": stem,
                 "updated": stamp,
             }
         )
@@ -210,6 +225,7 @@ def upsert_location(
         latitude_deg=float(latitude_deg),
         longitude_deg=float(longitude_deg),
         elevation_m=float(elevation_m or 0.0),
+        pano_stem=stem,
         updated=stamp,
     )
 

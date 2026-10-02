@@ -758,7 +758,10 @@ def ensure_preview(path: Path, dest: Path, preview_width: int = 2000) -> tuple[P
         image = image.resize((preview_width, preview_height), Image.Resampling.BILINEAR)
     else:
         preview_width, preview_height = src_w, src_h
-    image.save(dest, quality=85)
+    # Atomar schreiben — verhindert abgeschnittene .preview.jpg nach Abbruch
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    image.save(tmp, format="JPEG", quality=85)
+    tmp.replace(dest)
     return dest, preview_width, preview_height, src_w, src_h
 
 
