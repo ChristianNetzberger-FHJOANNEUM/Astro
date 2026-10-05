@@ -226,12 +226,12 @@ def test_parse_camera_connected() -> None:
 
 
 def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, dict | None]] = []
+    calls: list[tuple[str, dict | None, float | None]] = []
 
     def fake_get(self, path, params=None, *, timeout_s=None):  # noqa: ANN001
-        del self, timeout_s
-        calls.append((path, params))
-        return 200, {"Success": True, "Response": "Capture started", "StatusCode": 200, "Error": ""}, ""
+        del self
+        calls.append((path, params, timeout_s))
+        return 200, {"Success": True, "Response": "Capture finished", "StatusCode": 200, "Error": ""}, ""
 
     monkeypatch.setattr(NinaClient, "_get", fake_get)
     result = NinaClient().capture(
@@ -240,6 +240,8 @@ def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:
         target_name="Altair",
         save=True,
         wait_for_result=False,
+        only_await_capture_completion=True,
+        skip_auto_stretch=True,
     )
     assert result.ok is True
     assert calls[0][0] == "/equipment/camera/capture"
@@ -247,6 +249,11 @@ def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls[0][1]["gain"] == "2"
     assert calls[0][1]["targetName"] == "Altair"
     assert calls[0][1]["save"] == "true"
+    assert calls[0][1]["waitForResult"] == "false"
+    assert calls[0][1]["onlyAwaitCaptureCompletion"] == "true"
+    assert calls[0][1]["skipAutoStretch"] == "true"
+    # onlyAwait hält HTTP offen → Timeout muss Belichtung überstehen (nicht 3s Default)
+    assert calls[0][2] is not None and calls[0][2] >= 5.0 + 180.0
 
 
 def test_set_image_file_path(monkeypatch: pytest.MonkeyPatch) -> None:

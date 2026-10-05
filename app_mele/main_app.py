@@ -88,12 +88,14 @@ from mele.astro_manager import (
 from mele.preview_service import (
     PreviewError,
     StretchParams,
+    find_fits_files,
     find_latest_focus,
     preview_for_session,
     roi_preview_for_session,
     session_preview_status,
     wait_and_preview,
 )
+from mele.wiki_pages import index_payload, page_payload
 from mele.network import (
     format_wifi_compact,
     format_wifi_tooltip,
@@ -102,7 +104,7 @@ from mele.network import (
 )
 from mele.synscan import get_synscan_status, start_synscan
 from mele.nina_launch import get_nina_app_status, start_nina_app
-from mele.nina import NinaClient, validate_slew_radec_deg
+from mele.nina import NinaClient, NinaCommandResult, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
     SunExclude,
@@ -205,12 +207,17 @@ def run_app(port: int | None = None) -> None:
     weather_dir.mkdir(parents=True, exist_ok=True)
     weather_html = (Path(__file__).resolve().parent / "weather.html").read_text(encoding="utf-8")
     help_html = (Path(__file__).resolve().parent / "help.html").read_text(encoding="utf-8")
+    wiki_html = (Path(__file__).resolve().parent / "wiki.html").read_text(encoding="utf-8")
+    imaging_html = (Path(__file__).resolve().parent / "imaging.html").read_text(encoding="utf-8")
     observe_html = (Path(__file__).resolve().parent / "observe.html").read_text(encoding="utf-8")
     tools_html = (Path(__file__).resolve().parent / "tools.html").read_text(encoding="utf-8")
     app.add_static_files("/mele-media", preview_dir)
     app.add_static_files("/mele-export", settings.horizon_dir)
     app.add_static_files("/mele-source", settings.media_dir)
     app.add_static_files("/mele-static", Path(__file__).resolve().parent / "static")
+    wiki_media_dir = Path(__file__).resolve().parents[1] / "wiki" / "inventar" / "media"
+    wiki_media_dir.mkdir(parents=True, exist_ok=True)
+    app.add_static_files("/wiki-media", wiki_media_dir)
     pano_html = (Path(__file__).resolve().parent / "pano.html").read_text(encoding="utf-8")
     nina = NinaClient(settings.nina_base_url)
     ensure_manager_db(settings.astro_manager_db)
@@ -421,13 +428,25 @@ def run_app(port: int | None = None) -> None:
             asinh_a=float(raw.get("asinh_a") or 0.1),
         )
 
+    def _color_flag(value: object, default: bool = True) -> bool:
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in ("0", "false", "no", "grey", "gray", "mono")
+
     def _session_preview_payload(session_id: int, result) -> dict:
         mtime = int(result.preview_path.stat().st_mtime) if result.preview_path.is_file() else 0
         kind = getattr(result, "kind", "overview") or "overview"
         if kind == "focus":
             url = f"/astro/sessions/{session_id}/preview/focus/file?v={mtime}"
         else:
-            url = f"/astro/sessions/{session_id}/preview/file?v={mtime}"
+            col = "1" if getattr(result, "color", True) else "0"
+            # Graustufen-Cache endet auf .preview.grey.jpg → color=0
+            name = result.preview_path.name
+            if name.endswith(".preview.grey.jpg"):
+                col = "0"
+            url = f"/astro/sessions/{session_id}/preview/file?color={col}&v={mtime}"
         return {
             "ok": True,
             "session_id": session_id,
@@ -439,6 +458,7 @@ def run_app(port: int | None = None) -> None:
     async def astro_session_preview_get(
         session_id: int,
         generate: bool = Query(True),
+        color: str = Query("1"),
     ) -> JSONResponse:
         """Neuestes Session-Preview (bei Bedarf aus FITS erzeugen). FITS unverändert."""
         session = get_session(session_id, db_path=settings.astro_manager_db)
@@ -447,11 +467,14 @@ def run_app(port: int | None = None) -> None:
         local = str(session.local_path or "").strip()
         if not local:
             return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
-        status = session_preview_status(local)
+        want_color = _color_flag(color, default=True)
+        status = session_preview_status(local, color=want_color)
         if not generate:
             return JSONResponse({"ok": True, "session_id": session_id, **status})
         try:
-            result = await run.io_bound(lambda: preview_for_session(local, force=False))
+            result = await run.io_bound(
+                lambda: preview_for_session(local, force=False, color=want_color)
+            )
         except PreviewError as exc:
             return JSONResponse(
                 {"ok": False, "error": str(exc), "session_id": session_id, **status},
@@ -463,7 +486,7 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/astro/sessions/{session_id}/preview")
     async def astro_session_preview_post(session_id: int, request: Request) -> JSONResponse:
-        """Preview neu stretchen (force). Body: stretch/mode, black, white, percentile."""
+        """Preview neu stretchen (force). Body: stretch/mode, color, black, white."""
         session = get_session(session_id, db_path=settings.astro_manager_db)
         if session is None:
             return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
@@ -480,9 +503,12 @@ def run_app(port: int | None = None) -> None:
         force = body.get("force", True)
         if isinstance(force, str):
             force = force.strip().lower() not in ("0", "false", "no")
+        want_color = _color_flag(body.get("color"), default=True)
         try:
             result = await run.io_bound(
-                lambda: preview_for_session(local, stretch=params, force=bool(force))
+                lambda: preview_for_session(
+                    local, stretch=params, force=bool(force), color=want_color
+                )
             )
         except PreviewError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
@@ -491,7 +517,10 @@ def run_app(port: int | None = None) -> None:
         return JSONResponse(_session_preview_payload(session_id, result))
 
     @app.get("/astro/sessions/{session_id}/preview/file", response_model=None)
-    def astro_session_preview_file(session_id: int):
+    def astro_session_preview_file(
+        session_id: int,
+        color: str = Query("1"),
+    ):
         """JPEG ausliefern (Cache-Bust via ?v=)."""
         session = get_session(session_id, db_path=settings.astro_manager_db)
         if session is None:
@@ -499,7 +528,8 @@ def run_app(port: int | None = None) -> None:
         local = str(session.local_path or "").strip()
         if not local:
             return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
-        status = session_preview_status(local)
+        want_color = _color_flag(color, default=True)
+        status = session_preview_status(local, color=want_color)
         path = status.get("preview_path")
         if not path or not Path(path).is_file():
             return JSONResponse({"ok": False, "error": "Kein Preview"}, status_code=404)
@@ -583,6 +613,14 @@ def run_app(port: int | None = None) -> None:
         gain_override = _optional_float_body(body.get("gain"))
         frames_override = _optional_int_body(body.get("frames"))
         reuse_session_id = _optional_int_body(body.get("session_id"))
+        # Multi-Frame-Lauf: Preview nur bei letztem Frame (Frontend setzt false dazwischen)
+        raw_preview = body.get("make_preview")
+        if raw_preview is None:
+            make_preview = True
+        elif isinstance(raw_preview, str):
+            make_preview = raw_preview.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            make_preview = bool(raw_preview)
 
         existing = None
         if reuse_session_id is not None:
@@ -739,19 +777,57 @@ def run_app(port: int | None = None) -> None:
         snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
         target_for_nina = f"{target}_{session_dir_slug(sid)}"
 
+        # Vorherige FITS merken — falls HTTP-Timeout, aber NINA trotzdem speichert
+        fits_before = {str(p) for p in find_fits_files(local_path)}
         try:
-            # Auf fertiges Frame warten — sonst liegt noch kein FITS fürs Preview vor
+            # Wichtig (ninaAPI Camera.cs): onlyAwaitCaptureCompletion wirkt NUR wenn
+            # waitForResult=false. Bei waitForResult=true wird danach trotzdem
+            # await CaptureTask ausgeführt — inkl. PrepareImage (Debayer/Stretch).
+            # onlyAwait: HTTP kehrt nach Ende IsExposing zurück; Speichern/Anzeige
+            # laufen im Hintergrund weiter (FITS ggf. etwas verzögert).
             result = nina.capture(
                 duration_s=float(exposure_s),
                 gain=gain,
                 image_type="LIGHT",
                 save=True,
                 target_name=target_for_nina,
-                wait_for_result=True,
+                wait_for_result=False,
                 omit_image=True,
+                only_await_capture_completion=True,
+                skip_auto_stretch=True,
             )
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+        # Timeout-Fallback: Belichtung lief, HTTP-Client gab auf, FITS kam trotzdem
+        if (not result.ok) and "timeout" in (result.error or "").lower():
+            wait_s = min(150.0, max(20.0, float(exposure_s) + 90.0))
+
+            def _wait_new_fits() -> Path | None:
+                import time
+
+                deadline = time.monotonic() + wait_s
+                while time.monotonic() < deadline:
+                    for path in find_fits_files(local_path):
+                        if str(path) not in fits_before:
+                            try:
+                                if path.stat().st_size >= 1024:
+                                    return path
+                            except OSError:
+                                pass
+                    time.sleep(0.5)
+                return None
+
+            new_fits = await run.io_bound(_wait_new_fits)
+            if new_fits is not None:
+                result = NinaCommandResult(
+                    ok=True,
+                    api_online=True,
+                    message=f"Capture ok (FITS nach Timeout: {new_fits.name})",
+                    error="",
+                    status_code=200,
+                    request=result.request,
+                )
 
         if result.ok:
             try:
@@ -788,7 +864,7 @@ def run_app(port: int | None = None) -> None:
 
         preview_payload: dict | None = None
         preview_error: str | None = None
-        if result.ok:
+        if result.ok and make_preview:
             # NINA kann die Datei kurz nach waitForResult noch finalisieren
             wait_s = min(120.0, max(15.0, float(exposure_s) + 20.0))
             try:
@@ -814,6 +890,7 @@ def run_app(port: int | None = None) -> None:
                 "destination": {k: v.to_dict() for k, v in dest.items()},
                 "snap_sync": {k: v.to_dict() for k, v in snap_sync.items()},
                 "reused_session": existing is not None,
+                "make_preview": make_preview,
                 "preview": preview_payload,
                 "preview_error": preview_error,
                 "error": result.error,
@@ -1011,6 +1088,31 @@ def run_app(port: int | None = None) -> None:
     @app.get("/help-view")
     def help_view() -> HTMLResponse:
         return HTMLResponse(help_html)
+
+    @app.get("/wiki-view")
+    def wiki_view() -> HTMLResponse:
+        return HTMLResponse(wiki_html)
+
+    @app.get("/imaging-view")
+    def imaging_view() -> HTMLResponse:
+        """Touch-freundliches Imaging-Panel (eigenes Browserfenster / iPad)."""
+        return HTMLResponse(imaging_html)
+
+    @app.get("/wiki/index")
+    def wiki_index() -> JSONResponse:
+        try:
+            return JSONResponse(index_payload())
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    @app.get("/wiki/page/{page_id}")
+    def wiki_page(page_id: str) -> JSONResponse:
+        try:
+            return JSONResponse(page_payload(page_id))
+        except FileNotFoundError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
     @app.get("/observe-view")
     def observe_view() -> HTMLResponse:
@@ -2476,6 +2578,9 @@ def run_app(port: int | None = None) -> None:
         def on_open_help() -> None:
             ui.run_javascript("window.open('/help-view', '_blank')")
 
+        def on_open_wiki() -> None:
+            ui.run_javascript("window.open('/wiki-view', '_blank')")
+
         def on_open_observe() -> None:
             if state.latitude_deg is None or state.longitude_deg is None:
                 ui.notify("Zuerst Standort setzen.", type="warning")
@@ -2763,6 +2868,7 @@ def run_app(port: int | None = None) -> None:
             on_open_pano=on_open_pano,
             on_open_weather=on_open_weather,
             on_open_help=on_open_help,
+            on_open_wiki=on_open_wiki,
             on_open_observe=on_open_observe,
             on_open_tools=on_open_tools,
             on_set_site=on_set_site,

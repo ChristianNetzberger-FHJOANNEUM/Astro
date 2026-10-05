@@ -1,0 +1,32 @@
+# MeLE Wissens-Wiki — Navigation
+# Neue Seiten: Markdown-Datei unter wiki/ anlegen und hier eintragen.
+# App-Bedienung (Horizont, Capture, …) bleibt in app_mele/help.html.
+
+sections:
+  - id: meta
+    title: Wiki
+    pages:
+      - id: beitragen
+        title: Beiträge & KI-Antworten
+        file: beitragen.md
+
+  - id: knowledge
+    title: Wissen
+    pages:
+      - id: sternzeit-ra-azimut
+        title: Sternzeit, RA und Azimut
+        file: knowledge/sternzeit-ra-azimut.md
+
+  - id: inventar
+    title: Inventar
+    pages:
+      - id: hardware
+        title: Astro-Inventar (V1)
+        file: inventar/hardware.md
+
+  - id: galerie
+    title: Galerie
+    pages:
+      - id: beste-fotos
+        title: Beste Fotos
+        file: galerie/beste-fotos.md

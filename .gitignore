@@ -92,6 +92,12 @@ media/
 *.fit
 *.mp4
 *.mov
+
+# Ausnahme: Wiki-Inventar-Fotos (kompakt, für App-Anzeige / FOV später)
+!wiki/inventar/media/
+!wiki/inventar/media/**/*.jpg
+!wiki/inventar/media/**/*.jpeg
+!wiki/inventar/media/**/*.png
 *.MP4
 *.MOV
 

@@ -178,6 +178,30 @@ def test_large_frame_downscales_to_max_width(tmp_path: Path) -> None:
     assert result.width == 1600
 
 
+def test_grey_and_color_preview_paths(tmp_path: Path) -> None:
+    session = tmp_path / "s_modes"
+    session.mkdir()
+    h, w = 48, 64
+    cfa = np.random.default_rng(3).integers(100, 900, size=(h, w)).astype(np.uint16)
+    hdr = fits.Header()
+    hdr["BAYERPAT"] = "RGGB"
+    path = session / "m.fits"
+    fits.PrimaryHDU(data=cfa, header=hdr).writeto(path, overwrite=True)
+
+    grey = preview_for_session(session, force=True, color=False)
+    assert grey.color is False
+    assert grey.preview_path.name.endswith(".preview.grey.jpg")
+    with Image.open(grey.preview_path) as img:
+        assert img.mode == "L"
+
+    color = preview_for_session(session, force=True, color=True)
+    assert color.color is True
+    assert color.preview_path.name.endswith(".preview.jpg")
+    assert color.preview_path != grey.preview_path
+    with Image.open(color.preview_path) as img:
+        assert img.mode == "RGB"
+
+
 def test_debayer_rggb_produces_rgb_preview(tmp_path: Path) -> None:
     session = tmp_path / "s_color"
     session.mkdir()

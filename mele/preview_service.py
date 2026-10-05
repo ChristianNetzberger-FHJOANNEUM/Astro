@@ -99,10 +99,16 @@ def preview_dir_for(session_dir: str | Path) -> Path:
     return Path(session_dir) / PREVIEW_SUBDIR
 
 
-def preview_path_for(source: Path, session_dir: str | Path | None = None) -> Path:
-    """JPEG-Ziel: ``{session}/preview/{stem}.preview.jpg``."""
+def preview_path_for(
+    source: Path,
+    session_dir: str | Path | None = None,
+    *,
+    color: bool = True,
+) -> Path:
+    """JPEG-Ziel: ``…preview.jpg`` (Farbe) bzw. ``…preview.grey.jpg``."""
     base = Path(session_dir) if session_dir is not None else source.parent
-    return preview_dir_for(base) / f"{source.stem}.preview.jpg"
+    suffix = ".preview.jpg" if color else ".preview.grey.jpg"
+    return preview_dir_for(base) / f"{source.stem}{suffix}"
 
 
 def focus_path_for(source: Path, session_dir: str | Path | None = None) -> Path:
@@ -151,16 +157,33 @@ def find_latest_fits(session_dir: str | Path) -> Path | None:
     return files[0] if files else None
 
 
-def find_latest_preview(session_dir: str | Path) -> Path | None:
+def find_latest_preview(
+    session_dir: str | Path,
+    *,
+    color: bool | None = None,
+) -> Path | None:
+    """Neuestes Overview-JPEG. ``color=None`` → egal; sonst Farbe bzw. Grau."""
     dest = preview_dir_for(session_dir)
     if not dest.is_dir():
         return None
-    jpgs = sorted(
-        (p for p in dest.glob("*.preview.jpg") if p.is_file()),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return jpgs[0] if jpgs else None
+    if color is True:
+        pattern = "*.preview.jpg"
+        candidates = [
+            p for p in dest.glob(pattern) if p.is_file() and not p.name.endswith(".preview.grey.jpg")
+        ]
+    elif color is False:
+        candidates = [p for p in dest.glob("*.preview.grey.jpg") if p.is_file()]
+    else:
+        candidates = [
+            p
+            for p in dest.iterdir()
+            if p.is_file()
+            and (p.name.endswith(".preview.jpg") or p.name.endswith(".preview.grey.jpg"))
+        ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def _json_safe(value: Any) -> Any:
@@ -515,23 +538,31 @@ def generate_preview(
     session_dir: str | Path | None = None,
     stretch: StretchParams | None = None,
     force: bool = False,
+    color: bool = True,
     max_width: int = DEFAULT_MAX_WIDTH,
     max_height: int = DEFAULT_MAX_HEIGHT,
 ) -> PreviewResult:
-    """FITS → JPEG unter ``preview/``. Originaldatei wird nie verändert."""
+    """FITS → JPEG unter ``preview/``. Originaldatei wird nie verändert.
+
+    ``color=True``: Debayer bei Bayer-CFA. ``color=False``: schnelles Graustufen
+    (CFA/Mono ohne Debayer) — typisch 2–3× schneller.
+    """
     src = Path(source)
     if not src.is_file():
         raise PreviewError(f"Quelle fehlt: {src}")
     sess = Path(session_dir) if session_dir is not None else src.parent
-    dest = preview_path_for(src, sess)
+    want_color = bool(color)
+    dest = preview_path_for(src, sess, color=want_color)
     params = (stretch or StretchParams()).normalized()
 
     if dest.is_file() and not force:
         header = read_fits_header(src) if is_fits_path(src) else {}
-        if not _stale_mono_preview(dest, header):
+        # Nur Farb-Cache invalidieren, wenn versehentlich Graustufen dort liegt
+        stale = want_color and _stale_mono_preview(dest, header)
+        if not stale:
             with Image.open(dest) as existing:
                 w, h = existing.size
-                color = existing.mode == "RGB"
+                is_color = existing.mode == "RGB"
             return PreviewResult(
                 preview_path=dest,
                 source_path=src,
@@ -542,12 +573,12 @@ def generate_preview(
                 source_height=int(header.get("NAXIS2") or 0),
                 stretch=asdict(params),
                 created=False,
-                color=color,
+                color=is_color,
                 bayer=bayer_pattern_from_header(header),
                 kind="overview",
             )
 
-    data, header, bayer = load_source_image(src, debayer=True)
+    data, header, bayer = load_source_image(src, debayer=want_color)
     # Quellgröße aus Header (CFA), nicht aus ggf. half-res Debayer-Array
     src_w = int(header.get("NAXIS1") or 0)
     src_h = int(header.get("NAXIS2") or 0)
@@ -559,12 +590,23 @@ def generate_preview(
             if bayer:
                 src_w *= 2
                 src_h *= 2
-    color = data.ndim == 3
+    # SW-Übersicht: 2×2 mitteln (wie Half-Res-Debayer) — sonst Stretch auf 24 MP
+    if not want_color and data.ndim == 2 and min(data.shape) >= 4:
+        h2 = data.shape[0] - (data.shape[0] % 2)
+        w2 = data.shape[1] - (data.shape[1] % 2)
+        d = data[:h2, :w2]
+        data = (
+            d[0::2, 0::2] + d[0::2, 1::2] + d[1::2, 0::2] + d[1::2, 1::2]
+        ) * 0.25
+    is_color = data.ndim == 3
 
     stretched, stretch_meta = apply_stretch(data, params)
-    if bayer:
+    stretch_meta["color"] = want_color
+    if bayer and want_color:
         stretch_meta["debayer"] = bayer
         stretch_meta["debayer_quality"] = "half"
+    elif not want_color:
+        stretch_meta["grey_bin"] = 2
     image = array_to_uint8_image(stretched)
     width, height = write_preview_jpeg(
         image,
@@ -582,8 +624,8 @@ def generate_preview(
         source_height=int(src_h),
         stretch=stretch_meta,
         created=True,
-        color=color,
-        bayer=bayer,
+        color=is_color,
+        bayer=bayer_pattern_from_header(header),
         kind="overview",
     )
 
@@ -800,6 +842,7 @@ def preview_for_session(
     *,
     stretch: StretchParams | None = None,
     force: bool = False,
+    color: bool = True,
     max_width: int = DEFAULT_MAX_WIDTH,
     max_height: int = DEFAULT_MAX_HEIGHT,
 ) -> PreviewResult:
@@ -815,6 +858,7 @@ def preview_for_session(
         session_dir=root,
         stretch=stretch,
         force=force,
+        color=color,
         max_width=max_width,
         max_height=max_height,
     )
@@ -861,6 +905,7 @@ def wait_and_preview(
     timeout_s: float = 90.0,
     stretch: StretchParams | None = None,
     force: bool = True,
+    color: bool = True,
 ) -> PreviewResult:
     """Nach Capture: auf FITS warten, dann JPEG erzeugen."""
     fits_path = wait_for_fits(session_dir, timeout_s=timeout_s)
@@ -871,14 +916,19 @@ def wait_and_preview(
         session_dir=session_dir,
         stretch=stretch,
         force=force,
+        color=color,
     )
 
 
-def session_preview_status(session_dir: str | Path) -> dict[str, Any]:
+def session_preview_status(
+    session_dir: str | Path,
+    *,
+    color: bool | None = None,
+) -> dict[str, Any]:
     """Leichte Info ohne Erzeugung (für UI-Polling später)."""
     root = Path(session_dir)
     fits_path = find_latest_fits(root) if root.is_dir() else None
-    preview = find_latest_preview(root) if root.is_dir() else None
+    preview = find_latest_preview(root, color=color) if root.is_dir() else None
     focus = find_latest_focus(root) if root.is_dir() else None
     return {
         "session_dir": str(root),
@@ -888,6 +938,7 @@ def session_preview_status(session_dir: str | Path) -> dict[str, Any]:
         "preview_path": str(preview) if preview else None,
         "has_focus": focus is not None,
         "focus_path": str(focus) if focus else None,
+        "color": color,
     }
 
 

@@ -123,6 +123,7 @@ def build_ui(
     on_open_pano: Callable[[], None],
     on_open_weather: Callable[[], None],
     on_open_help: Callable[[], None],
+    on_open_wiki: Callable[[], None],
     on_open_observe: Callable[[], None],
     on_open_tools: Callable[[], None],
     on_set_site: Callable[[float, float, str], None],
@@ -168,7 +169,10 @@ def build_ui(
                     "Neues Fenster: GeoSphere-Bewoelkung, Wind, Feuchte (~60 h). Cache lokal."
                 )
                 ui.button("Hilfe", icon="help", on_click=on_open_help).props("flat dense").tooltip(
-                    "Wiki: Horizont, Einnorden, Hybrid, Wetter-Journal"
+                    "App-Bedienung: Horizont, Einnorden, Hybrid, Wetter-Journal"
+                )
+                ui.button("Wiki", icon="menu_book", on_click=on_open_wiki).props("flat dense").tooltip(
+                    "Wissen, Inventar, Galerie — Markdown unter wiki/"
                 )
                 ui.button("Almanach", icon="event", on_click=on_open_observe).props("flat dense").tooltip(
                     "Sichtbarkeit Messier/Sterne · Tonight-Liste"

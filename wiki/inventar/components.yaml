@@ -1,0 +1,69 @@
+# Optische Komponenten — IDs = Ordner wiki/inventar/media/<ID>_*.jpg
+# Später für FOV / Vergrößerung / Brennweite im 360-Viewer.
+# fl_mm = Brennweite [mm]; aperture_mm = Öffnung; kind = ocular|scope|barlow|reducer|camera|other
+
+components:
+  - id: OKU-001
+    name: Lacerta UWA 16 mm
+    kind: ocular
+    fl_mm: 16
+    barrel_inch: 1.25
+
+  - id: OKU-002
+    name: Lacerta UWA 28 mm
+    kind: ocular
+    fl_mm: 28
+    barrel_inch: 2.0
+
+  - id: OKU-003
+    name: Long Eye Relief 20 mm
+    kind: ocular
+    fl_mm: 20
+    barrel_inch: 1.25
+
+  - id: OKU-004
+    name: Long Eye Relief 5 mm
+    kind: ocular
+    fl_mm: 5
+    barrel_inch: 1.25
+
+  - id: OKU-005
+    name: Super 25 Long Eye Relief
+    kind: ocular
+    fl_mm: 25
+    barrel_inch: 1.25
+
+  - id: OPT-003
+    name: GSO ED 2× Barlow
+    kind: barlow
+    factor: 2.0
+
+  - id: OPT-004
+    name: 2× TeleXtender
+    kind: barlow
+    factor: 2.0
+
+  - id: OPT-001
+    name: Lacerta Universal Field Flattener
+    kind: flattener
+    # am Lacerta 80/500
+    scope_fl_mm: 500
+    scope_aperture_mm: 80
+    backfocus_mm: 64
+
+  - id: OPT-002
+    name: 0,79× Photo Reducer/Flattener
+    kind: reducer
+    factor: 0.79
+    scope_fl_mm: 500
+    scope_aperture_mm: 80
+    effective_fl_mm: 395
+    backfocus_mm: 63.5
+
+# Teleskop-Stamm (noch ohne eigene Inventar-ID im HTML)
+scopes:
+  - id: SCOPE-080500
+    name: Lacerta 80/500 ED-APO
+    fl_mm: 500
+    aperture_mm: 80
+    f_ratio: 6.25

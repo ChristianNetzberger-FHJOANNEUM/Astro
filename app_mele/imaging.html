@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MeLE Imaging</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #0f172a;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --btn: #1f4e5f;
+      --ok: #15803d;
+      --danger: #b91c1c;
+      --touch: 48px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #top {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 10px 12px; background: rgba(15,23,42,.97);
+      border-bottom: 1px solid var(--border);
+    }
+    #top a, #top button, .btn {
+      min-height: var(--touch); min-width: var(--touch);
+      padding: 10px 14px; border: 0; border-radius: 8px;
+      background: var(--btn); color: var(--text); font-size: 15px;
+      cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #top .title { flex: 1; min-width: 140px; font-size: 18px; font-weight: 650; }
+    #top .meta { width: 100%; font-size: 12px; color: var(--muted); }
+    main.layout {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 12px 14px 40px;
+      max-width: 1480px;
+      margin: 0 auto;
+      align-items: start;
+    }
+    .col-left, .col-main, .col-preview {
+      display: flex; flex-direction: column; gap: 12px; min-width: 0;
+    }
+    /* Landscape iPad / Desktop: Auswahl links, Arbeit rechts; Preview unter Session */
+    @media (min-width: 800px) {
+      main.layout {
+        grid-template-columns: minmax(260px, 1fr) minmax(380px, 2fr);
+      }
+      .col-left { grid-column: 1; grid-row: 1 / span 2; }
+      .col-main { grid-column: 2; grid-row: 1; }
+      .col-preview { grid-column: 2; grid-row: 2; }
+    }
+    /* Sehr breit: Preview als 3. Spalte */
+    @media (min-width: 1200px) {
+      main.layout {
+        grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.25fr) minmax(300px, 1.1fr);
+      }
+      .col-left { grid-column: 1; grid-row: 1; }
+      .col-main { grid-column: 2; grid-row: 1; }
+      .col-preview { grid-column: 3; grid-row: 1; }
+    }
+    section {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px; margin: 0;
+    }
+    h2 { margin: 0 0 10px; font-size: 15px; color: #7dd3fc; text-transform: uppercase;
+         letter-spacing: .04em; }
+    .sum { white-space: pre-wrap; font-size: 14px; line-height: 1.45; margin: 0 0 8px; }
+    .status {
+      margin: 8px 0 0; font-size: 14px; opacity: .9; white-space: pre-wrap;
+      min-height: 1.2em;
+    }
+    label.field {
+      display: flex; flex-direction: column; gap: 4px;
+      font-size: 13px; color: var(--muted); margin: 0 0 10px;
+    }
+    label.field.span2 { grid-column: 1 / -1; }
+    input, select, textarea {
+      min-height: var(--touch); width: 100%;
+      background: #020617; color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; font-size: 16px; /* iOS zoom vermeiden */
+    }
+    textarea { min-height: 88px; resize: vertical; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+    @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .list { list-style: none; margin: 0; padding: 0; }
+    .list li {
+      margin: 0 0 8px; padding: 10px 12px;
+      background: rgba(2,6,23,.55); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .list .meta { font-size: 13px; opacity: .8; margin-top: 4px; }
+    .list-scroll {
+      max-height: min(28vh, 220px); overflow: auto; -webkit-overflow-scrolling: touch;
+    }
+    @media (min-width: 800px) {
+      .list-scroll { max-height: min(36vh, 280px); }
+    }
+    details.form { margin-top: 8px; }
+    details.form summary {
+      cursor: pointer; font-weight: 600; font-size: 15px;
+      min-height: var(--touch); display: flex; align-items: center;
+    }
+    .btn.ok { background: var(--ok); }
+    .btn.danger { background: var(--danger); }
+    .btn.capture { background: #475569; font-size: 18px; min-width: 56px; }
+    .btn.capture.run { background: #16a34a; box-shadow: 0 0 0 2px rgba(74,222,128,.45); }
+    .btn.capture.done { background: #15803d; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .session-detail {
+      margin: 0 0 8px; padding: 10px 12px;
+      background: rgba(2,6,23,.55); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .session-detail.empty { opacity: .7; font-size: 14px; }
+    .run-stats {
+      margin-top: 8px; padding: 8px 10px;
+      background: rgba(15,23,42,.85); border: 1px solid var(--border); border-radius: 8px;
+      font-size: 14px; font-variant-numeric: tabular-nums; line-height: 1.45;
+    }
+    .run-stats .run-live { color: #86efac; }
+    .run-stats .muted { color: var(--muted); font-size: 12px; }
+    .busy { display: inline-flex; margin-left: 6px; animation: spin 1.1s steps(2) infinite; }
+    @keyframes spin { 50% { transform: rotate(180deg); } 100% { transform: rotate(360deg); } }
+    .preview img {
+      display: block; width: 100%; max-height: min(42vh, 420px); object-fit: contain;
+      background: #020617; border-radius: 8px; border: 1px solid var(--border);
+    }
+    @media (min-width: 1200px) {
+      .preview img { max-height: min(70vh, 560px); }
+      .col-preview { position: sticky; top: 72px; }
+    }
+    .preview .hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
+    .preview .meta { font-size: 12px; opacity: .75; white-space: pre-wrap; margin-top: 6px; }
+    .arch-local { color: #fbbf24; }
+    .arch-archived { color: #5eead4; }
+    .toggle {
+      display: inline-flex; align-items: center; gap: 8px;
+      min-height: var(--touch); font-size: 15px; color: var(--text);
+    }
+    .toggle input { width: 22px; height: 22px; min-height: 22px; }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <a href="/">App</a>
+    <a href="/pano-view" id="link-pano">360°</a>
+    <div class="title" id="obj-title">Imaging</div>
+    <button type="button" id="btn-refresh" class="btn" title="Neu laden">↻</button>
+    <div class="meta" id="obj-meta">Objekt aus dem 360-Viewer wählen…</div>
+  </div>
+  <main class="layout">
+    <div class="col-left">
+      <section>
+        <h2>Übersicht</h2>
+        <p class="sum" id="img-sum">—</p>
+        <p class="status" id="img-status"></p>
+      </section>
+
+      <section>
+        <h2>Profile</h2>
+        <ul class="list list-scroll" id="img-profiles"></ul>
+        <details class="form" id="img-profile-form-box">
+          <summary>Profil anlegen / bearbeiten</summary>
+          <form id="img-profile-form" class="grid" style="margin-top:10px;">
+            <input type="hidden" id="img-profile-id" value="">
+            <label class="field span2">Label <input id="img-profile-label" required placeholder="z.B. S5IIX 60s"></label>
+            <label class="field span2">Equipment <input id="img-profile-equipment"></label>
+            <label class="field">Belichtung [s] <input id="img-profile-exposure" type="number" step="any" min="0" inputmode="decimal"></label>
+            <label class="field">Frames <input id="img-profile-frames" type="number" step="1" min="1" value="1" inputmode="numeric"></label>
+            <label class="field">ISO <input id="img-profile-iso" type="number" step="1" min="0" inputmode="numeric"></label>
+            <label class="field">Gain <input id="img-profile-gain" type="number" step="any" inputmode="decimal"></label>
+            <label class="field">Offset <input id="img-profile-offset" type="number" step="1" inputmode="numeric"></label>
+            <label class="field">Binning <input id="img-profile-binning" value="1x1"></label>
+            <label class="field span2">Filter <input id="img-profile-filter"></label>
+            <label class="field span2">Notizen <textarea id="img-profile-notes"></textarea></label>
+            <div class="span2 row">
+              <button type="submit" class="btn ok">Profil speichern</button>
+              <button type="button" class="btn" id="img-profile-reset">Neu</button>
+            </div>
+          </form>
+        </details>
+      </section>
+
+      <section>
+        <h2>Session wählen</h2>
+        <div class="row">
+          <select id="img-session-pick" style="flex:1;"></select>
+          <button type="button" class="btn" id="img-session-new" title="Neue Session">＋</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-main">
+      <section>
+        <h2>Session</h2>
+        <div id="img-session-detail" class="session-detail empty">Keine Session ausgewählt.</div>
+        <details class="form" id="img-session-form-box">
+          <summary id="img-session-form-sum">Session anlegen / bearbeiten</summary>
+          <form id="img-session-form" class="grid" style="margin-top:10px;">
+            <input type="hidden" id="img-session-edit-id" value="">
+            <label class="field span2">Profil
+              <select id="img-session-profile"></select>
+            </label>
+            <label class="field">Frames geplant <input id="img-session-planned" type="number" step="1" min="0" inputmode="numeric"></label>
+            <label class="field">Frames fertig <input id="img-session-completed" type="number" step="1" min="0" value="0" inputmode="numeric"></label>
+            <label class="field">Belichtung [s] <input id="img-session-exposure" type="number" step="any" min="0" inputmode="decimal"></label>
+            <label class="field">Gain <input id="img-session-gain" type="number" step="any" inputmode="decimal"></label>
+            <label class="field">ISO <input id="img-session-iso" type="number" step="1" min="0" inputmode="numeric"></label>
+            <label class="field">Offset <input id="img-session-offset" type="number" step="1" inputmode="numeric"></label>
+            <label class="field">Binning <input id="img-session-binning" value="1x1"></label>
+            <label class="field">Filter <input id="img-session-filter"></label>
+            <label class="field span2">Equipment <input id="img-session-equipment"></label>
+            <label class="field span2">Archiv
+              <select id="img-session-archive">
+                <option value="local">nur lokal</option>
+                <option value="pending">Archiv ausstehend</option>
+                <option value="archived">archiviert</option>
+                <option value="missing">fehlt</option>
+              </select>
+            </label>
+            <label class="field span2">Lokalpfad <input id="img-session-local"></label>
+            <label class="field span2">Archivpfad <input id="img-session-archive-path"></label>
+            <label class="field span2">Notizen <textarea id="img-session-notes"></textarea></label>
+            <div class="span2 row">
+              <button type="submit" class="btn ok" id="img-session-save">Session speichern</button>
+              <button type="button" class="btn" id="img-session-cancel-edit" style="display:none;">Abbrechen</button>
+            </div>
+          </form>
+        </details>
+      </section>
+    </div>
+
+    <div class="col-preview">
+      <section class="preview">
+        <h2>Letztes Bild</h2>
+        <div class="row" style="margin-bottom:8px;">
+          <label class="toggle"><input type="checkbox" id="chk-color" checked> Farbe</label>
+          <button type="button" class="btn" id="btn-restretch">Neu stretchen</button>
+        </div>
+        <div id="img-session-preview"><div class="hint">Session wählen…</div></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    let imagingCatalogKey = (params.get("key") || "").trim();
+    let imagingDisplayName = (params.get("name") || "").trim();
+    let imagingSuggestedLocal = "";
+    let imagingSuggestedArchive = "";
+    let imagingLoadToken = 0;
+    let imagingProfilesCache = [];
+    let imagingSessionsCache = [];
+    let imagingSelectedSessionId = null;
+    let imagingCapturingSessionId = null;
+    let imagingCaptureAbort = false;
+    let imagingBusyPhase = null;
+    /** Capture-Lauf-Telemetrie (Elapsed / Frames / s pro Frame) */
+    let imagingCaptureRunStartedAt = null;
+    let imagingCaptureRunStartFrames = 0;
+    let imagingCaptureRunTimer = null;
+    let imagingCaptureRunLast = null; /* { elapsedMs, done, planned, tpfS, exposureS } */
+    let imagingSessionEditing = false;
+    let imagingSessionCreating = false;
+    let imagingPreviewColor = (() => {
+      try {
+        const v = localStorage.getItem("mele.imagingPreviewColor");
+        if (v === null) return true;
+        return v === "1" || v === "true";
+      } catch (_) { return true; }
+    })();
+
+    const $ = (id) => document.getElementById(id);
+    function setStatus(msg) { $("img-status").textContent = msg || ""; }
+
+    function setImagingPreviewColor(on) {
+      imagingPreviewColor = !!on;
+      try { localStorage.setItem("mele.imagingPreviewColor", imagingPreviewColor ? "1" : "0"); }
+      catch (_) {}
+      $("chk-color").checked = imagingPreviewColor;
+    }
+
+    function formatIntegration(seconds) {
+      const total = Math.max(0, Math.round(Number(seconds) || 0));
+      if (total <= 0) return "0m";
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    function formatSessionDate(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+      return d.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" });
+    }
+    function archiveLabel(s) {
+      return ({ local: "nur lokal", pending: "Archiv ausstehend", archived: "archiviert", missing: "fehlt" })[s] || s;
+    }
+    function sessionOptionLabel(s) {
+      const code = s.id != null ? `s${String(s.id).padStart(5, "0")}` : "?";
+      const frames = s.frames_completed || 0;
+      const planned = s.frames_planned != null ? Number(s.frames_planned) : null;
+      const fr = planned != null ? `${frames}/${planned}` : String(frames);
+      const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
+      return `${code} · ${formatSessionDate(s.started_utc)} · ${exp} · ${fr} Fr`;
+    }
+    function numOrNull(id) {
+      const v = $(id).value.trim();
+      if (!v) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function resetProfileForm() {
+      $("img-profile-id").value = "";
+      $("img-profile-label").value = "";
+      $("img-profile-equipment").value = "";
+      $("img-profile-exposure").value = "";
+      $("img-profile-frames").value = "1";
+      $("img-profile-iso").value = "";
+      $("img-profile-gain").value = "";
+      $("img-profile-offset").value = "";
+      $("img-profile-binning").value = "1x1";
+      $("img-profile-filter").value = "";
+      $("img-profile-notes").value = "";
+    }
+    function fillProfileForm(p) {
+      $("img-profile-id").value = p.id || "";
+      $("img-profile-label").value = p.label || "";
+      $("img-profile-equipment").value = p.equipment || "";
+      $("img-profile-exposure").value = p.exposure_s != null ? p.exposure_s : "";
+      $("img-profile-frames").value = p.frames != null ? p.frames : "1";
+      $("img-profile-iso").value = p.iso != null ? p.iso : "";
+      $("img-profile-gain").value = p.gain != null ? p.gain : "";
+      $("img-profile-offset").value = p.offset_adu != null ? p.offset_adu : "";
+      $("img-profile-binning").value = p.binning || "1x1";
+      $("img-profile-filter").value = p.filter_name || "";
+      $("img-profile-notes").value = p.notes || "";
+      $("img-profile-form-box").open = true;
+      $("img-profile-label").focus();
+    }
+
+    function applyProfileDefaultsToSession(profile, onlyEmpty) {
+      if (!profile) return;
+      const set = (id, val) => {
+        if (val == null || val === "") return;
+        if (onlyEmpty && $(id).value.trim()) return;
+        $(id).value = val;
+      };
+      set("img-session-planned", profile.frames != null ? String(profile.frames) : "");
+      set("img-session-exposure", profile.exposure_s != null ? String(profile.exposure_s) : "");
+      set("img-session-gain", profile.gain != null ? String(profile.gain) : "");
+      set("img-session-iso", profile.iso != null ? String(profile.iso) : "");
+      set("img-session-offset", profile.offset_adu != null ? String(profile.offset_adu) : "");
+      set("img-session-binning", profile.binning || "1x1");
+      set("img-session-filter", profile.filter_name || "");
+      set("img-session-equipment", profile.equipment || "");
+    }
+    function syncSessionFormFromSelectedProfile(onlyEmpty) {
+      const id = $("img-session-profile").value.trim();
+      const p = imagingProfilesCache.find((x) => String(x.id) === id);
+      applyProfileDefaultsToSession(p, onlyEmpty);
+    }
+    function resetSessionForm() {
+      imagingSessionEditing = false;
+      imagingSessionCreating = false;
+      [
+        "img-session-edit-id", "img-session-profile", "img-session-planned",
+        "img-session-completed", "img-session-exposure", "img-session-gain",
+        "img-session-iso", "img-session-offset", "img-session-binning",
+        "img-session-filter", "img-session-equipment", "img-session-archive",
+        "img-session-local", "img-session-archive-path", "img-session-notes",
+      ].forEach((id) => {
+        if (id === "img-session-completed") $(id).value = "0";
+        else if (id === "img-session-binning") $(id).value = "1x1";
+        else if (id === "img-session-archive") $(id).value = "local";
+        else $(id).value = "";
+      });
+      $("img-session-form-sum").textContent = "Session anlegen / bearbeiten";
+      $("img-session-save").textContent = "Session speichern";
+      $("img-session-cancel-edit").style.display = "none";
+      if (imagingSuggestedLocal) $("img-session-local").value = imagingSuggestedLocal;
+      if (imagingSuggestedArchive) $("img-session-archive-path").placeholder = imagingSuggestedArchive;
+      syncSessionFormFromSelectedProfile(false);
+    }
+    function beginNewSession() {
+      imagingSessionCreating = true;
+      imagingSessionEditing = false;
+      resetSessionForm();
+      imagingSessionCreating = true;
+      $("img-session-form-sum").textContent = "Neue Session anlegen";
+      $("img-session-form-box").open = true;
+      if (imagingProfilesCache.length === 1) {
+        $("img-session-profile").value = String(imagingProfilesCache[0].id);
+        syncSessionFormFromSelectedProfile(false);
+      }
+    }
+    function fillSessionEdit(s) {
+      imagingSessionEditing = true;
+      imagingSessionCreating = false;
+      $("img-session-edit-id").value = s.id || "";
+      $("img-session-profile").value = s.profile_id != null ? String(s.profile_id) : "";
+      $("img-session-planned").value = s.frames_planned != null ? s.frames_planned : "";
+      $("img-session-completed").value = s.frames_completed != null ? s.frames_completed : "0";
+      $("img-session-exposure").value = s.exposure_s != null ? s.exposure_s : "";
+      $("img-session-gain").value = s.gain != null ? s.gain : "";
+      $("img-session-iso").value = s.iso != null ? s.iso : "";
+      $("img-session-offset").value = s.offset_adu != null ? s.offset_adu : "";
+      $("img-session-binning").value = s.binning || "1x1";
+      $("img-session-filter").value = s.filter_name || "";
+      $("img-session-equipment").value = s.equipment || "";
+      $("img-session-archive").value = s.archive_status || "local";
+      $("img-session-local").value = s.local_path || "";
+      $("img-session-archive-path").value = s.archive_path || "";
+      $("img-session-notes").value = s.notes || "";
+      $("img-session-form-sum").textContent = `Session bearbeiten s${String(s.id).padStart(5, "0")}`;
+      $("img-session-save").textContent = "Änderungen speichern";
+      $("img-session-cancel-edit").style.display = "";
+      $("img-session-form-box").open = true;
+    }
+
+    function formatElapsedClock(ms) {
+      const total = Math.max(0, Math.floor(Number(ms) / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function captureRunStatsSnapshot(session) {
+      const frames = Number(session?.frames_completed || 0);
+      const planned = session?.frames_planned != null ? Number(session.frames_planned) : null;
+      const exposureS = session?.exposure_s != null ? Number(session.exposure_s) : null;
+      const live = imagingCaptureRunStartedAt != null;
+      const elapsedMs = live
+        ? (Date.now() - imagingCaptureRunStartedAt)
+        : (imagingCaptureRunLast?.elapsedMs ?? 0);
+      const done = live
+        ? Math.max(0, frames - imagingCaptureRunStartFrames)
+        : (imagingCaptureRunLast?.done ?? 0);
+      const tpfS = done > 0 ? (elapsedMs / 1000) / done : null;
+      return { frames, planned, exposureS, live, elapsedMs, done, tpfS };
+    }
+
+    function updateCaptureRunStats() {
+      const el = $("img-run-stats");
+      if (!el) return;
+      const s = imagingSessionsCache.find(
+        (x) => String(x.id) === String(imagingSelectedSessionId)
+      );
+      if (!s) {
+        el.textContent = "";
+        return;
+      }
+      const st = captureRunStatsSnapshot(s);
+      const plannedLabel = st.planned != null && Number.isFinite(st.planned)
+        ? String(st.planned)
+        : "?";
+      const tpfLabel = st.tpfS != null ? `${st.tpfS.toFixed(1)} s/Fr` : "— s/Fr";
+      let overhead = "";
+      if (st.tpfS != null && st.exposureS != null && Number.isFinite(st.exposureS)) {
+        const oh = st.tpfS - st.exposureS;
+        overhead = ` · Overhead ${oh >= 0 ? "+" : ""}${oh.toFixed(1)}s`;
+      }
+      const liveCls = st.live ? " run-live" : "";
+      el.innerHTML =
+        `<div class="${liveCls}">` +
+        `⏱ ${formatElapsedClock(st.elapsedMs)}` +
+        ` · Frames <strong>${st.frames}</strong>/${plannedLabel}` +
+        ` · <strong>${tpfLabel}</strong>${overhead}` +
+        `</div>` +
+        `<div class="muted">Gesamtzeit/Frame = Elapsed ÷ fertige Frames dieses Laufs` +
+        (st.live ? " (live)" : (imagingCaptureRunLast ? " (letzter Lauf)" : "")) +
+        `</div>`;
+    }
+
+    function startCaptureRunTimer(session) {
+      imagingCaptureRunStartedAt = Date.now();
+      imagingCaptureRunStartFrames = Number(session.frames_completed || 0);
+      imagingCaptureRunLast = null;
+      if (imagingCaptureRunTimer) clearInterval(imagingCaptureRunTimer);
+      imagingCaptureRunTimer = setInterval(updateCaptureRunStats, 250);
+      updateCaptureRunStats();
+    }
+
+    function stopCaptureRunTimer() {
+      if (imagingCaptureRunTimer) {
+        clearInterval(imagingCaptureRunTimer);
+        imagingCaptureRunTimer = null;
+      }
+      const s = imagingSessionsCache.find(
+        (x) => String(x.id) === String(imagingSelectedSessionId)
+      );
+      if (imagingCaptureRunStartedAt != null && s) {
+        const st = captureRunStatsSnapshot(s);
+        imagingCaptureRunLast = {
+          elapsedMs: st.elapsedMs,
+          done: st.done,
+          planned: st.planned,
+          tpfS: st.tpfS,
+          exposureS: st.exposureS,
+        };
+      }
+      imagingCaptureRunStartedAt = null;
+      updateCaptureRunStats();
+    }
+
+    function renderSelectedSessionDetail() {
+      const box = $("img-session-detail");
+      const s = imagingSessionsCache.find((x) => String(x.id) === String(imagingSelectedSessionId));
+      if (!s) {
+        box.className = "session-detail empty";
+        box.textContent = "Keine Session ausgewählt.";
+        $("img-session-preview").innerHTML = `<div class="hint">Session wählen…</div>`;
+        return;
+      }
+      const frames = s.frames_completed || 0;
+      const planned = s.frames_planned != null ? Number(s.frames_planned) : null;
+      const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
+      const integ = s.integration_s != null
+        ? formatIntegration(s.integration_s)
+        : formatIntegration((s.exposure_s || 0) * frames);
+      const arch = s.archive_status || "local";
+      const code = `s${String(s.id).padStart(5, "0")}`;
+      const capturing = String(imagingCapturingSessionId) === String(s.id);
+      let capClass = "btn capture";
+      if (capturing) capClass += " run";
+      else if (frames > 0) capClass += " done";
+      const frameLine = planned != null
+        ? `${frames}/${planned} × ${exp}`
+        : `${frames} × ${exp}`;
+
+      box.className = "session-detail";
+      box.innerHTML =
+        `<div><strong>${formatSessionDate(s.started_utc)}</strong> <code>${code}</code> ` +
+        `${frameLine} · ${integ} ` +
+        `<span class="arch-${arch}">✓ ${archiveLabel(arch)}</span></div>` +
+        `<div class="meta" style="margin-top:6px;font-size:13px;opacity:.8;word-break:break-word;">` +
+        `${s.local_path || "(kein Lokalpfad)"}` +
+        (s.equipment ? `<br>${s.equipment}` : "") +
+        `</div>` +
+        `<div class="run-stats" id="img-run-stats"></div>`;
+      updateCaptureRunStats();
+      const actions = document.createElement("div");
+      actions.className = "row";
+      actions.style.marginTop = "10px";
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn";
+      editBtn.textContent = "Bearbeiten";
+      editBtn.addEventListener("click", () => fillSessionEdit(s));
+      const remainHint = (planned != null && planned > frames)
+        ? ` ${frames}/${planned}`
+        : "";
+      const capBtn = document.createElement("button");
+      capBtn.type = "button";
+      capBtn.className = capClass;
+      if (capturing) {
+        capBtn.textContent = "⏹ Stop";
+        capBtn.title = "Capture-Lauf abbrechen (nach aktuellem Frame)";
+        capBtn.addEventListener("click", () => { imagingCaptureAbort = true; });
+      } else {
+        capBtn.textContent = "▶ Capture" + remainHint;
+        capBtn.title = planned != null && planned > frames
+          ? `Restliche Frames: ${planned - frames}`
+          : "NINA Capture-Lauf";
+        capBtn.addEventListener("click", () => captureImagingSession(s));
+      }
+      actions.appendChild(editBtn);
+      actions.appendChild(capBtn);
+      if (capturing) {
+        const glass = document.createElement("span");
+        glass.className = "busy";
+        glass.textContent = "⏳";
+        actions.appendChild(glass);
+      }
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn danger";
+      delBtn.textContent = "Löschen";
+      delBtn.disabled = capturing;
+      delBtn.addEventListener("click", () => deleteImagingSession(s.id));
+      actions.appendChild(delBtn);
+      box.appendChild(actions);
+      // Während Capture kein Preview-Reload (sonst flackert der Timer-Bereich)
+      if (!capturing) {
+        loadSessionPreview(s.id, $("img-session-preview"));
+      }
+    }
+
+    async function loadSessionPreview(sessionId, wrap, opts) {
+      if (!wrap || !sessionId) return;
+      const force = opts && opts.force;
+      const wantColor = (opts && opts.color != null) ? !!opts.color : imagingPreviewColor;
+      wrap.innerHTML = `<div class="hint">Lade Preview…</div>`;
+      try {
+        let response;
+        if (force) {
+          response = await fetch(`/astro/sessions/${sessionId}/preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ stretch: "auto", force: true, color: wantColor }),
+          });
+        } else {
+          response = await fetch(`/astro/sessions/${sessionId}/preview?color=${wantColor ? "1" : "0"}`);
+        }
+        const data = await response.json();
+        if (String(imagingSelectedSessionId) !== String(sessionId)) return;
+        if (!response.ok || !data.ok) {
+          wrap.innerHTML = `<div class="hint">${data.error || "Kein Preview"}</div>`;
+          return;
+        }
+        const img = document.createElement("img");
+        img.alt = "Preview";
+        img.src = data.preview_url;
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const name = data.source_path
+          ? String(data.source_path).replace(/\\/g, "/").split("/").pop()
+          : "";
+        meta.textContent = [
+          name,
+          data.color ? "Farbe" : "SW",
+          data.width && data.height ? `${data.width}×${data.height}` : "",
+        ].filter(Boolean).join(" · ");
+        wrap.innerHTML = "";
+        wrap.appendChild(img);
+        wrap.appendChild(meta);
+      } catch (err) {
+        wrap.innerHTML = `<div class="hint">${String(err.message || err)}</div>`;
+      }
+    }
+
+    function renderImaging(data) {
+      const profiles = data.profiles || [];
+      imagingProfilesCache = profiles;
+      const sessions = data.sessions || [];
+      imagingSuggestedLocal = data.suggested_local_path || "";
+      imagingSuggestedArchive = data.suggested_archive_path || "";
+      const key = imagingCatalogKey || data.catalog_key || "—";
+      const nice = imagingDisplayName || data.display_name || "";
+      $("obj-title").textContent = nice || key;
+      $("obj-meta").textContent = nice && nice !== key ? `${nice} · ${key}` : key;
+      document.title = `${nice || key} · Imaging`;
+
+      $("img-sum").textContent =
+        `Objekt: ${nice && nice !== key ? `${nice} (${key})` : key}\n` +
+        `${profiles.length} Profil(e) · ${sessions.length} Session(s)\n` +
+        `Gesamtintegration: ${formatIntegration(data.total_integration_s)}\n` +
+        `Lokal: ${data.local_capture_root || "—"}\n` +
+        `Archiv: ${data.archive_root || "—"}`;
+
+      const profileUl = $("img-profiles");
+      profileUl.innerHTML = "";
+      if (!profiles.length) {
+        profileUl.innerHTML = "<li>Noch keine Profile.</li>";
+      }
+      profiles.forEach((p) => {
+        const li = document.createElement("li");
+        const bits = [];
+        if (p.exposure_s != null) bits.push(`${p.exposure_s}s`);
+        if (p.frames) bits.push(`${p.frames}×`);
+        if (p.iso != null) bits.push(`ISO ${p.iso}`);
+        if (p.gain != null) bits.push(`gain ${p.gain}`);
+        if (p.filter_name) bits.push(p.filter_name);
+        if (p.equipment) bits.push(p.equipment);
+        li.innerHTML = `<strong>${p.label || "Profil"}</strong><div class="meta">${bits.join(" · ") || "—"}</div>`;
+        const actions = document.createElement("div");
+        actions.className = "row";
+        actions.style.marginTop = "8px";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "btn";
+        editBtn.textContent = "Bearbeiten";
+        editBtn.addEventListener("click", () => fillProfileForm(p));
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "btn danger";
+        delBtn.textContent = "Löschen";
+        delBtn.addEventListener("click", () => deleteImagingProfile(p.id));
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        li.appendChild(actions);
+        profileUl.appendChild(li);
+      });
+
+      const sel = $("img-session-profile");
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">(Profil wählen)</option>';
+      profiles.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = String(p.id);
+        opt.textContent = p.label || `Profil ${p.id}`;
+        sel.appendChild(opt);
+      });
+      if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+      else if (profiles.length === 1) sel.value = String(profiles[0].id);
+      if (!imagingSessionEditing) syncSessionFormFromSelectedProfile(false);
+
+      imagingSessionsCache = sessions;
+      const pick = $("img-session-pick");
+      const prevSession = imagingSelectedSessionId != null
+        ? String(imagingSelectedSessionId) : pick.value;
+      pick.innerHTML = "";
+      const noneS = document.createElement("option");
+      noneS.value = "";
+      noneS.textContent = sessions.length ? "(Session wählen)" : "(keine Sessions)";
+      pick.appendChild(noneS);
+      sessions.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = String(s.id);
+        opt.textContent = sessionOptionLabel(s);
+        pick.appendChild(opt);
+      });
+      if (prevSession && [...pick.options].some((o) => o.value === prevSession)) {
+        pick.value = prevSession;
+        imagingSelectedSessionId = Number(prevSession);
+      } else if (sessions.length) {
+        pick.value = String(sessions[0].id);
+        imagingSelectedSessionId = sessions[0].id;
+      } else {
+        pick.value = "";
+        imagingSelectedSessionId = null;
+      }
+      renderSelectedSessionDetail();
+      if (!imagingSessionEditing) {
+        if (!$("img-session-local").value && imagingSuggestedLocal) {
+          $("img-session-local").value = imagingSuggestedLocal;
+        }
+      }
+    }
+
+    async function loadImaging(catalogKey, displayName) {
+      const token = ++imagingLoadToken;
+      imagingCatalogKey = catalogKey;
+      imagingDisplayName = displayName || "";
+      setStatus("Lade Imaging-Daten…");
+      try {
+        const qs = imagingDisplayName
+          ? `?name=${encodeURIComponent(imagingDisplayName)}`
+          : "";
+        const response = await fetch(`/astro/object/${encodeURIComponent(catalogKey)}${qs}`);
+        const data = await response.json();
+        if (token !== imagingLoadToken) return;
+        if (!response.ok || data.error) {
+          setStatus(data.error || `Fehler ${response.status}`);
+          return;
+        }
+        renderImaging(data);
+        setStatus("");
+        try {
+          const bc = new BroadcastChannel("mele-imaging");
+          bc.postMessage({ type: "loaded", key: catalogKey, name: imagingDisplayName });
+          bc.close();
+        } catch (_) {}
+      } catch (err) {
+        if (token !== imagingLoadToken) return;
+        setStatus(`Imaging nicht erreichbar: ${err.message || err}`);
+      }
+    }
+    async function refreshImaging() {
+      if (imagingCatalogKey) await loadImaging(imagingCatalogKey, imagingDisplayName);
+    }
+
+    async function deleteImagingProfile(profileId) {
+      if (!window.confirm("Profil löschen?")) return;
+      setStatus("Lösche Profil…");
+      try {
+        const response = await fetch(`/astro/profiles/${profileId}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) { setStatus(data.error || "Löschen fehlgeschlagen"); return; }
+        resetProfileForm();
+        await refreshImaging();
+      } catch (err) { setStatus(String(err.message || err)); }
+    }
+    async function deleteImagingSession(sessionId) {
+      if (!window.confirm("Session löschen?")) return;
+      setStatus("Lösche Session…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) { setStatus(data.error || "Löschen fehlgeschlagen"); return; }
+        if (String(imagingSelectedSessionId) === String(sessionId)) imagingSelectedSessionId = null;
+        await refreshImaging();
+      } catch (err) { setStatus(String(err.message || err)); }
+    }
+
+    function imagingFramesRemaining(session) {
+      const planned = session.frames_planned != null ? Number(session.frames_planned) : 1;
+      const done = Number(session.frames_completed || 0);
+      const target = Number.isFinite(planned) && planned > 0 ? planned : 1;
+      if (done >= target) return 1;
+      return Math.max(1, target - done);
+    }
+
+    async function captureImagingSession(session) {
+      if (!imagingCatalogKey || !session || !session.id) return;
+      if (imagingCapturingSessionId) return;
+      imagingCapturingSessionId = session.id;
+      imagingCaptureAbort = false;
+      imagingBusyPhase = "capture";
+      imagingSelectedSessionId = session.id;
+      const total = imagingFramesRemaining(session);
+      let lastData = null;
+      let completedThisRun = 0;
+      startCaptureRunTimer(session);
+      renderSelectedSessionDetail();
+      setStatus(
+        total > 1
+          ? `Capture-Lauf: ${total} Frame(s), Preview nur am Ende…`
+          : "NINA Capture läuft…"
+      );
+      try {
+        for (let i = 0; i < total; i++) {
+          if (imagingCaptureAbort) {
+            setStatus(`Capture abgebrochen nach ${completedThisRun}/${total} Frame(s).`);
+            break;
+          }
+          const isLast = i === total - 1;
+          const makePreview = total === 1 || isLast;
+          setStatus(`Capture ${i + 1}/${total}` + (makePreview ? " (+ Preview)…" : "…"));
+          imagingBusyPhase = "capture";
+          updateCaptureRunStats();
+
+          const response = await fetch("/astro/nina/capture", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              catalog_key: imagingCatalogKey,
+              display_name: imagingDisplayName || "",
+              session_id: session.id,
+              profile_id: session.profile_id,
+              exposure_s: session.exposure_s,
+              gain: session.gain,
+              local_path: session.local_path || imagingSuggestedLocal,
+              archive_path: session.archive_path || imagingSuggestedArchive,
+              frames: 1,
+              make_preview: makePreview,
+            }),
+          });
+          const data = await response.json();
+          lastData = data;
+          if (!response.ok || !data.ok) {
+            setStatus(
+              (data.error || data.capture?.error || "Capture fehlgeschlagen") +
+              ` (nach ${completedThisRun}/${total})`
+            );
+            break;
+          }
+          completedThisRun += 1;
+          if (data.session) {
+            const idx = imagingSessionsCache.findIndex(
+              (x) => String(x.id) === String(session.id)
+            );
+            if (idx >= 0) imagingSessionsCache[idx] = data.session;
+          }
+          updateCaptureRunStats();
+        }
+
+        if (completedThisRun > 0) {
+          const st = captureRunStatsSnapshot(
+            imagingSessionsCache.find((x) => String(x.id) === String(session.id)) || session
+          );
+          let status =
+            `Capture-Lauf ${completedThisRun}/${total}` +
+            (imagingCaptureAbort ? " (abgebrochen)" : "") +
+            (lastData?.session_folder ? ` [${lastData.session_folder}]` : "");
+          if (st.tpfS != null) status += ` · ${st.tpfS.toFixed(1)} s/Fr`;
+          if (lastData?.preview_error) status += ` · Preview: ${lastData.preview_error}`;
+          setStatus(status);
+          imagingBusyPhase = "preview";
+          await refreshImaging();
+          for (let i = 0; i < 12; i++) {
+            const wrap = $("img-session-preview");
+            await loadSessionPreview(session.id, wrap, { color: imagingPreviewColor });
+            if (wrap.querySelector("img")) break;
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+      } catch (err) {
+        setStatus(String(err.message || err));
+      } finally {
+        stopCaptureRunTimer();
+        imagingCapturingSessionId = null;
+        imagingCaptureAbort = false;
+        imagingBusyPhase = null;
+        renderSelectedSessionDetail();
+      }
+    }
+
+    $("img-profile-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!imagingCatalogKey) return;
+      setStatus("Speichere Profil…");
+      try {
+        const body = {
+          catalog_key: imagingCatalogKey,
+          profile_id: numOrNull("img-profile-id"),
+          label: $("img-profile-label").value.trim(),
+          equipment: $("img-profile-equipment").value.trim(),
+          exposure_s: numOrNull("img-profile-exposure"),
+          frames: numOrNull("img-profile-frames"),
+          iso: numOrNull("img-profile-iso"),
+          gain: numOrNull("img-profile-gain"),
+          offset_adu: numOrNull("img-profile-offset"),
+          binning: $("img-profile-binning").value.trim(),
+          filter_name: $("img-profile-filter").value.trim(),
+          notes: $("img-profile-notes").value.trim(),
+        };
+        const response = await fetch("/astro/profiles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) { setStatus(data.error || "Speichern fehlgeschlagen"); return; }
+        resetProfileForm();
+        $("img-profile-form-box").open = false;
+        await refreshImaging();
+        setStatus("Profil gespeichert.");
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("img-profile-reset").addEventListener("click", resetProfileForm);
+
+    $("img-session-pick").addEventListener("change", () => {
+      const v = $("img-session-pick").value;
+      imagingSelectedSessionId = v ? Number(v) : null;
+      renderSelectedSessionDetail();
+    });
+    $("img-session-new").addEventListener("click", beginNewSession);
+    $("img-session-profile").addEventListener("change", () => syncSessionFormFromSelectedProfile(false));
+    $("img-session-cancel-edit").addEventListener("click", () => {
+      resetSessionForm();
+      $("img-session-form-box").open = false;
+    });
+    $("img-session-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!imagingCatalogKey) return;
+      const editId = $("img-session-edit-id").value.trim();
+      setStatus(editId ? "Aktualisiere Session…" : "Lege Session an…");
+      try {
+        const body = {
+          catalog_key: imagingCatalogKey,
+          profile_id: numOrNull("img-session-profile"),
+          frames_planned: numOrNull("img-session-planned"),
+          frames_completed: numOrNull("img-session-completed"),
+          exposure_s: numOrNull("img-session-exposure"),
+          gain: numOrNull("img-session-gain"),
+          iso: numOrNull("img-session-iso"),
+          offset_adu: numOrNull("img-session-offset"),
+          binning: $("img-session-binning").value.trim(),
+          filter_name: $("img-session-filter").value.trim(),
+          equipment: $("img-session-equipment").value.trim(),
+          archive_status: $("img-session-archive").value,
+          local_path: $("img-session-local").value.trim(),
+          archive_path: $("img-session-archive-path").value.trim(),
+          notes: $("img-session-notes").value.trim(),
+          display_name: imagingDisplayName || "",
+        };
+        const response = await fetch(
+          editId ? `/astro/sessions/${editId}` : "/astro/sessions",
+          {
+            method: editId ? "PUT" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) { setStatus(data.error || "Speichern fehlgeschlagen"); return; }
+        if (data.session && data.session.id != null) imagingSelectedSessionId = data.session.id;
+        resetSessionForm();
+        $("img-session-form-box").open = false;
+        await refreshImaging();
+        setStatus("Session gespeichert.");
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+
+    $("chk-color").checked = imagingPreviewColor;
+    $("chk-color").addEventListener("change", async () => {
+      setImagingPreviewColor($("chk-color").checked);
+      if (imagingSelectedSessionId) {
+        await loadSessionPreview(imagingSelectedSessionId, $("img-session-preview"), {
+          force: false,
+          color: imagingPreviewColor,
+        });
+      }
+    });
+    $("btn-restretch").addEventListener("click", async () => {
+      if (!imagingSelectedSessionId) return;
+      await loadSessionPreview(imagingSelectedSessionId, $("img-session-preview"), {
+        force: true,
+        color: imagingPreviewColor,
+      });
+    });
+    $("btn-refresh").addEventListener("click", () => refreshImaging());
+
+    // Pano kann neues Objekt posten
+    try {
+      const bc = new BroadcastChannel("mele-imaging");
+      bc.onmessage = (ev) => {
+        const msg = ev.data || {};
+        if (msg.type === "open" && msg.key) {
+          loadImaging(String(msg.key), msg.name || "");
+          const url = new URL(location.href);
+          url.searchParams.set("key", msg.key);
+          if (msg.name) url.searchParams.set("name", msg.name);
+          else url.searchParams.delete("name");
+          history.replaceState(null, "", url);
+        }
+      };
+    } catch (_) {}
+
+    if (imagingCatalogKey) {
+      loadImaging(imagingCatalogKey, imagingDisplayName);
+    } else {
+      setStatus("Kein Objekt — im 360-Viewer ein Objekt antippen (bei „Imaging-Fenster“).");
+    }
+  </script>
+</body>
+</html>

@@ -586,8 +586,17 @@ class NinaClient:
         target_name: str = "",
         wait_for_result: bool = False,
         omit_image: bool = True,
+        only_await_capture_completion: bool = False,
+        skip_auto_stretch: bool = False,
+        only_save_raw: bool = False,
     ) -> NinaCommandResult:
-        """Ein Frame ueber /equipment/camera/capture (kein Sequencer)."""
+        """Ein Frame ueber /equipment/camera/capture (kein Sequencer).
+
+        ``only_await_capture_completion``: HTTP kehrt zurück, sobald die Kamera
+        nicht mehr belichtet (IsExposing). Wirkt nur mit ``wait_for_result=False`` —
+        bei ``wait_for_result=True`` wartet die API trotzdem auf den kompletten
+        CaptureTask inkl. PrepareImage (Debayer/Stretch). Siehe ninaAPI Camera.cs.
+        """
         duration = _finite(duration_s)
         request_meta: dict[str, Any] = {
             "path": "/equipment/camera/capture",
@@ -598,6 +607,9 @@ class NinaClient:
             "save": bool(save),
             "targetName": target_name,
             "waitForResult": bool(wait_for_result),
+            "onlyAwaitCaptureCompletion": bool(only_await_capture_completion),
+            "skipAutoStretch": bool(skip_auto_stretch),
+            "onlySaveRaw": bool(only_save_raw),
         }
         if duration is None or duration < 0:
             return NinaCommandResult(
@@ -613,14 +625,24 @@ class NinaClient:
             "omitImage": "true" if omit_image else "false",
             "imageType": str(image_type or "LIGHT").strip() or "LIGHT",
         }
+        if only_await_capture_completion:
+            params["onlyAwaitCaptureCompletion"] = "true"
+        if skip_auto_stretch:
+            params["skipAutoStretch"] = "true"
+        if only_save_raw:
+            params["onlySaveRaw"] = "true"
         if gain is not None and _finite(gain) is not None:
             params["gain"] = f"{float(gain):.6f}".rstrip("0").rstrip(".")
         if target_name.strip():
             params["targetName"] = target_name.strip()
         request_meta["query"] = params
+        # onlyAwait hält die HTTP-Verbindung bis Belichtungsende offen —
+        # command_timeout_s (3s) wäre sonst zu kurz und killt den Capture.
         timeout = self.command_timeout_s
-        if wait_for_result:
-            timeout = max(timeout, float(duration) + 30.0)
+        if wait_for_result or only_await_capture_completion:
+            # Belichtung + Download (+ ggf. PrepareImage, falls IsExposing nicht greift)
+            timeout = max(timeout, float(duration) + 180.0)
+        request_meta["timeout_s"] = timeout
         code, payload, err = self._get(
             "/equipment/camera/capture",
             params,
