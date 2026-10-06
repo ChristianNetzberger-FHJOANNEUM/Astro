@@ -104,6 +104,38 @@
     #labels span.dso { color: #fbbf24; }
     #labels span.planet { color: #fdba74; font-weight: 600; }
     #labels span.tonight { color: #4ade80; font-weight: 700; text-shadow: 0 0 6px rgba(34,197,94,.55); }
+    #labels span.spotlight { color: #f472b6; font-weight: 700; text-shadow: 0 0 8px rgba(244,114,182,.65); }
+    #labels span.favorite { color: #fbbf24; font-weight: 700; text-shadow: 0 0 6px rgba(251,191,36,.55); }
+    #sky-search-wrap { display: flex; align-items: center; gap: 4px; position: relative; }
+    #sky-fav-pick {
+      max-width: 11rem; background: #0f172a; color: #e2e8f0;
+      border: 1px solid #475569; border-radius: 4px; padding: 3px 4px; font-size: 12px;
+    }
+    #btn-fav-toggle {
+      min-width: 2.2rem; background: #334155; border: 1px solid #475569; color: #fbbf24;
+      border-radius: 4px; padding: 4px 6px; cursor: pointer; font-size: 14px;
+    }
+    #btn-fav-toggle.on { background: #854d0e; border-color: #fbbf24; }
+    #btn-fav-toggle:disabled { opacity: .35; cursor: not-allowed; }
+    #sky-search {
+      width: 9.5rem; max-width: 28vw; background: #0f172a; color: #e2e8f0;
+      border: 1px solid #475569; border-radius: 4px; padding: 3px 6px; font-size: 13px;
+    }
+    #sky-search-results {
+      display: none; position: absolute; top: 100%; left: 0; z-index: 40;
+      min-width: 16rem; max-width: min(22rem, 90vw); max-height: 14rem; overflow: auto;
+      background: #0f172a; border: 1px solid #475569; border-radius: 4px; margin-top: 2px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    }
+    #sky-search-results button {
+      display: block; width: 100%; text-align: left; background: transparent;
+      border: 0; border-bottom: 1px solid #1e293b; color: #e2e8f0;
+      padding: 6px 8px; font-size: 12px; cursor: pointer;
+    }
+    #sky-search-results button:hover, #sky-search-results button.active {
+      background: #1e293b; color: #f9a8d4;
+    }
+    #sky-search-results .meta { opacity: .65; font-size: 11px; }
     #track-labels span { position: absolute; transform: translate(-50%, 90%);
       font-size: 11px; font-variant-numeric: tabular-nums; text-shadow: 0 0 5px #020617; white-space: nowrap; }
     #track-labels span.night { color: #5eead4; }
@@ -146,6 +178,15 @@
     <label><input id="chk-ngc" type="checkbox"> NGC</label>
     <label><input id="chk-planets" type="checkbox" checked> Mond/Planeten</label>
     <label><input id="chk-tonight" type="checkbox"> Tonight</label>
+    <label><input id="chk-favorites" type="checkbox"> Favoriten</label>
+    <select id="sky-fav-pick" title="Favorit wählen">
+      <option value="">★ Favoriten…</option>
+    </select>
+    <span id="sky-search-wrap">
+      <input id="sky-search" type="search" placeholder="Suche NGC6960…" autocomplete="off" spellcheck="false">
+      <button id="btn-sky-search" type="button" title="Objekt suchen und zentrieren">⌕</button>
+      <div id="sky-search-results" role="listbox"></div>
+    </span>
     <label>mag <input id="mag" type="range" min="0" max="9" step="0.5" value="5.5">
       <span id="mag-val">5.5</span></label>
     <input id="when" type="datetime-local">
@@ -253,6 +294,7 @@
     </p>
     <p id="info-windows"></p>
     <div class="goto-row">
+      <button id="btn-fav-toggle" type="button" disabled title="Zu Favoriten hinzufügen/entfernen">☆</button>
       <button id="btn-goto" type="button" disabled>GoTo</button>
     </div>
     <div id="goto-confirm">
@@ -358,6 +400,8 @@
     scene.add(mountGroup);
     const targetGroup = new THREE.Group();
     scene.add(targetGroup);
+    const spotlightGroup = new THREE.Group();
+    scene.add(spotlightGroup);
     const raycaster = new THREE.Raycaster();
     const labelBox = document.getElementById("labels");
     const trackLabelBox = document.getElementById("track-labels");
@@ -370,6 +414,12 @@
     let lastSky = null;
     let tonightMarkers = [];
     let tonightLoading = false;
+    let spotlightItem = null; // aktives Such-/Favoriten-Objekt
+    let spotlightKey = "";
+    let spotlightLabelItem = null;
+    let favoritesCache = []; // [{key,name,kind,...}]
+    let favoriteMarkers = [];
+    let favoritesLoading = false;
     let selected = null;
     let infoOpen = false;
     let starScale = 1;
@@ -566,6 +616,15 @@
         Math.cos(phi),
         Math.sin(phi) * Math.sin(theta),
       );
+    }
+
+    /** Blickrichtung auf Himmelsposition (Azimut/Höhe). */
+    function lookAtAzAlt(az, alt, { zoom } = {}) {
+      if (!Number.isFinite(az) || !Number.isFinite(alt)) return;
+      lon = wrap360(Number(az) + northOffset);
+      lat = Math.max(-85, Math.min(85, Number(alt)));
+      if (zoom != null && Number.isFinite(zoom)) setFov(zoom);
+      applyLook();
     }
 
     function setFov(next) {
@@ -861,12 +920,18 @@
         labelItems.push({ el: span, az: item.az, alt: item.alt });
       });
       drawTonightHighlights();
+      drawFavoriteHighlights();
+      drawSpotlight();
       const stamp = data.when ? new Date(data.when) : currentWhen();
       const tonightNote = document.getElementById("chk-tonight").checked && tonightMarkers.length
         ? `  ·  Tonight ${tonightMarkers.length}`
         : "";
+      const favNote = document.getElementById("chk-favorites")?.checked && favoriteMarkers.length
+        ? `  ·  ★ ${favoriteMarkers.length}`
+        : "";
+      const spotNote = spotlightItem ? `  ·  ⌕ ${objectTitle(spotlightItem)}` : "";
       document.getElementById("sky-status").textContent =
-        `${stamp.toLocaleString()}  ·  ${data.stars.length} Sterne  ·  ${data.lines.length} Linien  ·  ${data.dso.length} DSO  ·  ${(data.bodies || []).length} Gestirn${tonightNote}`;
+        `${stamp.toLocaleString()}  ·  ${data.stars.length} Sterne  ·  ${data.lines.length} Linien  ·  ${data.dso.length} DSO  ·  ${(data.bodies || []).length} Gestirn${tonightNote}${favNote}${spotNote}`;
       if (selected) {
         const next = pickables.find((item) => sameObject(item, selected));
         if (next) selected = next;
@@ -874,6 +939,52 @@
         else if (document.getElementById("chk-track").checked) loadTrack();
         updateTrackPin();
       }
+      syncFavoriteToggleButton();
+    }
+
+    function drawSpotlight() {
+      // Spotlight liegt in eigener Group — nicht den ganzen Himmel neu bauen
+      disposeGroup(spotlightGroup);
+      if (spotlightLabelItem && spotlightLabelItem.el) {
+        try { spotlightLabelItem.el.remove(); } catch (_err) { /* */ }
+      }
+      labelItems = labelItems.filter((item) => item !== spotlightLabelItem);
+      spotlightLabelItem = null;
+      pickables = pickables.filter((p) => !p.spotlight);
+
+      if (!spotlightItem) return;
+      const item = spotlightItem;
+      if (!Number.isFinite(item.az) || !Number.isFinite(item.alt)) return;
+
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(8, 12, 10),
+        new THREE.MeshBasicMaterial({
+          color: item.above === false ? 0x9d174d : 0xf472b6,
+          transparent: true,
+          opacity: item.above === false ? 0.55 : 0.95,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      mesh.position.copy(azAltToVec(item.az, item.alt, 462));
+      mesh.renderOrder = 12;
+      spotlightGroup.add(mesh);
+
+      const pick = {
+        ...item,
+        id: item.id || item.key,
+        kind: item.kind || "ngc",
+        spotlight: true,
+      };
+      pickables.push(pick);
+
+      const span = document.createElement("span");
+      span.textContent = objectTitle(item);
+      span.className = item.above === false ? "spotlight below" : "spotlight";
+      if (item.above === false) span.style.opacity = "0.55";
+      labelBox.appendChild(span);
+      spotlightLabelItem = { el: span, az: item.az, alt: item.alt };
+      labelItems.push(spotlightLabelItem);
     }
 
     function drawTonightHighlights() {
@@ -901,6 +1012,172 @@
       });
     }
 
+    function drawFavoriteHighlights() {
+      const chk = document.getElementById("chk-favorites");
+      if (!chk || !chk.checked || !favoriteMarkers.length) return;
+      const visible = favoriteMarkers.filter((item) => Number.isFinite(item.az) && Number.isFinite(item.alt));
+      if (!visible.length) return;
+      addDiscs(visible, (item) => ({
+        r: item.above === false ? 0.45 : 0.98,
+        g: item.above === false ? 0.4 : 0.75,
+        b: item.above === false ? 0.15 : 0.2,
+        size: item.above === false ? 12 : 15,
+      }));
+      visible.forEach((item) => {
+        const pick = {
+          ...item,
+          id: item.id || item.key,
+          kind: item.kind || "ngc",
+          favorite: true,
+        };
+        if (!pickables.some((p) => sameObject(p, pick))) pickables.push(pick);
+        const span = document.createElement("span");
+        span.textContent = item.name || item.key || "★";
+        span.className = item.above === false ? "favorite below" : "favorite";
+        if (item.above === false) span.style.opacity = "0.5";
+        labelBox.appendChild(span);
+        labelItems.push({ el: span, az: item.az, alt: item.alt });
+      });
+    }
+
+    function favoriteKeyOf(item) {
+      if (!item) return "";
+      return String(item.key || imagingKey(item) || item.id || "").trim();
+    }
+
+    function isInFavorites(key) {
+      const want = String(key || "").trim();
+      if (!want) return false;
+      return favoritesCache.some((o) => o.key === want);
+    }
+
+    function fillFavoritesSelect() {
+      const sel = document.getElementById("sky-fav-pick");
+      if (!sel) return;
+      const prev = sel.value;
+      sel.innerHTML = `<option value="">★ Favoriten…</option>`;
+      favoritesCache.forEach((o) => {
+        const opt = document.createElement("option");
+        opt.value = o.key;
+        const kind = o.kind ? ` · ${o.kind}` : "";
+        opt.textContent = `${o.name || o.key}${kind}`;
+        sel.appendChild(opt);
+      });
+      if (prev && favoritesCache.some((o) => o.key === prev)) sel.value = prev;
+    }
+
+    async function loadFavoritesList() {
+      try {
+        const response = await fetch("/catalog/favorites");
+        const data = await response.json();
+        favoritesCache = data.ok ? (data.objects || []) : [];
+      } catch (_err) {
+        favoritesCache = [];
+      }
+      fillFavoritesSelect();
+      syncFavoriteToggleButton();
+    }
+
+    async function loadFavoriteMarkers() {
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || latEl.value === "" || lonEl.value === "") {
+        favoriteMarkers = [];
+        return;
+      }
+      if (favoritesLoading) return;
+      favoritesLoading = true;
+      try {
+        const query = new URLSearchParams({
+          lat: String(lat),
+          lon: String(lon),
+          when: currentWhen().toISOString(),
+          stem,
+        });
+        const response = await fetch(`/catalog/favorites/markers?${query}`);
+        const data = await response.json();
+        favoriteMarkers = data.ok ? (data.markers || []) : [];
+      } catch (_err) {
+        favoriteMarkers = [];
+      } finally {
+        favoritesLoading = false;
+      }
+    }
+
+    function syncFavoriteToggleButton() {
+      const btn = document.getElementById("btn-fav-toggle");
+      if (!btn) return;
+      const key = favoriteKeyOf(selected);
+      if (!key || !selected || selected.ra == null || selected.dec == null) {
+        btn.disabled = true;
+        btn.classList.remove("on");
+        btn.textContent = "☆";
+        btn.title = "Objekt wählen, um Favorit zu setzen";
+        return;
+      }
+      btn.disabled = false;
+      const on = isInFavorites(key);
+      btn.classList.toggle("on", on);
+      btn.textContent = on ? "★" : "☆";
+      btn.title = on ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen";
+    }
+
+    async function toggleSelectedFavorite() {
+      const item = selected;
+      const key = favoriteKeyOf(item);
+      if (!key || !item) return;
+      const on = isInFavorites(key);
+      try {
+        if (on) {
+          const response = await fetch("/catalog/favorites", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key }),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            setHint(data.error || "Favorit entfernen fehlgeschlagen");
+            return;
+          }
+          favoritesCache = data.objects || [];
+          setHint(`☆ ${objectTitle(item)} entfernt`);
+        } else {
+          const body = {
+            key,
+            name: item.name || key,
+            kind: item.kind || "",
+            type: item.type || "",
+            mag: item.mag,
+            mag_band: item.mag_band,
+            hip: item.hip,
+            ra: item.ra,
+            dec: item.dec,
+            con: item.con,
+          };
+          const response = await fetch("/catalog/favorites", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            setHint(data.error || "Favorit speichern fehlgeschlagen");
+            return;
+          }
+          favoritesCache = data.objects || [];
+          setHint(`★ ${objectTitle(item)} gespeichert`);
+        }
+        fillFavoritesSelect();
+        syncFavoriteToggleButton();
+        // Favoriten-Layer nur Marker-Daten aktualisieren — kein teures Voll-Redraw
+        if (document.getElementById("chk-favorites")?.checked) {
+          await loadFavoriteMarkers();
+        }
+      } catch (err) {
+        setHint(String(err.message || err));
+      }
+    }
+
     async function loadTonightMarkers() {
       const lat = Number(latEl.value);
       const lon = Number(lonEl.value);
@@ -925,6 +1202,172 @@
       } finally {
         tonightLoading = false;
       }
+    }
+
+    function hideSkySearchResults() {
+      const box = document.getElementById("sky-search-results");
+      if (box) {
+        box.style.display = "none";
+        box.innerHTML = "";
+      }
+    }
+
+    function renderSkySearchHits(hits) {
+      const box = document.getElementById("sky-search-results");
+      if (!box) return;
+      box.innerHTML = "";
+      if (!hits.length) {
+        box.style.display = "none";
+        return;
+      }
+      hits.forEach((hit, index) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("role", "option");
+        if (index === 0) btn.classList.add("active");
+        const kind = hit.kind || "";
+        const mag = hit.mag != null ? ` · ${Number(hit.mag).toFixed(1)} mag` : "";
+        const typ = hit.type ? ` · ${formatDsoType(hit.type)}` : "";
+        btn.innerHTML =
+          `<div>${hit.name || hit.key || "?"}</div>` +
+          `<div class="meta">${hit.key || ""}${kind ? ` · ${kind}` : ""}${typ}${mag}</div>`;
+        btn.addEventListener("click", () => {
+          hideSkySearchResults();
+          activateCatalogQuery(hit.key || hit.name || hit.id);
+        });
+        box.appendChild(btn);
+      });
+      box.style.display = "block";
+    }
+
+    async function runSkySearch(query) {
+      const q = String(query || "").trim();
+      if (q.length < 1) {
+        hideSkySearchResults();
+        return [];
+      }
+      try {
+        const response = await fetch(`/catalog/search?q=${encodeURIComponent(q)}&limit=12`);
+        const data = await response.json();
+        const hits = data.hits || [];
+        renderSkySearchHits(hits);
+        return hits;
+      } catch (_err) {
+        hideSkySearchResults();
+        return [];
+      }
+    }
+
+    async function resolveCatalogQuery(query) {
+      const lat = Number(latEl.value);
+      const lon = Number(lonEl.value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || latEl.value === "" || lonEl.value === "") {
+        setHint("Standort (lat/lon) fehlt — Suche braucht Koordinaten.");
+        return null;
+      }
+      const params = new URLSearchParams({
+        q: String(query || "").trim(),
+        lat: String(lat),
+        lon: String(lon),
+        when: currentWhen().toISOString(),
+        stem,
+      });
+      const response = await fetch(`/catalog/resolve?${params}`);
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.object) {
+        setHint(data.error || `Nicht gefunden: ${query}`);
+        return null;
+      }
+      return data.object;
+    }
+
+    function activateSpotlight(obj, { center = true, openInfo = true } = {}) {
+      if (!obj) return;
+      spotlightItem = obj;
+      spotlightKey = obj.key || obj.id || obj.name || "";
+      if (center && Number.isFinite(obj.az) && Number.isFinite(obj.alt)) {
+        lookAtAzAlt(obj.az, obj.alt, { zoom: Math.min(fov, 55) });
+      }
+      // Nur Spotlight-Layer, kein volles drawOverlay/loadSky (das war >5s)
+      drawSpotlight();
+      if (openInfo) {
+        showInfo({
+          ...obj,
+          id: obj.id || obj.key,
+          kind: obj.kind || "ngc",
+          spotlight: true,
+        });
+      }
+      const below = obj.above === false ? " (unter Horizont/Maske)" : "";
+      setHint(`⌕ ${objectTitle(obj)}${below}`);
+    }
+
+    /** Favorit aus Cache lokal zu Az/h — ohne Server-Roundtrip. */
+    function resolveFavoriteLocal(key) {
+      const want = String(key || "").trim();
+      if (!want) return null;
+      const fav = favoritesCache.find((o) => o.key === want);
+      if (!fav || fav.ra == null || fav.dec == null) return null;
+      const siteLat = Number(latEl.value);
+      const siteLon = Number(lonEl.value);
+      if (!Number.isFinite(siteLat) || !Number.isFinite(siteLon)) return null;
+      try {
+        const horiz = radecToAzAlt(Number(fav.ra), Number(fav.dec), siteLat, siteLon, currentWhen());
+        return {
+          ...fav,
+          id: fav.key,
+          az: horiz.az,
+          alt: horiz.alt,
+          above: Number(horiz.alt) > 0,
+        };
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    async function activateCatalogQuery(query, opts) {
+      const q = String(query || "").trim();
+      if (!q) return;
+      const input = document.getElementById("sky-search");
+      if (input) input.value = q;
+      hideSkySearchResults();
+      // Favoriten: lokal zentrieren (sofort)
+      const local = resolveFavoriteLocal(q);
+      if (local) {
+        activateSpotlight(local, opts);
+        return;
+      }
+      setHint(`Suche ${q} …`);
+      try {
+        const obj = await resolveCatalogQuery(q);
+        if (!obj) return;
+        activateSpotlight(obj, opts);
+      } catch (err) {
+        setHint(String(err.message || err));
+      }
+    }
+
+    async function refreshSpotlightPosition() {
+      if (!spotlightKey) return;
+      try {
+        const obj = await resolveCatalogQuery(spotlightKey);
+        if (!obj) return;
+        spotlightItem = obj;
+      } catch (_err) {
+        /* Spotlight behalten */
+      }
+    }
+
+    let skySearchTimer = null;
+    function scheduleSkySearch() {
+      const input = document.getElementById("sky-search");
+      const q = input ? input.value.trim() : "";
+      if (skySearchTimer) clearTimeout(skySearchTimer);
+      if (q.length < 2) {
+        hideSkySearchResults();
+        return;
+      }
+      skySearchTimer = setTimeout(() => { runSkySearch(q); }, 220);
     }
 
     function projectLabels(items) {
@@ -2351,10 +2794,16 @@
       box.style.display = "block";
       hideGotoConfirm();
       syncGotoButton();
+      syncFavoriteToggleButton();
       updateTrackPin();
-      if (isImagingCatalogItem(item)) {
-        const display = (item.name && String(item.name).trim()) || "";
-        loadImaging(imagingKey(item), display);
+      // Imaging asynchron nach dem Paint — sonst blockiert Favoriten-Sprung spürbar
+      const imagingItem = item;
+      if (isImagingCatalogItem(imagingItem)) {
+        const display = (imagingItem.name && String(imagingItem.name).trim()) || "";
+        const key = imagingKey(imagingItem);
+        setTimeout(() => {
+          if (selected && sameObject(selected, imagingItem)) loadImaging(key, display);
+        }, 0);
       } else {
         clearImagingPanel();
       }
@@ -2383,6 +2832,7 @@
         clearImagingPanel();
       }
       updateTrackPin();
+      syncFavoriteToggleButton();
     }
 
     function updateTrackPin() {
@@ -3001,6 +3451,7 @@
         grid_ecliptic: document.getElementById("chk-ecliptic").checked,
         horizon_points: document.getElementById("chk-horizon-points").checked,
         tonight: document.getElementById("chk-tonight").checked,
+        show_favorites: document.getElementById("chk-favorites")?.checked ?? false,
         show_stars: document.getElementById("chk-stars").checked,
         show_const: document.getElementById("chk-const").checked,
         show_messier: document.getElementById("chk-messier").checked,
@@ -3026,6 +3477,7 @@
             grid_ecliptic: payload.grid_ecliptic ? "1" : "0",
             horizon_points: payload.horizon_points ? "1" : "0",
             tonight: payload.tonight ? "1" : "0",
+            show_favorites: payload.show_favorites ? "1" : "0",
             show_stars: payload.show_stars ? "1" : "0",
             show_const: payload.show_const ? "1" : "0",
             show_messier: payload.show_messier ? "1" : "0",
@@ -3081,6 +3533,10 @@
       }
       if (data.tonight != null) {
         document.getElementById("chk-tonight").checked = Boolean(data.tonight);
+      }
+      if (data.show_favorites != null) {
+        const favChk = document.getElementById("chk-favorites");
+        if (favChk) favChk.checked = Boolean(data.show_favorites);
       }
       if (data.show_stars != null) {
         document.getElementById("chk-stars").checked = Boolean(data.show_stars);
@@ -3162,6 +3618,12 @@
       try {
         if (document.getElementById("chk-tonight").checked) {
           await loadTonightMarkers();
+        }
+        if (document.getElementById("chk-favorites")?.checked) {
+          await loadFavoriteMarkers();
+        }
+        if (spotlightKey) {
+          await refreshSpotlightPosition();
         }
         const response = await fetch(`/sky-overlay?${query}`);
         const data = await response.json();
@@ -3350,10 +3812,59 @@
       persistPrefs();
       if (document.getElementById("chk-tonight").checked) {
         await loadTonightMarkers();
+      } else {
+        tonightMarkers = [];
       }
       if (lastSky) drawOverlay(lastSky);
       else loadSky();
     });
+    document.getElementById("chk-favorites").addEventListener("change", async () => {
+      persistPrefs();
+      if (document.getElementById("chk-favorites").checked) {
+        await loadFavoritesList();
+        await loadFavoriteMarkers();
+      } else {
+        favoriteMarkers = [];
+      }
+      if (lastSky) drawOverlay(lastSky);
+      else loadSky();
+    });
+    document.getElementById("sky-fav-pick").addEventListener("change", () => {
+      const key = document.getElementById("sky-fav-pick").value;
+      if (!key) return;
+      activateCatalogQuery(key);
+    });
+    document.getElementById("btn-fav-toggle").addEventListener("click", () => {
+      toggleSelectedFavorite();
+    });
+    (function wireSkySearch() {
+      const input = document.getElementById("sky-search");
+      const btn = document.getElementById("btn-sky-search");
+      if (!input || !btn) return;
+      input.addEventListener("input", scheduleSkySearch);
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          hideSkySearchResults();
+          input.blur();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          const box = document.getElementById("sky-search-results");
+          const active = box && box.querySelector("button.active");
+          if (active) {
+            active.click();
+            return;
+          }
+          activateCatalogQuery(input.value);
+        }
+      });
+      btn.addEventListener("click", () => activateCatalogQuery(input.value));
+      document.addEventListener("click", (event) => {
+        const wrap = document.getElementById("sky-search-wrap");
+        if (wrap && !wrap.contains(event.target)) hideSkySearchResults();
+      });
+    })();
     ["lat", "lon"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => {
         persistSite();
@@ -4194,7 +4705,7 @@
     restorePrefs().then(restoreSite).then(() => {
       whenEl.value = toLocalInput(new Date());
       document.getElementById("chk-live").checked = true;
-      return loadSky();
+      return loadFavoritesList().then(() => loadSky());
     }).then(loadHorizonControls).then(() => {
       startLivePolling();
       startNinaPolling();

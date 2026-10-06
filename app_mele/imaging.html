@@ -117,6 +117,40 @@
     .btn.capture.run { background: #16a34a; box-shadow: 0 0 0 2px rgba(74,222,128,.45); }
     .btn.capture.done { background: #15803d; }
     .btn:disabled { opacity: .5; cursor: default; }
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 40;
+      background: rgba(2, 6, 23, .72);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    .modal-backdrop[hidden] { display: none !important; }
+    .modal {
+      width: min(920px, 100%);
+      max-height: min(86vh, 900px);
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px 18px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.45);
+    }
+    .modal h3 { margin: 0 0 8px; font-size: 17px; color: #7dd3fc; }
+    .modal .path { font-size: 12px; color: var(--muted); word-break: break-all; margin: 0 0 12px; }
+    .timing-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    .timing-table th, .timing-table td {
+      border-bottom: 1px solid var(--border);
+      padding: 7px 8px; text-align: right; white-space: nowrap;
+    }
+    .timing-table th:first-child, .timing-table td:first-child,
+    .timing-table th:nth-child(2), .timing-table td:nth-child(2) { text-align: left; }
+    .timing-table th { color: var(--muted); font-weight: 600; }
+    .timing-summary {
+      margin: 0 0 12px; padding: 10px 12px;
+      background: rgba(2,6,23,.55); border: 1px solid var(--border); border-radius: 8px;
+      font-size: 14px; line-height: 1.45;
+    }
     .session-detail {
       margin: 0 0 8px; padding: 10px 12px;
       background: rgba(2,6,23,.55); border: 1px solid var(--border); border-radius: 8px;
@@ -211,8 +245,10 @@
             <label class="field span2">Profil
               <select id="img-session-profile"></select>
             </label>
-            <label class="field">Frames geplant <input id="img-session-planned" type="number" step="1" min="0" inputmode="numeric"></label>
-            <label class="field">Frames fertig <input id="img-session-completed" type="number" step="1" min="0" value="0" inputmode="numeric"></label>
+            <label class="field">Lights geplant <input id="img-session-lights-planned" type="number" step="1" min="0" inputmode="numeric"></label>
+            <label class="field">Lights fertig <input id="img-session-lights-completed" type="number" step="1" min="0" value="0" inputmode="numeric"></label>
+            <label class="field">Darks geplant <input id="img-session-darks-planned" type="number" step="1" min="0" inputmode="numeric" placeholder="0"></label>
+            <label class="field">Darks fertig <input id="img-session-darks-completed" type="number" step="1" min="0" value="0" inputmode="numeric"></label>
             <label class="field">Belichtung [s] <input id="img-session-exposure" type="number" step="any" min="0" inputmode="decimal"></label>
             <label class="field">Gain <input id="img-session-gain" type="number" step="any" inputmode="decimal"></label>
             <label class="field">ISO <input id="img-session-iso" type="number" step="1" min="0" inputmode="numeric"></label>
@@ -252,6 +288,17 @@
     </div>
   </main>
 
+  <div id="img-timing-modal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-labelledby="img-timing-title">
+      <div class="row" style="justify-content:space-between;margin-bottom:4px;">
+        <h3 id="img-timing-title">Capture-Timing</h3>
+        <button type="button" class="btn" id="img-timing-close">Schließen</button>
+      </div>
+      <div class="path" id="img-timing-path"></div>
+      <div id="img-timing-body"></div>
+    </div>
+  </div>
+
   <script>
     const params = new URLSearchParams(location.search);
     let imagingCatalogKey = (params.get("key") || "").trim();
@@ -268,8 +315,23 @@
     /** Capture-Lauf-Telemetrie (Elapsed / Frames / s pro Frame) */
     let imagingCaptureRunStartedAt = null;
     let imagingCaptureRunStartFrames = 0;
+    let imagingCaptureRunPhase = "LIGHT"; /* LIGHT | DARK */
     let imagingCaptureRunTimer = null;
-    let imagingCaptureRunLast = null; /* { elapsedMs, done, planned, tpfS, exposureS } */
+    let imagingCaptureRunLast = null; /* { elapsedMs, done, planned, tpfS, exposureS, phase, frames, avgExposeS, avgPostS } */
+    /** Live-Phase aus NINA /nina/camera während Capture */
+    let imagingCaptureLive = {
+      ninaPhase: "", /* exposing | download | reading | idle | waiting */
+      cameraState: "",
+      isExposing: false,
+      remainingS: null,
+      lastDownloadS: null,
+      frameExposeS: null,
+      framePostS: null,
+      avgExposeS: null,
+      avgPostS: null,
+      samples: 0,
+    };
+    let imagingCapturePhasePollAbort = null;
     let imagingSessionEditing = false;
     let imagingSessionCreating = false;
     let imagingPreviewColor = (() => {
@@ -308,11 +370,17 @@
     }
     function sessionOptionLabel(s) {
       const code = s.id != null ? `s${String(s.id).padStart(5, "0")}` : "?";
-      const frames = s.frames_completed || 0;
-      const planned = s.frames_planned != null ? Number(s.frames_planned) : null;
-      const fr = planned != null ? `${frames}/${planned}` : String(frames);
+      const lightsDone = Number(s.lights_completed != null ? s.lights_completed : (s.frames_completed || 0));
+      const lightsPlan = s.lights_planned != null ? Number(s.lights_planned)
+        : (s.frames_planned != null ? Number(s.frames_planned) : null);
+      const darksDone = Number(s.darks_completed || 0);
+      const darksPlan = s.darks_planned != null ? Number(s.darks_planned) : null;
+      const L = lightsPlan != null ? `${lightsDone}/${lightsPlan}` : String(lightsDone);
+      let fr = `L ${L}`;
+      if (darksPlan != null && darksPlan > 0) fr += ` · D ${darksDone}/${darksPlan}`;
+      else if (darksDone > 0) fr += ` · D ${darksDone}`;
       const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
-      return `${code} · ${formatSessionDate(s.started_utc)} · ${exp} · ${fr} Fr`;
+      return `${code} · ${formatSessionDate(s.started_utc)} · ${exp} · ${fr}`;
     }
     function numOrNull(id) {
       const v = $(id).value.trim();
@@ -357,7 +425,7 @@
         if (onlyEmpty && $(id).value.trim()) return;
         $(id).value = val;
       };
-      set("img-session-planned", profile.frames != null ? String(profile.frames) : "");
+      set("img-session-lights-planned", profile.frames != null ? String(profile.frames) : "");
       set("img-session-exposure", profile.exposure_s != null ? String(profile.exposure_s) : "");
       set("img-session-gain", profile.gain != null ? String(profile.gain) : "");
       set("img-session-iso", profile.iso != null ? String(profile.iso) : "");
@@ -375,13 +443,15 @@
       imagingSessionEditing = false;
       imagingSessionCreating = false;
       [
-        "img-session-edit-id", "img-session-profile", "img-session-planned",
-        "img-session-completed", "img-session-exposure", "img-session-gain",
+        "img-session-edit-id", "img-session-profile",
+        "img-session-lights-planned", "img-session-lights-completed",
+        "img-session-darks-planned", "img-session-darks-completed",
+        "img-session-exposure", "img-session-gain",
         "img-session-iso", "img-session-offset", "img-session-binning",
         "img-session-filter", "img-session-equipment", "img-session-archive",
         "img-session-local", "img-session-archive-path", "img-session-notes",
       ].forEach((id) => {
-        if (id === "img-session-completed") $(id).value = "0";
+        if (id === "img-session-lights-completed" || id === "img-session-darks-completed") $(id).value = "0";
         else if (id === "img-session-binning") $(id).value = "1x1";
         else if (id === "img-session-archive") $(id).value = "local";
         else $(id).value = "";
@@ -410,8 +480,12 @@
       imagingSessionCreating = false;
       $("img-session-edit-id").value = s.id || "";
       $("img-session-profile").value = s.profile_id != null ? String(s.profile_id) : "";
-      $("img-session-planned").value = s.frames_planned != null ? s.frames_planned : "";
-      $("img-session-completed").value = s.frames_completed != null ? s.frames_completed : "0";
+      const lightsP = s.lights_planned != null ? s.lights_planned : s.frames_planned;
+      const lightsC = s.lights_completed != null ? s.lights_completed : (s.frames_completed || 0);
+      $("img-session-lights-planned").value = lightsP != null ? lightsP : "";
+      $("img-session-lights-completed").value = lightsC != null ? lightsC : "0";
+      $("img-session-darks-planned").value = s.darks_planned != null ? s.darks_planned : "";
+      $("img-session-darks-completed").value = s.darks_completed != null ? s.darks_completed : "0";
       $("img-session-exposure").value = s.exposure_s != null ? s.exposure_s : "";
       $("img-session-gain").value = s.gain != null ? s.gain : "";
       $("img-session-iso").value = s.iso != null ? s.iso : "";
@@ -429,6 +503,25 @@
       $("img-session-form-box").open = true;
     }
 
+    function sessionLights(s) {
+      return {
+        done: Number(s.lights_completed != null ? s.lights_completed : (s.frames_completed || 0)),
+        planned: s.lights_planned != null ? Number(s.lights_planned)
+          : (s.frames_planned != null ? Number(s.frames_planned) : null),
+      };
+    }
+    function sessionDarks(s) {
+      return {
+        done: Number(s.darks_completed || 0),
+        planned: s.darks_planned != null ? Number(s.darks_planned) : null,
+      };
+    }
+    function remainingCount(done, planned) {
+      const target = (planned != null && Number.isFinite(planned) && planned > 0) ? planned : 0;
+      if (target <= 0) return 0;
+      return Math.max(0, target - Number(done || 0));
+    }
+
     function formatElapsedClock(ms) {
       const total = Math.max(0, Math.floor(Number(ms) / 1000));
       const h = Math.floor(total / 3600);
@@ -438,9 +531,110 @@
       return `${m}:${String(s).padStart(2, "0")}`;
     }
 
+    function captureRunPhaseLabel(phase) {
+      return phase === "DARK" ? "Darks" : "Lights";
+    }
+
+    function ninaPhaseLabel(phase) {
+      return ({
+        exposing: "Belichtung",
+        download: "Download",
+        reading: "Auslesen",
+        waiting: "Warte auf Datei",
+        idle: "Idle",
+        analysing: "Analyse",
+      })[phase] || (phase || "—");
+    }
+
+    function inferNinaCapturePhase(cam, opts) {
+      const inCapture = !!(opts && opts.inCapture);
+      if (!cam) return inCapture ? "waiting" : "idle";
+      const state = String(cam.camera_state || "").toLowerCase();
+      if (cam.is_exposing || state === "exposing") return "exposing";
+      if (state === "download" || state === "downloading") return "download";
+      if (state === "reading") return "reading";
+      if (inCapture) return "waiting"; /* Post-Expose: Datei/Download (Lumix oft CameraState=NoState) */
+      return "idle";
+    }
+
+    function exposureRemainingS(cam) {
+      if (!cam || !cam.is_exposing || !cam.exposure_end_time) return null;
+      const end = Date.parse(cam.exposure_end_time);
+      if (!Number.isFinite(end)) return null;
+      return Math.max(0, (end - Date.now()) / 1000);
+    }
+
+    function resetCaptureLiveTiming() {
+      imagingCaptureLive = {
+        ninaPhase: "",
+        cameraState: "",
+        isExposing: false,
+        remainingS: null,
+        lastDownloadS: null,
+        frameExposeS: null,
+        framePostS: null,
+        avgExposeS: null,
+        avgPostS: null,
+        samples: 0,
+      };
+    }
+
+    function recordFrameTiming(exposeS, postS) {
+      const n = imagingCaptureLive.samples + 1;
+      const prevE = imagingCaptureLive.avgExposeS;
+      const prevP = imagingCaptureLive.avgPostS;
+      imagingCaptureLive.samples = n;
+      imagingCaptureLive.frameExposeS = exposeS;
+      imagingCaptureLive.framePostS = postS;
+      if (exposeS != null && Number.isFinite(exposeS)) {
+        imagingCaptureLive.avgExposeS = prevE == null
+          ? exposeS
+          : prevE + (exposeS - prevE) / n;
+      }
+      if (postS != null && Number.isFinite(postS)) {
+        imagingCaptureLive.avgPostS = prevP == null
+          ? postS
+          : prevP + (postS - prevP) / n;
+      }
+    }
+
+    async function pollNinaCameraPhase(signal, frameTiming) {
+      while (!signal.aborted) {
+        try {
+          const response = await fetch("/nina/camera", { cache: "no-store" });
+          const data = await response.json();
+          const cam = data && data.camera;
+          if (cam) {
+            const wasExposing = frameTiming.sawExposing;
+            const phase = inferNinaCapturePhase(cam, { inCapture: true });
+            imagingCaptureLive.ninaPhase = phase;
+            imagingCaptureLive.cameraState = cam.camera_state || "";
+            imagingCaptureLive.isExposing = !!cam.is_exposing;
+            imagingCaptureLive.remainingS = exposureRemainingS(cam);
+            if (cam.last_download_time_s != null) {
+              imagingCaptureLive.lastDownloadS = Number(cam.last_download_time_s);
+            }
+            if (cam.is_exposing) {
+              frameTiming.sawExposing = true;
+            } else if (wasExposing && frameTiming.exposeEndedAt == null) {
+              frameTiming.exposeEndedAt = Date.now();
+            }
+            updateCaptureRunStats();
+          }
+        } catch (_) { /* poll soft-fail */ }
+        await new Promise((r) => setTimeout(r, 350));
+      }
+    }
+
     function captureRunStatsSnapshot(session) {
-      const frames = Number(session?.frames_completed || 0);
-      const planned = session?.frames_planned != null ? Number(session.frames_planned) : null;
+      const phase = imagingCaptureRunStartedAt != null
+        ? imagingCaptureRunPhase
+        : (imagingCaptureRunLast?.phase || imagingCaptureRunPhase);
+      const counters = phase === "DARK"
+        ? sessionDarks(session || {})
+        : sessionLights(session || {});
+      const frames = counters.done;
+      const planned = counters.planned;
       const exposureS = session?.exposure_s != null ? Number(session.exposure_s) : null;
       const live = imagingCaptureRunStartedAt != null;
       const elapsedMs = live
@@ -450,7 +644,22 @@
         ? Math.max(0, frames - imagingCaptureRunStartFrames)
         : (imagingCaptureRunLast?.done ?? 0);
       const tpfS = done > 0 ? (elapsedMs / 1000) / done : null;
-      return { frames, planned, exposureS, live, elapsedMs, done, tpfS };
+      return {
+        frames,
+        planned,
+        exposureS,
+        live,
+        elapsedMs,
+        done,
+        tpfS,
+        phase,
+        avgExposeS: live
+          ? imagingCaptureLive.avgExposeS
+          : (imagingCaptureRunLast?.avgExposeS ?? null),
+        avgPostS: live
+          ? imagingCaptureLive.avgPostS
+          : (imagingCaptureRunLast?.avgPostS ?? null),
+      };
     }
 
     function updateCaptureRunStats() {
@@ -473,28 +682,62 @@
         const oh = st.tpfS - st.exposureS;
         overhead = ` · Overhead ${oh >= 0 ? "+" : ""}${oh.toFixed(1)}s`;
       }
+      const phaseLabel = captureRunPhaseLabel(st.phase);
       const liveCls = st.live ? " run-live" : "";
+
+      let timingParts = [];
+      if (st.avgExposeS != null) timingParts.push(`Exp Ø ${st.avgExposeS.toFixed(1)}s`);
+      if (st.avgPostS != null) timingParts.push(`Post Ø ${st.avgPostS.toFixed(1)}s`);
+      const timingLine = timingParts.length
+        ? timingParts.join(" · ") + " (Post = Download/Speichern bis Datei da)"
+        : "Gesamtzeit/Frame = Elapsed ÷ fertige Frames dieses Laufs";
+
+      let livePhase = "";
+      if (st.live && imagingCaptureLive.ninaPhase) {
+        const rem = imagingCaptureLive.remainingS;
+        const remTxt = (imagingCaptureLive.ninaPhase === "exposing" && rem != null)
+          ? ` ${rem.toFixed(0)}s`
+          : "";
+        const dl = imagingCaptureLive.lastDownloadS;
+        const dlTxt = (dl != null && dl > 0.01) ? ` · NINA-DL ${dl.toFixed(1)}s` : "";
+        const state = imagingCaptureLive.cameraState
+          ? ` [${imagingCaptureLive.cameraState}]`
+          : "";
+        livePhase =
+          `<div class="muted">NINA: <strong>${ninaPhaseLabel(imagingCaptureLive.ninaPhase)}</strong>` +
+          `${remTxt}${dlTxt}${state}</div>`;
+      }
+
       el.innerHTML =
         `<div class="${liveCls}">` +
         `⏱ ${formatElapsedClock(st.elapsedMs)}` +
-        ` · Frames <strong>${st.frames}</strong>/${plannedLabel}` +
+        ` · ${phaseLabel} <strong>${st.frames}</strong>/${plannedLabel}` +
         ` · <strong>${tpfLabel}</strong>${overhead}` +
         `</div>` +
-        `<div class="muted">Gesamtzeit/Frame = Elapsed ÷ fertige Frames dieses Laufs` +
+        livePhase +
+        `<div class="muted">${timingLine}` +
         (st.live ? " (live)" : (imagingCaptureRunLast ? " (letzter Lauf)" : "")) +
         `</div>`;
     }
 
-    function startCaptureRunTimer(session) {
+    function startCaptureRunTimer(session, phase) {
+      imagingCaptureRunPhase = phase === "DARK" ? "DARK" : "LIGHT";
       imagingCaptureRunStartedAt = Date.now();
-      imagingCaptureRunStartFrames = Number(session.frames_completed || 0);
+      imagingCaptureRunStartFrames = imagingCaptureRunPhase === "DARK"
+        ? sessionDarks(session).done
+        : sessionLights(session).done;
       imagingCaptureRunLast = null;
+      resetCaptureLiveTiming();
       if (imagingCaptureRunTimer) clearInterval(imagingCaptureRunTimer);
       imagingCaptureRunTimer = setInterval(updateCaptureRunStats, 250);
       updateCaptureRunStats();
     }
 
     function stopCaptureRunTimer() {
+      if (imagingCapturePhasePollAbort) {
+        imagingCapturePhasePollAbort.abort();
+        imagingCapturePhasePollAbort = null;
+      }
       if (imagingCaptureRunTimer) {
         clearInterval(imagingCaptureRunTimer);
         imagingCaptureRunTimer = null;
@@ -510,9 +753,14 @@
           planned: st.planned,
           tpfS: st.tpfS,
           exposureS: st.exposureS,
+          phase: st.phase,
+          frames: st.frames,
+          avgExposeS: st.avgExposeS,
+          avgPostS: st.avgPostS,
         };
       }
       imagingCaptureRunStartedAt = null;
+      imagingCaptureLive.ninaPhase = "";
       updateCaptureRunStats();
     }
 
@@ -525,26 +773,31 @@
         $("img-session-preview").innerHTML = `<div class="hint">Session wählen…</div>`;
         return;
       }
-      const frames = s.frames_completed || 0;
-      const planned = s.frames_planned != null ? Number(s.frames_planned) : null;
+      const L = sessionLights(s);
+      const D = sessionDarks(s);
+      const lightsRemain = remainingCount(L.done, L.planned);
+      const darksRemain = remainingCount(D.done, D.planned);
       const exp = s.exposure_s != null ? `${s.exposure_s}s` : "?s";
       const integ = s.integration_s != null
         ? formatIntegration(s.integration_s)
-        : formatIntegration((s.exposure_s || 0) * frames);
+        : formatIntegration((s.exposure_s || 0) * L.done);
       const arch = s.archive_status || "local";
       const code = `s${String(s.id).padStart(5, "0")}`;
       const capturing = String(imagingCapturingSessionId) === String(s.id);
       let capClass = "btn capture";
       if (capturing) capClass += " run";
-      else if (frames > 0) capClass += " done";
-      const frameLine = planned != null
-        ? `${frames}/${planned} × ${exp}`
-        : `${frames} × ${exp}`;
+      else if (L.done > 0 || D.done > 0) capClass += " done";
+      const lightsLine = L.planned != null
+        ? `Lights ${L.done}/${L.planned} × ${exp}`
+        : `Lights ${L.done} × ${exp}`;
+      const darksLine = (D.planned != null && D.planned > 0) || D.done > 0
+        ? ` · Darks ${D.done}/${D.planned != null ? D.planned : "?"}`
+        : "";
 
       box.className = "session-detail";
       box.innerHTML =
         `<div><strong>${formatSessionDate(s.started_utc)}</strong> <code>${code}</code> ` +
-        `${frameLine} · ${integ} ` +
+        `${lightsLine}${darksLine} · ${integ} ` +
         `<span class="arch-${arch}">✓ ${archiveLabel(arch)}</span></div>` +
         `<div class="meta" style="margin-top:6px;font-size:13px;opacity:.8;word-break:break-word;">` +
         `${s.local_path || "(kein Lokalpfad)"}` +
@@ -560,9 +813,9 @@
       editBtn.className = "btn";
       editBtn.textContent = "Bearbeiten";
       editBtn.addEventListener("click", () => fillSessionEdit(s));
-      const remainHint = (planned != null && planned > frames)
-        ? ` ${frames}/${planned}`
-        : "";
+      let remainHint = "";
+      if (lightsRemain > 0) remainHint = ` L${lightsRemain}`;
+      else if (darksRemain > 0) remainHint = ` D${darksRemain}`;
       const capBtn = document.createElement("button");
       capBtn.type = "button";
       capBtn.className = capClass;
@@ -572,12 +825,24 @@
         capBtn.addEventListener("click", () => { imagingCaptureAbort = true; });
       } else {
         capBtn.textContent = "▶ Capture" + remainHint;
-        capBtn.title = planned != null && planned > frames
-          ? `Restliche Frames: ${planned - frames}`
-          : "NINA Capture-Lauf";
+        if (lightsRemain > 0) {
+          capBtn.title = `Restliche Lights: ${lightsRemain}` +
+            (darksRemain > 0 ? `, danach Darks: ${darksRemain}` : "");
+        } else if (darksRemain > 0) {
+          capBtn.title = `Restliche Darks: ${darksRemain} (Tubus abdecken)`;
+        } else {
+          capBtn.title = "NINA Capture-Lauf";
+        }
         capBtn.addEventListener("click", () => captureImagingSession(s));
       }
       actions.appendChild(editBtn);
+      const timingBtn = document.createElement("button");
+      timingBtn.type = "button";
+      timingBtn.className = "btn";
+      timingBtn.textContent = "Timing";
+      timingBtn.title = "Capture-Timing-Log dieser Session";
+      timingBtn.addEventListener("click", () => showSessionTimingLog(s.id));
+      actions.appendChild(timingBtn);
       actions.appendChild(capBtn);
       if (capturing) {
         const glass = document.createElement("span");
@@ -596,6 +861,80 @@
       // Während Capture kein Preview-Reload (sonst flackert der Timer-Bereich)
       if (!capturing) {
         loadSessionPreview(s.id, $("img-session-preview"));
+      }
+    }
+
+    function fmtTimingS(v) {
+      if (v == null || !Number.isFinite(Number(v))) return "—";
+      return `${Number(v).toFixed(1)}s`;
+    }
+
+    function closeSessionTimingLog() {
+      const el = $("img-timing-modal");
+      if (el) el.hidden = true;
+    }
+
+    async function showSessionTimingLog(sessionId) {
+      const backdrop = $("img-timing-modal");
+      const body = $("img-timing-body");
+      const pathEl = $("img-timing-path");
+      if (!backdrop || !body) return;
+      body.innerHTML = `<div class="hint">Lade Timing…</div>`;
+      pathEl.textContent = "";
+      backdrop.hidden = false;
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/timing`);
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          body.innerHTML = `<div class="hint">${data.error || "Timing nicht lesbar"}</div>`;
+          return;
+        }
+        pathEl.textContent = data.path || "";
+        const sum = data.summary || {};
+        const frames = data.frames || [];
+        if (!frames.length) {
+          body.innerHTML =
+            `<div class="hint">Noch keine Timing-Einträge — nach dem nächsten Capture erscheinen sie hier` +
+            ` (Datei capture-timing.json im Session-Ordner).</div>`;
+          return;
+        }
+        const cadence = sum.suggested_cadence_s != null
+          ? ` · Cadence-Hinweis Ø Post ${fmtTimingS(sum.suggested_cadence_s)}`
+          : "";
+        let html =
+          `<div class="timing-summary">` +
+          `<strong>${frames.length}</strong> Frame(s)` +
+          ` · Exp Ø ${fmtTimingS(sum.avg_expose_s)}` +
+          ` · Post Ø ${fmtTimingS(sum.avg_post_s)}` +
+          ` · Total Ø ${fmtTimingS(sum.avg_total_s)}` +
+          (sum.p90_post_s != null ? ` · Post P90 ${fmtTimingS(sum.p90_post_s)}` : "") +
+          `${cadence}` +
+          `<div class="muted" style="margin-top:6px;font-size:12px;">` +
+          `Post = Zeit nach Belichtungsende bis Datei stabil auf Disk. ` +
+          `Parallel-Overlap nur sinnvoll wenn Exposure ≳ Post und die Kamera Download+Belichtung gleichzeitig kann.` +
+          `</div></div>` +
+          `<table class="timing-table"><thead><tr>` +
+          `<th>#</th><th>Typ</th><th>Plan</th><th>Exp</th><th>Post</th><th>Total</th><th>Datei</th><th>UTC</th>` +
+          `</tr></thead><tbody>`;
+        frames.forEach((row, idx) => {
+          const utc = row.utc ? String(row.utc).replace("T", " ").slice(0, 19) : "—";
+          html +=
+            `<tr>` +
+            `<td>${idx + 1}</td>` +
+            `<td>${row.image_type || "—"}</td>` +
+            `<td>${fmtTimingS(row.exposure_planned_s)}</td>` +
+            `<td>${fmtTimingS(row.expose_s)}</td>` +
+            `<td><strong>${fmtTimingS(row.post_s)}</strong></td>` +
+            `<td>${fmtTimingS(row.total_s)}</td>` +
+            `<td style="text-align:left;max-width:220px;overflow:hidden;text-overflow:ellipsis;">` +
+            `${row.file_name || (row.ok === false ? "(keine Datei)" : "—")}</td>` +
+            `<td style="font-size:12px;color:var(--muted)">${utc}</td>` +
+            `</tr>`;
+        });
+        html += `</tbody></table>`;
+        body.innerHTML = html;
+      } catch (err) {
+        body.innerHTML = `<div class="hint">${String(err.message || err)}</div>`;
       }
     }
 
@@ -796,44 +1135,50 @@
       } catch (err) { setStatus(String(err.message || err)); }
     }
 
-    function imagingFramesRemaining(session) {
-      const planned = session.frames_planned != null ? Number(session.frames_planned) : 1;
-      const done = Number(session.frames_completed || 0);
-      const target = Number.isFinite(planned) && planned > 0 ? planned : 1;
-      if (done >= target) return 1;
-      return Math.max(1, target - done);
+    function imagingFramesRemaining(session, imageType) {
+      if (imageType === "DARK") {
+        const D = sessionDarks(session);
+        return remainingCount(D.done, D.planned);
+      }
+      const L = sessionLights(session);
+      const n = remainingCount(L.done, L.planned);
+      // Ohne Plan mind. 1 Light (wie bisher)
+      if (n <= 0 && (L.planned == null || L.planned <= 0)) return 1;
+      return n;
     }
 
-    async function captureImagingSession(session) {
-      if (!imagingCatalogKey || !session || !session.id) return;
-      if (imagingCapturingSessionId) return;
-      imagingCapturingSessionId = session.id;
-      imagingCaptureAbort = false;
-      imagingBusyPhase = "capture";
-      imagingSelectedSessionId = session.id;
-      const total = imagingFramesRemaining(session);
-      let lastData = null;
-      let completedThisRun = 0;
-      startCaptureRunTimer(session);
-      renderSelectedSessionDetail();
-      setStatus(
-        total > 1
-          ? `Capture-Lauf: ${total} Frame(s), Preview nur am Ende…`
-          : "NINA Capture läuft…"
+    function confirmCoverTubeForDarks(darksCount) {
+      return window.confirm(
+        `Lights fertig.\n\nBitte den Teleskop-Tubus jetzt abdecken (kein Licht).\n` +
+        `Danach ${darksCount} Dark-Frame(s) aufnehmen.\n\nTubus abgedeckt — Darks starten?`
       );
-      try {
-        for (let i = 0; i < total; i++) {
-          if (imagingCaptureAbort) {
-            setStatus(`Capture abgebrochen nach ${completedThisRun}/${total} Frame(s).`);
-            break;
-          }
-          const isLast = i === total - 1;
-          const makePreview = total === 1 || isLast;
-          setStatus(`Capture ${i + 1}/${total}` + (makePreview ? " (+ Preview)…" : "…"));
-          imagingBusyPhase = "capture";
-          updateCaptureRunStats();
+    }
 
-          const response = await fetch("/astro/nina/capture", {
+    async function capturePhase(session, imageType, total, { makePreviewOnLast }) {
+      let completedThisRun = 0;
+      let lastData = null;
+      for (let i = 0; i < total; i++) {
+        if (imagingCaptureAbort) break;
+        const isLast = i === total - 1;
+        const makePreview = !!makePreviewOnLast && (total === 1 || isLast);
+        const label = imageType === "DARK" ? "Dark" : "Light";
+        setStatus(`${label} ${i + 1}/${total}` + (makePreview ? " (+ Preview)…" : "…"));
+        imagingBusyPhase = "capture";
+        updateCaptureRunStats();
+
+        const frameStartedAt = Date.now();
+        const frameTiming = { sawExposing: false, exposeEndedAt: null };
+        if (imagingCapturePhasePollAbort) imagingCapturePhasePollAbort.abort();
+        imagingCapturePhasePollAbort = new AbortController();
+        const pollPromise = pollNinaCameraPhase(
+          imagingCapturePhasePollAbort.signal,
+          frameTiming
+        );
+
+        let response;
+        let data;
+        try {
+          response = await fetch("/astro/nina/capture", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -846,46 +1191,169 @@
               local_path: session.local_path || imagingSuggestedLocal,
               archive_path: session.archive_path || imagingSuggestedArchive,
               frames: 1,
+              image_type: imageType,
               make_preview: makePreview,
             }),
           });
-          const data = await response.json();
-          lastData = data;
-          if (!response.ok || !data.ok) {
-            setStatus(
-              (data.error || data.capture?.error || "Capture fehlgeschlagen") +
-              ` (nach ${completedThisRun}/${total})`
-            );
-            break;
-          }
-          completedThisRun += 1;
-          if (data.session) {
-            const idx = imagingSessionsCache.findIndex(
-              (x) => String(x.id) === String(session.id)
-            );
-            if (idx >= 0) imagingSessionsCache[idx] = data.session;
-          }
-          updateCaptureRunStats();
+          data = await response.json();
+        } finally {
+          imagingCapturePhasePollAbort.abort();
+          imagingCapturePhasePollAbort = null;
+          try { await pollPromise; } catch (_) { /* ignore abort */ }
         }
 
-        if (completedThisRun > 0) {
+        const frameEndedAt = Date.now();
+        const exposeEnd = frameTiming.exposeEndedAt
+          || (frameTiming.sawExposing ? frameEndedAt : null);
+        let exposeS = null;
+        let postS = null;
+        if (exposeEnd != null) {
+          exposeS = (exposeEnd - frameStartedAt) / 1000;
+          postS = (frameEndedAt - exposeEnd) / 1000;
+        } else if (session.exposure_s != null) {
+          const planned = Number(session.exposure_s);
+          const totalS = (frameEndedAt - frameStartedAt) / 1000;
+          exposeS = Math.min(planned, totalS);
+          postS = Math.max(0, totalS - exposeS);
+        }
+        recordFrameTiming(exposeS, postS);
+        imagingCaptureLive.ninaPhase = "";
+        updateCaptureRunStats();
+
+        lastData = data;
+        if (!response.ok || !data.ok) {
+          setStatus(
+            (data.error || data.capture?.error || "Capture fehlgeschlagen") +
+            ` (nach ${completedThisRun}/${total} ${label})`
+          );
+          return { ok: false, completedThisRun, lastData, aborted: false };
+        }
+        completedThisRun += 1;
+        if (data.session) {
+          const idx = imagingSessionsCache.findIndex(
+            (x) => String(x.id) === String(session.id)
+          );
+          if (idx >= 0) imagingSessionsCache[idx] = data.session;
+          session = data.session;
+        }
+        updateCaptureRunStats();
+        renderSelectedSessionDetail();
+      }
+      return {
+        ok: completedThisRun > 0 && !imagingCaptureAbort,
+        completedThisRun,
+        lastData,
+        aborted: imagingCaptureAbort,
+        session,
+      };
+    }
+
+    async function captureImagingSession(session) {
+      if (!imagingCatalogKey || !session || !session.id) return;
+      if (imagingCapturingSessionId) return;
+      imagingCapturingSessionId = session.id;
+      imagingCaptureAbort = false;
+      imagingBusyPhase = "capture";
+      imagingSelectedSessionId = session.id;
+
+      let current = session;
+      const lightsTotal = imagingFramesRemaining(current, "LIGHT");
+      const darksNeededInitially = remainingCount(
+        sessionDarks(current).done,
+        sessionDarks(current).planned
+      );
+      let lastData = null;
+      let lightsDone = 0;
+      let darksDone = 0;
+
+      if (lightsTotal > 0) startCaptureRunTimer(current, "LIGHT");
+      renderSelectedSessionDetail();
+
+      try {
+        if (lightsTotal > 0) {
+          setStatus(
+            lightsTotal > 1
+              ? `Lights-Lauf: ${lightsTotal} Frame(s)…`
+              : "NINA Light-Capture…"
+          );
+          const lightResult = await capturePhase(current, "LIGHT", lightsTotal, {
+            makePreviewOnLast: true,
+          });
+          lastData = lightResult.lastData;
+          lightsDone = lightResult.completedThisRun;
+          if (lightResult.session) current = lightResult.session;
+          if (!lightResult.ok && lightResult.completedThisRun === 0) {
+            /* Fehler schon gesetzt */
+          } else if (imagingCaptureAbort) {
+            setStatus(`Capture abgebrochen nach ${lightsDone} Light(s).`);
+          }
+        }
+
+        // Darks: nach Lights (oder wenn Lights schon fertig) + Confirm
+        if (!imagingCaptureAbort) {
+          const darksTotal = remainingCount(
+            sessionDarks(current).done,
+            sessionDarks(current).planned
+          );
+          if (darksTotal > 0) {
+            const coverOk = confirmCoverTubeForDarks(darksTotal);
+            if (!coverOk) {
+              setStatus(
+                (lightsDone > 0 ? `Lights ${lightsDone} ok. ` : "") +
+                "Darks übersprungen (Tubus nicht bestätigt)."
+              );
+            } else {
+              startCaptureRunTimer(current, "DARK");
+              setStatus(`Darks-Lauf: ${darksTotal} Frame(s)…`);
+              const darkResult = await capturePhase(current, "DARK", darksTotal, {
+                makePreviewOnLast: false,
+              });
+              lastData = darkResult.lastData || lastData;
+              darksDone = darkResult.completedThisRun;
+              if (darkResult.session) current = darkResult.session;
+              if (imagingCaptureAbort) {
+                setStatus(
+                  `Darks abgebrochen nach ${darksDone}/${darksTotal}` +
+                  (lightsDone ? ` (Lights ${lightsDone})` : "")
+                );
+              }
+            }
+          }
+        }
+
+        if (lightsDone > 0 || darksDone > 0) {
           const st = captureRunStatsSnapshot(
-            imagingSessionsCache.find((x) => String(x.id) === String(session.id)) || session
+            imagingSessionsCache.find((x) => String(x.id) === String(session.id)) || current
           );
           let status =
-            `Capture-Lauf ${completedThisRun}/${total}` +
+            `Capture L${lightsDone}` +
+            (darksDone ? ` D${darksDone}` : "") +
             (imagingCaptureAbort ? " (abgebrochen)" : "") +
             (lastData?.session_folder ? ` [${lastData.session_folder}]` : "");
-          if (st.tpfS != null) status += ` · ${st.tpfS.toFixed(1)} s/Fr`;
+          if (st.tpfS != null && (lightsDone > 0 || darksDone > 0)) {
+            status += ` · ${st.tpfS.toFixed(1)} s/Fr`;
+          }
           if (lastData?.preview_error) status += ` · Preview: ${lastData.preview_error}`;
-          setStatus(status);
+          if (darksNeededInitially > 0 && darksDone === 0 && !imagingCaptureAbort) {
+            /* already messaged */
+          } else if (!imagingCaptureAbort) {
+            setStatus(status);
+          }
           imagingBusyPhase = "preview";
           await refreshImaging();
-          for (let i = 0; i < 12; i++) {
-            const wrap = $("img-session-preview");
-            await loadSessionPreview(session.id, wrap, { color: imagingPreviewColor });
-            if (wrap.querySelector("img")) break;
-            await new Promise((r) => setTimeout(r, 2000));
+          if (lightsDone > 0) {
+            for (let i = 0; i < 12; i++) {
+              const wrap = $("img-session-preview");
+              await loadSessionPreview(session.id, wrap, { color: imagingPreviewColor });
+              if (wrap.querySelector("img")) break;
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          }
+        } else if (!imagingCaptureAbort) {
+          const L = sessionLights(current);
+          const D = sessionDarks(current);
+          if (remainingCount(L.done, L.planned) <= 0 && remainingCount(D.done, D.planned) <= 0) {
+            setStatus("Nichts mehr zu capturen (Lights/Darks fertig).");
           }
         }
       } catch (err) {
@@ -953,8 +1421,10 @@
         const body = {
           catalog_key: imagingCatalogKey,
           profile_id: numOrNull("img-session-profile"),
-          frames_planned: numOrNull("img-session-planned"),
-          frames_completed: numOrNull("img-session-completed"),
+          lights_planned: numOrNull("img-session-lights-planned"),
+          lights_completed: numOrNull("img-session-lights-completed"),
+          darks_planned: numOrNull("img-session-darks-planned"),
+          darks_completed: numOrNull("img-session-darks-completed"),
           exposure_s: numOrNull("img-session-exposure"),
           gain: numOrNull("img-session-gain"),
           iso: numOrNull("img-session-iso"),
@@ -995,6 +1465,13 @@
           color: imagingPreviewColor,
         });
       }
+    });
+    $("img-timing-close").addEventListener("click", closeSessionTimingLog);
+    $("img-timing-modal").addEventListener("click", (ev) => {
+      if (ev.target === $("img-timing-modal")) closeSessionTimingLog();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") closeSessionTimingLog();
     });
     $("btn-restretch").addEventListener("click", async () => {
       if (!imagingSelectedSessionId) return;

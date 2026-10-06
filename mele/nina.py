@@ -24,6 +24,10 @@ Offizielle Semantik mount/slew (Mount.cs + OpenAPI api_spec):
 Kamera-Capture (christian-photo/ninaAPI Changelog):
   - duration (s), gain, imageType (light/dark/…), save=true zum Speichern,
     targetName, waitForResult, stream, omitImage, onlyAwaitCaptureCompletion
+  - camera/info Polling: IsExposing, ExposureEndTime, CameraState (ASCOM-ähnlich),
+    LastDownloadTime; Events IMAGE-SAVE / API-CAPTURE-FINISHED / IMAGE-PREPARED
+  - onlyAwaitCaptureCompletion endet bei IsExposing=false — Download/Save laufen
+    oft danach weiter (Lumix-Native: naechstes Frame erst nach Datei auf Disk)
 
 Wrapper:
   {"Response": ..., "Error": "", "StatusCode": 200, "Success": true, "Type": "API"}
@@ -117,6 +121,8 @@ class CameraInfo:
     exposure_min: float | None = None
     exposure_end_time: str = ""
     is_exposing: bool = False
+    camera_state: str = ""
+    last_download_time_s: float | None = None
     gain: float | None = None
     gain_min: float | None = None
     gain_max: float | None = None
@@ -290,6 +296,8 @@ def parse_camera_payload(payload: Any) -> NinaCameraStatus:
         exposure_min=_finite(response.get("ExposureMin")),
         exposure_end_time=_str(response.get("ExposureEndTime")),
         is_exposing=_bool(response.get("IsExposing"), False),
+        camera_state=_str(response.get("CameraState")),
+        last_download_time_s=_finite(response.get("LastDownloadTime")),
         gain=_finite(response.get("Gain")),
         gain_min=_finite(response.get("GainMin")),
         gain_max=_finite(response.get("GainMax")),
@@ -545,9 +553,9 @@ class NinaClient:
         """Image File Pattern setzen (unter dem FilePath)."""
         return self.change_profile_setting("ImageFileSettings-FilePattern", str(pattern))
 
-    # MeLE-Capture: FilePath enthaelt bereits Target/Datum/Session —
-    # Pattern darf Target/Datum nicht nochmals wiederholen.
-    MELE_CAPTURE_FILE_PATTERN = r"$$IMAGETYPE$$\$$DATETIME$$_$$EXPOSURETIME$$s_$$FRAMENR$$"
+    # MeLE-Capture: FilePath ist bereits …/LIGHTS oder …/DARKS —
+    # kein $$IMAGETYPE$$-Unterordner (sonst LIGHTS/LIGHT/).
+    MELE_CAPTURE_FILE_PATTERN = r"$$DATETIME$$_$$EXPOSURETIME$$s_$$FRAMENR$$"
 
     def prepare_mele_image_destination(self, directory: str | Path) -> dict[str, NinaCommandResult]:
         """FilePath + schlankes Pattern fuer Session-Ordner setzen."""

@@ -204,6 +204,7 @@ def format_pointer(
     longitude_deg: float | None,
     when: datetime | None = None,
     horizon_alt: float | None = None,
+    include_site: bool = True,
 ) -> str:
     lines = [
         f"Az  {format_angle(az_deg)}     h  {format_angle(alt_deg)}",
@@ -211,17 +212,20 @@ def format_pointer(
     now = when or datetime.now(timezone.utc)
     if latitude_deg is None or longitude_deg is None:
         lines.append("RA/Dec: Standort in configs/mele.yaml setzen")
-        lines.append("(latitude_deg, longitude_deg; Ost positiv)")
+        if include_site:
+            lines.append("(latitude_deg, longitude_deg; Ost positiv)")
     else:
         ra, dec = az_alt_to_radec(az_deg, alt_deg, latitude_deg, longitude_deg, now)
         lines.append(f"RA  {format_ra(ra)}     Dec {format_dec(dec)}")
-        hemi_ns = "N" if latitude_deg >= 0 else "S"
-        hemi_ew = "E" if longitude_deg >= 0 else "W"
-        lines.append(
-            f"Standort  {abs(latitude_deg):.4f}° {hemi_ns}, "
-            f"{abs(longitude_deg):.4f}° {hemi_ew}"
-        )
-    lines.append(now.astimezone(timezone.utc).strftime("Epoche  %Y-%m-%d  %H:%M:%S UTC"))
+        if include_site:
+            hemi_ns = "N" if latitude_deg >= 0 else "S"
+            hemi_ew = "E" if longitude_deg >= 0 else "W"
+            lines.append(
+                f"Standort  {abs(latitude_deg):.4f}° {hemi_ns}, "
+                f"{abs(longitude_deg):.4f}° {hemi_ew}"
+            )
+    if include_site:
+        lines.append(now.astimezone(timezone.utc).strftime("Epoche  %Y-%m-%d  %H:%M:%S UTC"))
     if horizon_alt is not None:
         free = alt_deg > horizon_alt
         lines.append(

@@ -223,6 +223,7 @@ def append_observation(
         "lux": _finite(observation.get("lux")),
         "solarradiation_wm2": _finite(observation.get("solarradiation_wm2")),
         "dewpoint_c": _finite(observation.get("dewpoint_c")),
+        "dewpoint_margin_c": _finite(observation.get("dewpoint_margin_c")),
         "indoor_temp_c": _finite(observation.get("indoor_temp_c")),
         "indoor_humidity_pct": _finite(observation.get("indoor_humidity_pct")),
     }

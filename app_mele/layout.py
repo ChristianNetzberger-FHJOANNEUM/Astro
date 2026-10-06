@@ -98,6 +98,8 @@ GeoSphere Austria NWP v2 (1 km, stündlich, ~60 h): Bewoelkung, Wind,
 Feuchte, Temperatur, Niederschlag. Abruf über den MeLE-Server, Cache
 in `data/weather/`. Ohne Netz bleibt der letzte Stand. Quellenangabe
 CC-BY 4.0. Seeing/Transparenz sind nicht enthalten.
+Lokale Station (Ecowitt via `weather_server`) erscheint zusätzlich —
+MeLE pullt `/api/current` und speist das Wetter-Journal.
 """
 
 
@@ -145,28 +147,90 @@ def build_ui(
 
     status_label = ui.label().classes("text-caption q-px-md")
 
-    with ui.row().classes("w-full no-wrap q-pa-md q-gutter-md"):
-        with ui.column().classes("w-1/5"):
-            ui.label("Panoramas").classes("text-subtitle2")
+    # Feste Drawer-Breiten (bei ~1920px Viewport):
+    # links media ~280px, rechts tools ~420px, Mitte bekommt den Rest (flex).
+    # Vorher: links w-1/5 (~20% ≈ 384px bei 1920), rechts fix 300px (zu schmal fuer Toggles).
+    _MEDIA_DRAWER_PX = 280
+    _TOOLS_DRAWER_PX = 460
+    media_open = {"value": True}
+    tools_open = {"value": False}
+
+    def _apply_media_drawer() -> None:
+        open_ = bool(media_open["value"])
+        media_panel.set_visibility(open_)
+        btn = state.refs.get("media_toggle")
+        if btn is not None:
+            try:
+                btn.props(f'icon={"chevron_left" if open_ else "photo_library"}')
+                btn.text = "Schliessen" if open_ else "Panoramas"
+            except RuntimeError:
+                pass
+
+    def _toggle_media_drawer() -> None:
+        media_open["value"] = not media_open["value"]
+        _apply_media_drawer()
+
+    def _apply_tools_drawer() -> None:
+        open_ = bool(tools_open["value"])
+        tools_panel.set_visibility(open_)
+        btn = state.refs.get("tools_toggle")
+        if btn is not None:
+            try:
+                btn.props(f'icon={"chevron_right" if open_ else "architecture"}')
+                btn.text = "Schliessen" if open_ else "Horizont"
+            except RuntimeError:
+                pass
+
+    def _toggle_tools_drawer() -> None:
+        tools_open["value"] = not tools_open["value"]
+        _apply_tools_drawer()
+
+    with ui.row().classes("w-full no-wrap q-pa-md q-gutter-md items-start"):
+        with ui.column().classes("q-gutter-xs").style(
+            f"flex:0 0 {_MEDIA_DRAWER_PX}px; width:{_MEDIA_DRAWER_PX}px; "
+            f"max-height:calc(100vh - 6rem); overflow:auto;"
+        ) as media_panel:
+            state.refs["media_panel"] = media_panel
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Panoramas").classes("text-subtitle2")
+                ui.button(
+                    icon="chevron_left",
+                    on_click=lambda: _toggle_media_drawer(),
+                ).props("flat dense round").tooltip("Panorama-Liste einklappen")
             ui.label(str(media_dir)).classes("text-caption")
             ui.label("360-Fotos hier, GPS-Handyfotos in media/GPS-locations").classes("text-caption")
             file_box = ui.column().classes("w-full")
-        with ui.column().classes("w-7/12"):
-            with ui.row().classes("w-full items-center justify-between no-wrap"):
-                hint = ui.label("Klick ins Foto setzt die Nordrichtung.").classes("text-caption")
-                sky_cover_label = ui.label("Himmel: —").classes("text-subtitle2")
-                weather_label = ui.label("Wetter: —").classes("text-caption")
-                state.refs["weather_label"] = weather_label
+
+        # Zentrum waechst; Seiten-Drawers klappen ein und geben Breite frei
+        with ui.column().classes("col q-gutter-none").style("flex:1 1 0%; min-width:0"):
+            # Schlanke Toolbar: Drawer-Toggles + WLAN + App-Buttons
+            with ui.row().classes("w-full items-center justify-end no-wrap q-gutter-sm"):
+                media_toggle = ui.button(
+                    "Panoramas",
+                    icon="photo_library",
+                    on_click=lambda: _toggle_media_drawer(),
+                ).props("flat dense").tooltip(
+                    "Panorama-Liste links ein- oder ausblenden"
+                )
+                state.refs["media_toggle"] = media_toggle
                 wifi_label = ui.label("WLAN …").classes("text-caption")
                 with wifi_label:
                     wifi_tip = ui.tooltip("WLAN-Status wird geladen …")
                 state.refs["wifi_label"] = wifi_label
                 state.refs["wifi_tooltip"] = wifi_tip
+                tools_toggle = ui.button(
+                    "Horizont",
+                    icon="architecture",
+                    on_click=lambda: _toggle_tools_drawer(),
+                ).props("flat dense").tooltip(
+                    "Horizont-/Standort-Werkzeuge rechts ein- oder ausblenden (Bild bleibt sichtbar)"
+                )
+                state.refs["tools_toggle"] = tools_toggle
                 ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
                     "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
                 )
                 ui.button("Wetter", icon="cloud", on_click=on_open_weather).props("flat dense").tooltip(
-                    "Neues Fenster: GeoSphere-Bewoelkung, Wind, Feuchte (~60 h). Cache lokal."
+                    "Neues Fenster: GeoSphere-Prognose + lokale Station (weather_server)."
                 )
                 ui.button("Hilfe", icon="help", on_click=on_open_help).props("flat dense").tooltip(
                     "App-Bedienung: Horizont, Einnorden, Hybrid, Wetter-Journal"
@@ -202,13 +266,58 @@ def build_ui(
                     ).tooltip(
                         "SynScan Pro starten (Skywatcher-Montierung). LED gruen = laeuft bereits."
                     )
-            cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
-                "text-caption font-mono whitespace-pre-wrap"
-            )
-            image_box = ui.column().classes("w-full")
-        with ui.column().classes("w-1/4"):
-            ui.label("Verfahren").classes("text-subtitle2")
 
+            # Kontext-Box: Live | Forecast | Ort+Himmel
+            with ui.card().classes("w-full q-pa-sm q-mb-sm").props("flat bordered") as safety_card:
+                state.refs["weather_safety_card"] = safety_card
+                with ui.row().classes("w-full items-center justify-between no-wrap q-mb-xs"):
+                    ui.label("LIVE CONDITIONS").classes("text-caption text-weight-bold")
+                    safety_badge = ui.label("UNKNOWN").classes("text-caption text-weight-bold")
+                    state.refs["weather_safety_badge"] = safety_badge
+                with ui.row().classes("w-full items-stretch no-wrap q-gutter-sm"):
+                    with ui.column().classes("col q-gutter-none").style("min-width:0; flex:1.15"):
+                        ui.label("Station").classes("text-caption text-grey-7")
+                        safety_lines = ui.label("—").classes(
+                            "text-caption font-mono whitespace-pre-wrap"
+                        )
+                        state.refs["weather_safety_lines"] = safety_lines
+                        safety_reasons = ui.label("").classes("text-caption text-grey-7")
+                        state.refs["weather_safety_reasons"] = safety_reasons
+                    with ui.column().classes("col q-gutter-none").style("min-width:0; flex:1"):
+                        ui.label("Prognose").classes("text-caption text-grey-7")
+                        weather_forecast = ui.label("Wetter: —").classes(
+                            "text-caption whitespace-pre-wrap"
+                        )
+                        state.refs["weather_label"] = weather_forecast
+                    with ui.column().classes("col q-gutter-none").style("min-width:0; flex:1"):
+                        ui.label("Ort & Himmel").classes("text-caption text-grey-7")
+                        sky_cover_label = ui.label("Himmel: —").classes("text-caption")
+                        state.refs["sky_cover_label"] = sky_cover_label
+                        context_site = ui.label("Standort: —").classes(
+                            "text-caption whitespace-pre-wrap"
+                        )
+                        state.refs["context_site_label"] = context_site
+
+            # Hover-Koordinaten gehoeren zum Panorama-Bild
+            cursor_label = ui.label("Maus ueber das Bild: Az / h und RA / Dec.").classes(
+                "text-caption font-mono whitespace-pre-wrap text-grey-8"
+            )
+
+            image_box = ui.column().classes("w-full")
+
+        with ui.column().classes("q-gutter-xs").style(
+            f"flex:0 0 {_TOOLS_DRAWER_PX}px; width:{_TOOLS_DRAWER_PX}px; "
+            f"max-height:calc(100vh - 6rem); overflow:auto;"
+        ) as tools_panel:
+            state.refs["tools_panel"] = tools_panel
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Verfahren").classes("text-subtitle2")
+                ui.button(
+                    icon="chevron_right",
+                    on_click=lambda: _toggle_tools_drawer(),
+                ).props("flat dense round").tooltip("Werkzeuge einklappen")
+            hint = ui.label("").classes("text-caption text-grey-7 q-mb-xs")
+            state.refs["method_hint"] = hint
             def on_method(event) -> None:
                 if event.value:
                     state.method = str(event.value)
@@ -409,6 +518,9 @@ def build_ui(
             ui.toggle({5: "5°", 10: "10°"}, value=state.grid_step, on_change=on_grid_step)
             table_box = ui.column().classes("w-full q-mt-md")
 
+        _apply_media_drawer()
+        _apply_tools_drawer()
+
     with ui.expansion("Berechnungen und Formeln", icon="functions").classes("w-full q-px-md q-pb-md"):
         ui.markdown(FORMULAS_MD)
 
@@ -499,6 +611,7 @@ def build_ui(
             longitude_deg=state.longitude_deg,
             when=datetime.now(timezone.utc),
             horizon_alt=horizon_alt,
+            include_site=False,
         )
 
     def render_files() -> None:
@@ -676,8 +789,15 @@ def build_ui(
         else:
             range_label.text = "Noch kein Horizont fuer dieses Foto."
             sky_cover_label.text = "Himmel: —"
+        context_site = state.refs.get("context_site_label")
         if state.latitude_deg is None or state.longitude_deg is None:
-            site_label.text = "Standort fehlt (Osmo-GPS ungueltig — configs/mele.yaml)."
+            site_text = "Standort fehlt (Osmo-GPS ungueltig — configs/mele.yaml)."
+            site_label.text = site_text
+            if context_site is not None:
+                try:
+                    context_site.text = site_text
+                except RuntimeError:
+                    pass
         else:
             src = {
                 "exif": "EXIF",
@@ -685,13 +805,25 @@ def build_ui(
                 "saved": "sites.json",
                 "pano": "360-Ansicht",
             }.get(state.site_src, state.site_src)
+            site_text = (
+                f"Standort  {state.latitude_deg:.4f}°, {state.longitude_deg:.4f}°\n"
+                f"{format_latitude(state.latitude_deg)}, {format_longitude(state.longitude_deg)}"
+                f"  ({src})"
+            )
+            if state.photo_when is not None:
+                site_text += state.photo_when.astimezone().strftime("\nPano %Y-%m-%d %H:%M")
             site_label.text = (
                 f"Standort  {state.latitude_deg:.4f}°, {state.longitude_deg:.4f}°"
                 f"  ·  {format_latitude(state.latitude_deg)}, {format_longitude(state.longitude_deg)}"
                 f"  ({src})"
             )
-        if state.photo_when is not None:
-            site_label.text += state.photo_when.astimezone().strftime("  ·  Pano %Y-%m-%d %H:%M")
+            if state.photo_when is not None:
+                site_label.text += state.photo_when.astimezone().strftime("  ·  Pano %Y-%m-%d %H:%M")
+            if context_site is not None:
+                try:
+                    context_site.text = site_text
+                except RuntimeError:
+                    pass
         sync_site = state.refs.get("sync_site_inputs")
         if sync_site is not None:
             try:
@@ -745,7 +877,8 @@ def build_ui(
         elif state.method == "brush":
             hint.text = "Ziehen mit gedrueckter Taste malt. Cyan = Himmel (wird transparent)."
         else:
-            hint.text = "Automatisch: Klick setzt Norden auf diesem Foto. Dann Horizont erkennen."
+            # Auto: kein dauerhafter Hinweistext mehr in der UI
+            hint.text = ""
 
     def render() -> None:
         render_status()

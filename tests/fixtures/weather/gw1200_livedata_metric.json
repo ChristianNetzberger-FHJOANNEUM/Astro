@@ -1,0 +1,36 @@
+{
+  "common_list": [
+    {"id": "0x02", "val": "20.7", "unit": "C"},
+    {"id": "0x07", "val": "53%"},
+    {"id": "3", "val": "20.7", "unit": "C"},
+    {"id": "5", "val": "1.147 kPa"},
+    {"id": "0x03", "val": "10.8", "unit": "C"},
+    {"id": "0x0B", "val": "0.6 m/s"},
+    {"id": "0x0C", "val": "1.5 m/s"},
+    {"id": "0x19", "val": "2.0 m/s"},
+    {"id": "0x15", "val": "648.46 W/m2"},
+    {"id": "0x17", "val": "6"},
+    {"id": "0x0A", "val": "144"},
+    {"id": "0x6D", "val": "144"}
+  ],
+  "piezoRain": [
+    {"id": "srain_piezo", "val": "0"},
+    {"id": "0x0D", "val": "0.0 mm"},
+    {"id": "0x0E", "val": "0.0 mm/Hr"},
+    {"id": "0x7C", "val": "0.0 mm"},
+    {"id": "0x10", "val": "0.0 mm"},
+    {"id": "0x11", "val": "0.0 mm"},
+    {"id": "0x12", "val": "0.0 mm"},
+    {"id": "0x13", "val": "0.0 mm", "battery": "5", "voltage": "3.18"}
+  ],
+  "wh25": [
+    {
+      "intemp": "34.5",
+      "unit": "C",
+      "inhumi": "24%",
+      "abs": "996.0 hPa",
+      "rel": "996.1 hPa"
+    }
+  ],
+  "debug": [{"heap": "106744", "runtime": "2040", "usr_interval": "--"}]
+}

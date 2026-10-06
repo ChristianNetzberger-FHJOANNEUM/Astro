@@ -516,6 +516,319 @@ def _mean_az_alt(az: np.ndarray, alt: np.ndarray) -> tuple[float, float]:
     return lon, lat
 
 
+def normalize_object_query(raw: str) -> str:
+    """Normalisiert Nutzereingabe: 'NGC 6960' → 'NGC6960', 'hip 97649' → 'HIP97649'."""
+    text = " ".join(str(raw or "").strip().split())
+    if not text:
+        return ""
+    compact = text.replace(" ", "").replace("-", "").upper()
+    # M031 / m 31 → M31 (fuehrende Nullen bei Messier weglassen)
+    if compact.startswith("M") and compact[1:].isdigit():
+        return f"M{int(compact[1:])}"
+    if compact.startswith("HIP") and compact[3:].isdigit():
+        return f"HIP{int(compact[3:])}"
+    if compact.startswith("NGC") and compact[3:].isdigit():
+        return f"NGC{int(compact[3:]):04d}" if len(compact[3:]) <= 4 else f"NGC{compact[3:]}"
+    if compact.startswith("IC") and compact[2:].isdigit():
+        return f"IC{int(compact[2:]):04d}" if len(compact[2:]) <= 4 else f"IC{compact[2:]}"
+    return compact
+
+
+def _dso_kind(row: sqlite3.Row) -> str:
+    return "messier" if row["messier"] is not None else "ngc"
+
+
+def _dso_hit(row: sqlite3.Row) -> dict:
+    item = {
+        "key": str(row["key"]),
+        "id": str(row["key"]),
+        "name": str(row["name"] or row["key"]),
+        "kind": _dso_kind(row),
+        "type": str(row["type"] or ""),
+        "ra": round(float(row["ra_deg"]), 5),
+        "dec": round(float(row["dec_deg"]), 5),
+    }
+    if row["mag"] is not None:
+        item["mag"] = float(row["mag"])
+        band = str(row["mag_band"] or "").strip().upper()
+        if band in {"V", "B"}:
+            item["mag_band"] = band
+    return item
+
+
+def _star_hit(row: sqlite3.Row) -> dict:
+    hip = None if row["hip"] is None else int(row["hip"])
+    name = str(row["name"] or "").strip()
+    key = f"HIP{hip}" if hip is not None else (f"STAR:{name}" if name else "STAR")
+    item = {
+        "key": key,
+        "id": key,
+        "name": name or key,
+        "kind": "star",
+        "ra": round(float(row["ra_deg"]), 5),
+        "dec": round(float(row["dec_deg"]), 5),
+    }
+    if hip is not None:
+        item["hip"] = hip
+    if row["mag"] is not None:
+        item["mag"] = float(row["mag"])
+    if row["con"]:
+        item["con"] = str(row["con"])
+    return item
+
+
+def _planet_hits(query: str) -> list[dict]:
+    """Namenssuche Mond/Planeten (ohne Ephemeride — nur Trefferliste)."""
+    q = query.strip().lower()
+    if not q:
+        return []
+    aliases = [
+        ("Sun", "Sonne", "sun"),
+        ("Moon", "Mond", "moon"),
+        ("Merkur", "Mercury", "planet"),
+        ("Venus", "Venus", "planet"),
+        ("Mars", "Mars", "planet"),
+        ("Jupiter", "Jupiter", "planet"),
+        ("Saturn", "Saturn", "planet"),
+        ("Uranus", "Uranus", "planet"),
+        ("Neptun", "Neptune", "planet"),
+    ]
+    out: list[dict] = []
+    for name_de, name_en, kind in aliases:
+        labels = {name_de.lower(), name_en.lower(), kind}
+        if q in labels or any(q in label for label in labels):
+            out.append(
+                {
+                    "key": f"{kind}:{name_de}",
+                    "id": name_de,
+                    "name": name_de,
+                    "kind": kind,
+                }
+            )
+    return out
+
+
+def search_catalog(
+    query: str,
+    *,
+    db_path: Path | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Freitextsuche in DSO + benannten Sternen (+ Gestirne). Ohne Az/h."""
+    raw = str(query or "").strip()
+    if not raw:
+        return []
+    limit = max(1, min(50, int(limit)))
+    norm = normalize_object_query(raw)
+    path = catalog_db_path(db_path)
+    hits: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(item: dict) -> None:
+        key = str(item.get("key") or "")
+        if not key or key in seen:
+            return
+        seen.add(key)
+        hits.append(item)
+
+    for item in _planet_hits(raw):
+        _add(item)
+        if len(hits) >= limit:
+            return hits[:limit]
+
+    if not catalog_ready(path):
+        return hits[:limit]
+
+    like = f"%{raw}%"
+    like_norm = f"%{norm}%"
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        # 1) Exakter Key
+        if norm:
+            row = conn.execute(
+                "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                "FROM dso WHERE upper(key)=? LIMIT 1",
+                (norm,),
+            ).fetchone()
+            if row is not None:
+                _add(_dso_hit(row))
+            # HIP exakt
+            if norm.startswith("HIP") and norm[3:].isdigit():
+                hip = int(norm[3:])
+                star = conn.execute(
+                    "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars WHERE hip=? LIMIT 1",
+                    (hip,),
+                ).fetchone()
+                if star is not None:
+                    _add(_star_hit(star))
+
+        # 2) Key-Prefix / Name
+        for row in conn.execute(
+            """
+            SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier
+            FROM dso
+            WHERE upper(key) LIKE ? OR upper(key) LIKE ?
+               OR name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE
+            ORDER BY
+              CASE WHEN upper(key)=? THEN 0
+                   WHEN upper(key) LIKE ? THEN 1
+                   ELSE 2 END,
+              CASE WHEN mag IS NULL THEN 99 ELSE mag END,
+              key
+            LIMIT ?
+            """,
+            (f"{norm}%", like_norm, like, like_norm, norm, f"{norm}%", limit),
+        ):
+            _add(_dso_hit(row))
+            if len(hits) >= limit:
+                break
+
+        if len(hits) < limit:
+            for star in conn.execute(
+                """
+                SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                WHERE name IS NOT NULL AND name != ''
+                  AND (name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE)
+                ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END ASC, name
+                LIMIT ?
+                """,
+                (like, like_norm, limit),
+            ):
+                _add(_star_hit(star))
+                if len(hits) >= limit:
+                    break
+
+    return hits[:limit]
+
+
+def resolve_catalog_object(
+    query: str,
+    *,
+    latitude_deg: float,
+    longitude_deg: float,
+    when: datetime,
+    db_path: Path | None = None,
+    profile: HorizonProfile | None = None,
+) -> dict | None:
+    """Ein Objekt inkl. Az/h — unabhaengig von Messier/NGC-Overlay-Filtern."""
+    raw = str(query or "").strip()
+    if not raw:
+        return None
+    stamp = when.astimezone(timezone.utc)
+    norm = normalize_object_query(raw)
+    path = catalog_db_path(db_path)
+
+    def _with_horizon(item: dict, ra: float, dec: float) -> dict:
+        az, alt = radec_to_az_alt(ra, dec, latitude_deg, longitude_deg, stamp)
+        above = True
+        if profile is not None and profile.points:
+            above = float(alt) > profile.altitude_at(float(az))
+        out = dict(item)
+        out["ra"] = round(float(ra), 5)
+        out["dec"] = round(float(dec), 5)
+        out["az"] = round(float(az), 3)
+        out["alt"] = round(float(alt), 3)
+        out["above"] = bool(above)
+        out["when"] = stamp.isoformat()
+        return out
+
+    def _resolve_body(kind: str, name: str) -> dict | None:
+        want = name.lower()
+        for body in solar_system_bodies(stamp):
+            if body.name.lower() != want and body.key.lower() != want:
+                if not (kind in {"sun", "moon"} and body.kind == kind):
+                    continue
+            item = {
+                "key": f"{body.kind}:{body.name}",
+                "id": body.key,
+                "name": body.name,
+                "kind": body.kind,
+                "mag": body.mag,
+            }
+            if body.phase is not None:
+                item["phase"] = round(float(body.phase), 3)
+            return _with_horizon(item, body.ra_deg, body.dec_deg)
+        return None
+
+    # Klare Gestirnsnamen
+    qlow = raw.lower()
+    body_aliases = {
+        "sonne": ("sun", "Sonne"),
+        "sun": ("sun", "Sonne"),
+        "mond": ("moon", "Mond"),
+        "moon": ("moon", "Mond"),
+        "merkur": ("planet", "Merkur"),
+        "mercury": ("planet", "Merkur"),
+        "venus": ("planet", "Venus"),
+        "mars": ("planet", "Mars"),
+        "jupiter": ("planet", "Jupiter"),
+        "saturn": ("planet", "Saturn"),
+        "uranus": ("planet", "Uranus"),
+        "neptun": ("planet", "Neptun"),
+        "neptune": ("planet", "Neptun"),
+    }
+    if qlow in body_aliases:
+        kind, name = body_aliases[qlow]
+        found = _resolve_body(kind, name)
+        if found is not None:
+            return found
+
+    hit: dict | None = None
+    if catalog_ready(path):
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = None
+            if norm:
+                row = conn.execute(
+                    "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                    "FROM dso WHERE upper(key)=? LIMIT 1",
+                    (norm,),
+                ).fetchone()
+                # NGC6960 vs NGC 6960 ohne Zero-Pad-Varianten
+                if row is None and norm.startswith("NGC") and norm[3:].isdigit():
+                    alt_keys = {f"NGC{int(norm[3:])}", f"NGC{int(norm[3:]):04d}"}
+                    for key in alt_keys:
+                        row = conn.execute(
+                            "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                            "FROM dso WHERE upper(key)=? LIMIT 1",
+                            (key,),
+                        ).fetchone()
+                        if row is not None:
+                            break
+                if row is None and norm.startswith("IC") and norm[2:].isdigit():
+                    for key in {f"IC{int(norm[2:])}", f"IC{int(norm[2:]):04d}"}:
+                        row = conn.execute(
+                            "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                            "FROM dso WHERE upper(key)=? LIMIT 1",
+                            (key,),
+                        ).fetchone()
+                        if row is not None:
+                            break
+            if row is not None:
+                hit = _dso_hit(row)
+            elif norm.startswith("HIP") and norm[3:].isdigit():
+                star = conn.execute(
+                    "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars WHERE hip=? LIMIT 1",
+                    (int(norm[3:]),),
+                ).fetchone()
+                if star is not None:
+                    hit = _star_hit(star)
+
+    if hit is None:
+        for cand in search_catalog(raw, db_path=path, limit=8):
+            if cand.get("kind") in {"sun", "moon", "planet"}:
+                found = _resolve_body(str(cand["kind"]), str(cand["name"]))
+                if found is not None:
+                    return found
+            if cand.get("ra") is not None and cand.get("dec") is not None:
+                hit = cand
+                break
+
+    if hit is None:
+        return None
+    return _with_horizon(hit, float(hit["ra"]), float(hit["dec"]))
+
+
 def query_overlay(
     *,
     db_path: Path | None = None,

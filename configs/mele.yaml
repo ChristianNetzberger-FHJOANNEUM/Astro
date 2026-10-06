@@ -27,9 +27,26 @@ synscan_pro_exe: C:/Astro/SW/synscanpro_windows_2611/SynScanPro/SynScanPro.exe
 # GeoSphere-Forecast-Journal (stündlich via Task Scheduler / CLI).
 weather_journal_enabled: true
 weather_journal_interval_h: 1
-# Lokale Station (z.B. Ecowitt GW1200+WS90) — Custom Server -> /weather/observation
+# Lokale Station: Pull von weather_server (eigenstaendig) und/oder Push /weather/observation
 local_weather:
-  enabled: false
-  provider: ecowitt
+  enabled: true
+  provider: weather_server
   label: Garten
+  server_url: http://127.0.0.1:8765
+  poll_interval_s: 20
+  journal: true
+
+# Observatory Safety (MeLE-Entscheidung; weather_server bleibt SoR)
+weather_safety:
+  live_max_age_s: 60
+  stale_max_age_s: 180
+  dew_caution_k: 3.0
+  # wind_caution_ms: null   # optional, z.B. 5.0
+  # gust_caution_ms: null   # optional, z.B. 8.0
+  rain_unsafe_mmh: 0.01
+  dew_trend_window_min: 45
+  dew_trend_min_samples: 4
+  dew_eta_threshold_k: 3.0
+  dew_eta_min_abs_trend_k_per_h: 0.25
+
 longitude_deg: 14.366140

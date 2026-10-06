@@ -16,6 +16,12 @@ sections:
       - id: sternzeit-ra-azimut
         title: Sternzeit, RA und Azimut
         file: knowledge/sternzeit-ra-azimut.md
+      - id: weather-server
+        title: weather_server (Port, DB, Clients)
+        file: knowledge/weather-server.md
+      - id: mele-pc-autostart
+        title: MeLE-PC Autostart (Windows)
+        file: knowledge/mele-pc-autostart.md
 
   - id: inventar
     title: Inventar

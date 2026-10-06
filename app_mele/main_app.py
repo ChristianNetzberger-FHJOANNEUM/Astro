@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from datetime import date, datetime, timezone
+import time
 from urllib.parse import urlencode
 
 from fastapi import Query, Request
@@ -15,7 +16,13 @@ from nicegui import app, run, ui
 
 from app_mele.layout import build_ui
 from app_mele.state import UiState
-from mele.catalog import object_track, query_overlay
+from mele.catalog import object_track, query_overlay, resolve_catalog_object, search_catalog
+from mele.favorites import (
+    add_favorite,
+    favorite_markers,
+    load_favorites,
+    remove_favorite,
+)
 from mele.observe_almanac import (
     build_almanac,
     load_almanac_prefs,
@@ -38,6 +45,7 @@ from mele.solar import (
 )
 from mele.prefs import load_prefs, prefs_path, save_prefs
 from mele.config import load_mele_settings, save_site
+from mele.capture_timing import append_capture_timing, read_capture_timing
 from mele.observe import gps_from_jpeg, list_location_jpegs, resolve_observer
 from mele.shadow_calibration import (
     ShadowCalibrationError,
@@ -64,11 +72,33 @@ from mele.weather_journal import (
     should_skip_forecast,
 )
 from mele.weather_local import parse_observation_payload
+from mele.weather_server_client import (
+    SOURCE_WEATHER_SERVER,
+    WeatherServerError,
+    fetch_current,
+    fetch_history,
+    format_station_summary,
+    sample_id,
+    sample_to_observation,
+)
+from mele.weather_safety import (
+    DATA_LIVE,
+    DATA_OFFLINE,
+    DATA_STALE,
+    SAFETY_CAUTION,
+    SAFETY_SAFE,
+    SAFETY_UNKNOWN,
+    SAFETY_UNSAFE,
+    evaluate_weather_safety,
+)
 from mele.astro_manager import (
+    FRAME_TYPE_DARK,
+    FRAME_TYPE_LIGHT,
     bump_session_capture,
     create_session,
     delete_profile,
     delete_session,
+    ensure_capture_dir,
     ensure_manager_db,
     ensure_session_subdir,
     folder_slug,
@@ -76,6 +106,7 @@ from mele.astro_manager import (
     get_session,
     list_profiles,
     list_sessions,
+    normalize_frame_type,
     object_summary,
     resolve_imaging_params,
     session_dir_slug,
@@ -88,12 +119,13 @@ from mele.astro_manager import (
 from mele.preview_service import (
     PreviewError,
     StretchParams,
+    find_capture_files,
     find_fits_files,
     find_latest_focus,
     preview_for_session,
     roi_preview_for_session,
     session_preview_status,
-    wait_and_preview,
+    wait_for_new_capture_file,
 )
 from mele.wiki_pages import index_payload, page_payload
 from mele.network import (
@@ -318,6 +350,10 @@ def run_app(port: int | None = None) -> None:
                 started_utc=str(body.get("started_utc") or "") or None,
                 frames_planned=_optional_int_body(body.get("frames_planned")),
                 frames_completed=int(body.get("frames_completed") or 0),
+                lights_planned=_optional_int_body(body.get("lights_planned")),
+                lights_completed=_optional_int_body(body.get("lights_completed")),
+                darks_planned=_optional_int_body(body.get("darks_planned")),
+                darks_completed=int(body.get("darks_completed") or 0),
                 exposure_s=_optional_float_body(body.get("exposure_s")),
                 gain=_optional_float_body(body.get("gain")),
                 iso=_optional_int_body(body.get("iso")),
@@ -391,6 +427,10 @@ def run_app(port: int | None = None) -> None:
                 profile_id=_optional_int_body(body.get("profile_id")),
                 frames_planned=_optional_int_body(body.get("frames_planned")),
                 frames_completed=_optional_int_body(body.get("frames_completed")),
+                lights_planned=_optional_int_body(body.get("lights_planned")),
+                lights_completed=_optional_int_body(body.get("lights_completed")),
+                darks_planned=_optional_int_body(body.get("darks_planned")),
+                darks_completed=_optional_int_body(body.get("darks_completed")),
                 exposure_s=_optional_float_body(body.get("exposure_s")),
                 gain=_optional_float_body(body.get("gain")),
                 iso=_optional_int_body(body.get("iso")),
@@ -453,6 +493,36 @@ def run_app(port: int | None = None) -> None:
             "preview_url": url,
             **result.to_dict(),
         }
+
+    @app.get("/astro/sessions/{session_id}/timing")
+    def astro_session_timing(session_id: int) -> JSONResponse:
+        """Capture-Timing-Log der Session (``capture-timing.json``)."""
+        session = get_session(session_id, db_path=settings.astro_manager_db)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "Session unbekannt"}, status_code=404)
+        local = str(session.local_path or "").strip()
+        if not local:
+            return JSONResponse({"ok": False, "error": "Session ohne Lokalpfad"}, status_code=400)
+        data = read_capture_timing(local)
+        if data is None:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "session_id": session_id,
+                    "empty": True,
+                    "frames": [],
+                    "summary": {},
+                    "path": str(Path(local) / "capture-timing.json"),
+                }
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "session_id": session_id,
+                "empty": False,
+                **data,
+            }
+        )
 
     @app.get("/astro/sessions/{session_id}/preview")
     async def astro_session_preview_get(
@@ -598,7 +668,7 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/astro/nina/capture")
     async def astro_nina_capture(request: Request) -> JSONResponse:
-        """Light-Frame: Profil-Defaults, Session-Override, Ordner …/s{id}/, NINA speichern."""
+        """Frame-Capture: Profil/Session, Ordner …/s{id}/LIGHTS|DARKS/, NINA speichern."""
         try:
             body = await request.json()
         except Exception:
@@ -613,6 +683,9 @@ def run_app(port: int | None = None) -> None:
         gain_override = _optional_float_body(body.get("gain"))
         frames_override = _optional_int_body(body.get("frames"))
         reuse_session_id = _optional_int_body(body.get("session_id"))
+        image_type = normalize_frame_type(
+            str(body.get("image_type") or body.get("frame_type") or FRAME_TYPE_LIGHT)
+        )
         # Multi-Frame-Lauf: Preview nur bei letztem Frame (Frontend setzt false dazwischen)
         raw_preview = body.get("make_preview")
         if raw_preview is None:
@@ -621,6 +694,8 @@ def run_app(port: int | None = None) -> None:
             make_preview = raw_preview.strip().lower() not in ("0", "false", "no", "off")
         else:
             make_preview = bool(raw_preview)
+        if image_type == FRAME_TYPE_DARK:
+            make_preview = False
 
         existing = None
         if reuse_session_id is not None:
@@ -670,8 +745,10 @@ def run_app(port: int | None = None) -> None:
                 session = create_session(
                     catalog_key=catalog_key,
                     profile_id=profile.id if profile else profile_id,
-                    frames_planned=int(params["frames"]),
-                    frames_completed=0,
+                    lights_planned=int(params["frames"]),
+                    lights_completed=0,
+                    darks_planned=0,
+                    darks_completed=0,
                     exposure_s=float(exposure_s),
                     gain=params.get("gain"),
                     iso=params.get("iso"),
@@ -691,7 +768,7 @@ def run_app(port: int | None = None) -> None:
         assert session is not None
         sid = int(session.id)  # type: ignore[attr-defined]
 
-        # Immer kanonisch: …/Target/Datum/s#####/ — alte Pfade ohne s##### nachziehen
+        # Session-Root …/Target/Datum/s#####/ (ohne LIGHTS/DARKS)
         canonical_local = str(
             suggested_local_session_dir(
                 catalog_key,
@@ -714,14 +791,16 @@ def run_app(port: int | None = None) -> None:
         existing_archive = (existing.archive_path if existing else "") or ""
         raw_local = body_local or existing_local or canonical_local
         raw_archive = body_archive or existing_archive or canonical_archive
-        local_path = str(ensure_session_subdir(raw_local, sid))
-        archive_path = str(ensure_session_subdir(raw_archive, sid))
+        session_local = str(ensure_session_subdir(raw_local, sid))
+        session_archive = str(ensure_session_subdir(raw_archive, sid))
+        capture_local = str(ensure_capture_dir(session_local, sid, frame_type=image_type))
+        capture_archive = str(ensure_capture_dir(session_archive, sid, frame_type=image_type))
 
         try:
             session = update_session_paths(
                 sid,
-                local_path=local_path,
-                archive_path=archive_path,
+                local_path=session_local,
+                archive_path=session_archive,
                 db_path=settings.astro_manager_db,
             )
         except Exception as exc:  # noqa: BLE001
@@ -745,21 +824,21 @@ def run_app(port: int | None = None) -> None:
             )
 
         try:
-            Path(local_path).mkdir(parents=True, exist_ok=True)
+            Path(capture_local).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return JSONResponse(
-                {"ok": False, "error": f"Lokalpfad nicht anlegbar: {exc}", "local_path": local_path},
+                {"ok": False, "error": f"Lokalpfad nicht anlegbar: {exc}", "local_path": capture_local},
                 status_code=500,
             )
 
-        dest = nina.prepare_mele_image_destination(local_path)
+        dest = nina.prepare_mele_image_destination(capture_local)
         if not dest["path"].ok:
             return JSONResponse(
                 {
                     "ok": False,
                     "error": dest["path"].error or "NINA Image File Path fehlgeschlagen",
                     "destination": {k: v.to_dict() for k, v in dest.items()},
-                    "local_path": local_path,
+                    "local_path": capture_local,
                 },
                 status_code=502,
             )
@@ -769,7 +848,7 @@ def run_app(port: int | None = None) -> None:
                     "ok": False,
                     "error": dest["pattern"].error or "NINA File Pattern fehlgeschlagen",
                     "destination": {k: v.to_dict() for k, v in dest.items()},
-                    "local_path": local_path,
+                    "local_path": capture_local,
                 },
                 status_code=502,
             )
@@ -777,18 +856,18 @@ def run_app(port: int | None = None) -> None:
         snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
         target_for_nina = f"{target}_{session_dir_slug(sid)}"
 
-        # Vorherige FITS merken — falls HTTP-Timeout, aber NINA trotzdem speichert
-        fits_before = {str(p) for p in find_fits_files(local_path)}
+        # Vorherige Capture-Dateien merken (FITS und RAW/RW2)
+        files_before = {str(p) for p in find_capture_files(capture_local)}
+        t0 = time.monotonic()
+        t_expose_end: float | None = None
         try:
-            # Wichtig (ninaAPI Camera.cs): onlyAwaitCaptureCompletion wirkt NUR wenn
-            # waitForResult=false. Bei waitForResult=true wird danach trotzdem
-            # await CaptureTask ausgeführt — inkl. PrepareImage (Debayer/Stretch).
-            # onlyAwait: HTTP kehrt nach Ende IsExposing zurück; Speichern/Anzeige
-            # laufen im Hintergrund weiter (FITS ggf. etwas verzögert).
+            # onlyAwait: HTTP kehrt nach Ende IsExposing zurück.
+            # Bei Lumix-Native laeuft der RW2-Download danach noch — wir warten
+            # unten explizit auf die Datei, bevor das naechste Frame startet.
             result = nina.capture(
                 duration_s=float(exposure_s),
                 gain=gain,
-                image_type="LIGHT",
+                image_type=image_type,
                 save=True,
                 target_name=target_for_nina,
                 wait_for_result=False,
@@ -798,57 +877,113 @@ def run_app(port: int | None = None) -> None:
             )
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        t_expose_end = time.monotonic()
 
-        # Timeout-Fallback: Belichtung lief, HTTP-Client gab auf, FITS kam trotzdem
-        if (not result.ok) and "timeout" in (result.error or "").lower():
-            wait_s = min(150.0, max(20.0, float(exposure_s) + 90.0))
+        # Immer auf neue Datei warten (auch bei HTTP-ok): Lumix-Download > Belichtung
+        wait_s = min(180.0, max(25.0, float(exposure_s) + 120.0))
+        # Bei Timeout der HTTP-Antwort trotzdem auf Datei hoffen
+        if (not result.ok) and "timeout" not in (result.error or "").lower():
+            # Echter Kamera-/API-Fehler: kurzer Nachlauf, falls Datei trotzdem kommt
+            wait_s = min(40.0, wait_s)
 
-            def _wait_new_fits() -> Path | None:
-                import time
+        new_capture = await run.io_bound(
+            lambda: wait_for_new_capture_file(
+                capture_local,
+                before=files_before,
+                timeout_s=wait_s,
+                min_size_bytes=1024,
+                stable_s=0.8,
+            )
+        )
+        t_file = time.monotonic()
+        expose_s = (t_expose_end - t0) if t_expose_end is not None else None
+        post_s = (t_file - t_expose_end) if t_expose_end is not None else None
+        total_s = t_file - t0
 
-                deadline = time.monotonic() + wait_s
-                while time.monotonic() < deadline:
-                    for path in find_fits_files(local_path):
-                        if str(path) not in fits_before:
-                            try:
-                                if path.stat().st_size >= 1024:
-                                    return path
-                            except OSError:
-                                pass
-                    time.sleep(0.5)
-                return None
+        nina_dl_s = None
+        camera_state = None
+        try:
+            cam_after = nina.get_camera_info()
+            if cam_after.camera is not None:
+                nina_dl_s = cam_after.camera.last_download_time_s
+                camera_state = cam_after.camera.camera_state
+        except Exception:  # noqa: BLE001
+            pass
 
-            new_fits = await run.io_bound(_wait_new_fits)
-            if new_fits is not None:
-                result = NinaCommandResult(
-                    ok=True,
-                    api_online=True,
-                    message=f"Capture ok (FITS nach Timeout: {new_fits.name})",
-                    error="",
-                    status_code=200,
-                    request=result.request,
-                )
+        timing_payload: dict | None = None
+        try:
+            timing_payload = append_capture_timing(
+                session_local,
+                session_id=sid,
+                image_type=image_type,
+                exposure_planned_s=float(exposure_s),
+                expose_s=expose_s,
+                post_s=post_s,
+                total_s=total_s,
+                file_name=new_capture.name if new_capture else None,
+                file_path=str(new_capture) if new_capture else None,
+                nina_last_download_s=nina_dl_s,
+                camera_state=camera_state,
+                ok=bool(new_capture is not None),
+                note=("" if new_capture else "no_file"),
+            )
+        except Exception:  # noqa: BLE001
+            timing_payload = None
+
+        if new_capture is not None:
+            result = NinaCommandResult(
+                ok=True,
+                api_online=True,
+                message=(
+                    result.message
+                    or f"Capture ok ({new_capture.name})"
+                ),
+                error="",
+                status_code=200,
+                request=result.request,
+            )
+        elif result.ok:
+            # Belichtung ok, aber keine Datei — naechstes Frame wuerde Downloads stoeren
+            result = NinaCommandResult(
+                ok=False,
+                api_online=True,
+                message="",
+                error=(
+                    "Belichtung ok, aber keine neue Datei (FITS/RW2) im Zielordner. "
+                    "Bei Lumix-Native: Download dauert oft länger — "
+                    f"Timeout {wait_s:.0f}s, Pfad {capture_local}"
+                ),
+                status_code=504,
+                request=result.request,
+            )
 
         if result.ok:
             try:
                 if existing is not None:
                     note = str(existing.notes or "")
-                    n = int(existing.frames_completed or 0) + 1
-                    if "Wiederholung" not in note:
-                        note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
+                    if image_type == FRAME_TYPE_LIGHT:
+                        n = int(existing.lights_completed or existing.frames_completed or 0) + 1
+                        if "Wiederholung" not in note:
+                            note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
                     session = bump_session_capture(
-                        sid, frames_delta=1, db_path=settings.astro_manager_db
+                        sid,
+                        frames_delta=1,
+                        frame_type=image_type,
+                        db_path=settings.astro_manager_db,
                     )
                     session = update_session_paths(
                         sid,
-                        local_path=local_path,
-                        archive_path=archive_path,
+                        local_path=session_local,
+                        archive_path=session_archive,
                         notes=note,
                         db_path=settings.astro_manager_db,
                     )
                 else:
                     session = bump_session_capture(
-                        sid, frames_delta=1, db_path=settings.astro_manager_db
+                        sid,
+                        frames_delta=1,
+                        frame_type=image_type,
+                        db_path=settings.astro_manager_db,
                     )
             except Exception as exc:  # noqa: BLE001
                 return JSONResponse(
@@ -858,19 +993,30 @@ def run_app(port: int | None = None) -> None:
                         "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
                         "warning": f"Capture ok, Session-Update fehlgeschlagen: {exc}",
                         "camera": cam.camera.to_dict(),
-                        "local_path": local_path,
+                        "local_path": session_local,
+                        "capture_path": capture_local,
+                        "capture_file": str(new_capture) if new_capture else None,
+                        "image_type": image_type,
                     }
                 )
 
         preview_payload: dict | None = None
         preview_error: str | None = None
         if result.ok and make_preview:
-            # NINA kann die Datei kurz nach waitForResult noch finalisieren
-            wait_s = min(120.0, max(15.0, float(exposure_s) + 20.0))
             try:
-                prev = await run.io_bound(
-                    lambda: wait_and_preview(local_path, timeout_s=wait_s, force=True)
-                )
+                from mele.preview_service import generate_preview
+
+                def _preview_from_capture():
+                    src = new_capture
+                    if src is None or not Path(src).is_file():
+                        raise PreviewError("Keine Capture-Datei für Preview")
+                    return generate_preview(
+                        src,
+                        session_dir=session_local,
+                        force=True,
+                    )
+
+                prev = await run.io_bound(_preview_from_capture)
                 preview_payload = _session_preview_payload(sid, prev)
             except PreviewError as exc:
                 preview_error = str(exc)
@@ -884,7 +1030,12 @@ def run_app(port: int | None = None) -> None:
                 "capture": result.to_dict(),
                 "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
                 "camera": cam.camera.to_dict(),
-                "image_file_path": local_path,
+                "image_file_path": capture_local,
+                "local_path": session_local,
+                "capture_path": capture_local,
+                "capture_file": str(new_capture) if new_capture else None,
+                "archive_capture_path": capture_archive,
+                "image_type": image_type,
                 "session_folder": session_dir_slug(sid),
                 "resolved_params": params,
                 "destination": {k: v.to_dict() for k, v in dest.items()},
@@ -893,11 +1044,24 @@ def run_app(port: int | None = None) -> None:
                 "make_preview": make_preview,
                 "preview": preview_payload,
                 "preview_error": preview_error,
+                "timing": None if timing_payload is None else {
+                    "expose_s": expose_s,
+                    "post_s": post_s,
+                    "total_s": total_s,
+                    "summary": timing_payload.get("summary"),
+                    "path": str(Path(session_local) / "capture-timing.json"),
+                },
                 "error": result.error,
                 "note": (
-                    f"Ordner …/{session_dir_slug(sid)}/; "
-                    "Profil-Defaults mit Session-Override; "
-                    "Wiederholen bleibt in derselben Session-ID."
+                    f"NINA speichert unter {capture_local}; "
+                    f"Session-Root …/{session_dir_slug(sid)}/; "
+                    f"Typ {image_type}; "
+                    + (
+                        f"Datei {new_capture.name}; "
+                        if new_capture
+                        else "keine neue Datei; "
+                    )
+                    + "naechstes Frame erst nach stabilem Download."
                 ),
             },
             status_code=status,
@@ -1547,6 +1711,207 @@ def run_app(port: int | None = None) -> None:
                 payload = dict(request.query_params)
         return _ingest_observation(payload)
 
+    @app.get("/weather/station")
+    def weather_station(journal: int = 0) -> JSONResponse:
+        """Aktuelle lokale Station via weather_server (/api/current)."""
+        if not settings.local_weather_enabled:
+            return JSONResponse(
+                {"ok": False, "error": "local_weather.enabled=false in mele.yaml"},
+                status_code=403,
+            )
+        url = (settings.local_weather_server_url or "").strip()
+        if not url:
+            return JSONResponse(
+                {"ok": False, "error": "local_weather.server_url fehlt"},
+                status_code=400,
+            )
+        try:
+            sample = fetch_current(url)
+            observation = sample_to_observation(sample)
+        except WeatherServerError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+        journaled = False
+        if bool(journal) and settings.local_weather_journal:
+            lat = settings.latitude_deg
+            lon = settings.longitude_deg
+            if lat is not None and lon is not None:
+                try:
+                    append_observation(
+                        weather_dir,
+                        observation,
+                        latitude_deg=float(lat),
+                        longitude_deg=float(lon),
+                        source=SOURCE_WEATHER_SERVER,
+                        label=settings.local_weather_label,
+                    )
+                    journaled = True
+                except OSError as exc:
+                    return JSONResponse(
+                        {"ok": False, "error": f"journal write failed: {exc}", "observation": observation},
+                        status_code=500,
+                    )
+
+        slim = {k: v for k, v in observation.items() if k != "raw"}
+        history: list = []
+        try:
+            history = fetch_history(url, limit=120, timeout_s=6.0)
+        except WeatherServerError:
+            history = []
+        safety = evaluate_weather_safety(
+            sample,
+            history,
+            cfg=settings.weather_safety,
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "label": settings.local_weather_label,
+                "sample_id": sample.get("id"),
+                "journaled": journaled,
+                "observation": slim,
+                "summary": format_station_summary(
+                    observation, label=settings.local_weather_label
+                ),
+                "safety": safety.to_dict(),
+            }
+        )
+
+    @app.get("/catalog/search")
+    def catalog_search(q: str = "", limit: int = 20) -> JSONResponse:
+        """Freitextsuche DSO/Sterne/Gestirne — unabhaengig vom Overlay-Filter."""
+        query = str(q or "").strip()
+        if not query:
+            return JSONResponse({"ok": True, "query": "", "hits": []})
+        try:
+            hits = search_catalog(
+                query,
+                db_path=settings.catalog_dir / "sky.sqlite",
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc), "hits": []}, status_code=500)
+        return JSONResponse({"ok": True, "query": query, "hits": hits})
+
+    @app.get("/catalog/resolve")
+    def catalog_resolve(
+        q: str = "",
+        key: str = "",
+        lat: float | None = None,
+        lon: float | None = None,
+        when: str = "",
+        stem: str = "",
+    ) -> JSONResponse:
+        """Ein Katalogobjekt inkl. Az/h — auch wenn NGC/Messier-Overlay aus ist."""
+        query = str(key or q or "").strip()
+        if not query:
+            return JSONResponse({"ok": False, "error": "q oder key noetig"}, status_code=400)
+        if lat is None or lon is None:
+            return JSONResponse({"ok": False, "error": "lat, lon noetig"}, status_code=400)
+        if when:
+            stamp = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = datetime.now(timezone.utc)
+        profile = None
+        if stem:
+            json_path = settings.horizon_dir / f"{stem}.horizon.json"
+            if json_path.is_file():
+                profile = load_profile(json_path)
+        try:
+            obj = resolve_catalog_object(
+                query,
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                when=stamp,
+                db_path=settings.catalog_dir / "sky.sqlite",
+                profile=profile,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        if obj is None:
+            return JSONResponse(
+                {"ok": False, "error": f"Nicht gefunden: {query}", "query": query},
+                status_code=404,
+            )
+        return JSONResponse({"ok": True, "query": query, "object": obj})
+
+    @app.get("/catalog/favorites")
+    def catalog_favorites_get() -> JSONResponse:
+        data = load_favorites(settings.horizon_dir)
+        return JSONResponse({"ok": True, **data})
+
+    @app.get("/catalog/favorites/markers")
+    def catalog_favorites_markers(
+        lat: float | None = None,
+        lon: float | None = None,
+        when: str = "",
+        stem: str = "",
+    ) -> JSONResponse:
+        if lat is None or lon is None:
+            return JSONResponse({"ok": False, "error": "lat, lon noetig"}, status_code=400)
+        if when:
+            stamp = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = datetime.now(timezone.utc)
+        profile = None
+        if stem:
+            json_path = settings.horizon_dir / f"{stem}.horizon.json"
+            if json_path.is_file():
+                profile = load_profile(json_path)
+        try:
+            payload = favorite_markers(
+                settings.horizon_dir,
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                when=stamp,
+                profile=profile,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": True, **payload})
+
+    @app.post("/catalog/favorites")
+    async def catalog_favorites_post(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            saved = add_favorite(settings.horizon_dir, body)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(saved)
+
+    @app.delete("/catalog/favorites")
+    async def catalog_favorites_delete(request: Request) -> JSONResponse:
+        key = ""
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                key = str(body.get("key") or "").strip()
+        except Exception:
+            key = ""
+        if not key:
+            # Query-Fallback: /catalog/favorites?key=NGC6960
+            key = str(request.query_params.get("key") or "").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "key fehlt"}, status_code=400)
+        try:
+            saved = remove_favorite(settings.horizon_dir, key)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(saved)
+
     @app.get("/sky-overlay")
     def sky_overlay(
         when: str = "",
@@ -1651,6 +2016,7 @@ def run_app(port: int | None = None) -> None:
         grid_ecliptic: int | None = None,
         horizon_points: int | None = None,
         tonight: int | None = None,
+        show_favorites: int | None = None,
         show_stars: int | None = None,
         show_const: int | None = None,
         show_messier: int | None = None,
@@ -1677,6 +2043,8 @@ def run_app(port: int | None = None) -> None:
             updates["horizon_points"] = bool(horizon_points)
         if tonight is not None:
             updates["tonight"] = bool(tonight)
+        if show_favorites is not None:
+            updates["show_favorites"] = bool(show_favorites)
         if show_stars is not None:
             updates["show_stars"] = bool(show_stars)
         if show_const is not None:
@@ -1689,7 +2057,18 @@ def run_app(port: int | None = None) -> None:
             updates["show_planets"] = bool(show_planets)
         if dso_types is not None:
             updates["dso_types"] = [p.strip() for p in dso_types.replace(";", ",").split(",") if p.strip()]
-        return JSONResponse(save_prefs(prefs_path(settings.horizon_dir), updates))
+        try:
+            return JSONResponse(save_prefs(prefs_path(settings.horizon_dir), updates))
+        except OSError as exc:
+            # Windows: Datei oft kurz gesperrt — Prefs bleiben in localStorage
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"Prefs speichern fehlgeschlagen: {exc}",
+                    "prefs": load_prefs(prefs_path(settings.horizon_dir)),
+                },
+                status_code=200,
+            )
 
     @app.get("/site-coords")
     def get_site_coords(stem: str = "") -> JSONResponse:
@@ -2039,10 +2418,11 @@ def run_app(port: int | None = None) -> None:
                 return
             if state.latitude_deg is None or state.longitude_deg is None:
                 try:
-                    label.text = "Wetter: Standort setzen"
+                    label.text = "Standort setzen (Prognose braucht lat/lon)"
                 except RuntimeError:
                     return
                 return
+            forecast_text = "noch kein Abruf — Wetter-Seite oeffnen"
             try:
                 data = load_forecast(
                     state.latitude_deg,
@@ -2051,15 +2431,171 @@ def run_app(port: int | None = None) -> None:
                     network=False,
                 )
                 note = " (Cache)" if data.get("stale") or data.get("offline") else ""
-                label.text = f"Wetter: {data['summary']['text']}{note}"
+                forecast_text = f"{data['summary']['text']}{note}"
             except WeatherError:
-                label.text = "Wetter: noch kein Abruf — Seite oeffnen"
+                pass
             except RuntimeError:
+                return
+
+            try:
+                # Mittlere Spalte: nur GeoSphere-Prognose (Station/Safety links/Badge)
+                label.text = forecast_text
+            except RuntimeError:
+                return
+
+        def _fmt_age(age_s: float | None) -> str:
+            if age_s is None:
+                return "—"
+            if age_s < 90:
+                return f"{age_s:.0f} s"
+            return f"{age_s / 60.0:.1f} min"
+
+        def _fmt_num(value: float | None, *, digits: int = 1, suffix: str = "") -> str:
+            if value is None:
+                return "—"
+            return f"{value:.{digits}f}{suffix}"
+
+        def apply_weather_safety_panel() -> None:
+            badge = state.refs.get("weather_safety_badge")
+            lines = state.refs.get("weather_safety_lines")
+            reasons_el = state.refs.get("weather_safety_reasons")
+            result = state.refs.get("weather_safety")
+            if badge is None or lines is None:
+                return
+            if not isinstance(result, dict):
+                try:
+                    badge.text = "UNKNOWN"
+                    badge.style("color: #64748b")
+                    lines.text = "Station disabled oder noch kein Sample"
+                    if reasons_el is not None:
+                        reasons_el.text = ""
+                except RuntimeError:
+                    return
+                return
+
+            data_state = str(result.get("data_state") or DATA_OFFLINE)
+            safety_state = str(result.get("safety_state") or SAFETY_UNKNOWN)
+            color = {
+                SAFETY_SAFE: "#15803d",
+                SAFETY_CAUTION: "#ca8a04",
+                SAFETY_UNSAFE: "#b91c1c",
+                SAFETY_UNKNOWN: "#64748b",
+            }.get(safety_state, "#64748b")
+            if data_state != DATA_LIVE:
+                color = "#64748b" if data_state == DATA_STALE else "#b91c1c"
+
+            try:
+                badge.text = f"{data_state} · {safety_state}"
+                badge.style(f"color: {color}")
+                eta = result.get("dew_eta_hours")
+                eta_txt = ""
+                if eta is not None:
+                    thr = getattr(settings.weather_safety, "dew_eta_threshold_k", 3.0)
+                    eta_txt = f"\nETA ΔT<{thr:g}K  ~{float(eta) * 60:.0f} min"
+                trend = result.get("dew_trend_k_per_hour")
+                risk = result.get("dew_risk") or ""
+                trend_txt = _fmt_num(trend, digits=2, suffix=" K/h")
+                if risk:
+                    trend_txt = f"{trend_txt} ({risk})"
+                rain = result.get("rain_rate_mm_h")
+                rain_txt = _fmt_num(rain, digits=2, suffix=" mm/h")
+                if safety_state == SAFETY_UNSAFE and "rain_rate_high" in (result.get("reasons") or []):
+                    rain_txt = f"{rain_txt}  ← UNSAFE"
+                lines.text = (
+                    f"Temp {_fmt_num(result.get('temp_c'), suffix=' °C')}   "
+                    f"RH {_fmt_num(result.get('humidity_pct'), digits=0, suffix=' %')}   "
+                    f"DP {_fmt_num(result.get('dewpoint_c'), suffix=' °C')}\n"
+                    f"ΔT {_fmt_num(result.get('dew_margin_k'), suffix=' K')}   "
+                    f"Trend {trend_txt}{eta_txt}\n"
+                    f"Wind {_fmt_num(result.get('wind_ms'), suffix=' m/s')}   "
+                    f"Gust {_fmt_num(result.get('gust_ms'), suffix=' m/s')}   "
+                    f"Dir {_fmt_num(result.get('wind_dir_deg'), digits=0, suffix='°')}\n"
+                    f"Rain {rain_txt}   "
+                    f"P {_fmt_num(result.get('pressure_hpa'), digits=1, suffix=' hPa')}\n"
+                    f"Sample age {_fmt_age(result.get('sample_age_s'))}"
+                )
+                if reasons_el is not None:
+                    reasons = result.get("reasons") or []
+                    err = result.get("offline_error")
+                    extra = f" · {err}" if err else ""
+                    reasons_el.text = ("Reasons: " + ", ".join(reasons) + extra) if reasons or err else ""
+            except RuntimeError:
+                return
+
+        _station_last_id: dict[str, int | None] = {"id": None}
+
+        def poll_weather_server() -> None:
+            if not settings.local_weather_enabled:
+                apply_weather_safety_panel()
+                return
+            url = (settings.local_weather_server_url or "").strip()
+            if not url:
+                return
+
+            sample = None
+            history: list = []
+            offline = False
+            offline_error = None
+            try:
+                sample = fetch_current(url, timeout_s=4.0)
+                observation = sample_to_observation(sample)
+                state.refs["station_observation"] = observation
+            except WeatherServerError as exc:
+                offline = True
+                offline_error = str(exc)
+                observation = state.refs.get("station_observation")
+                if isinstance(observation, dict):
+                    sample = observation
+
+            if not offline:
+                try:
+                    # ~45 min bei 30s Poll ≈ 90 Samples; etwas Puffer
+                    history = fetch_history(url, limit=120, timeout_s=6.0)
+                except WeatherServerError:
+                    history = []
+
+            result = evaluate_weather_safety(
+                sample if isinstance(sample, dict) else None,
+                history,
+                cfg=settings.weather_safety,
+                offline=offline,
+                offline_error=offline_error,
+            )
+            state.refs["weather_safety"] = result.to_dict()
+            apply_weather_summary()
+            apply_weather_safety_panel()
+
+            if offline or not settings.local_weather_journal or sample is None:
+                return
+            if not isinstance(sample, dict) or sample.get("id") is None:
+                # observation-shaped sample from cache — skip journal
+                if "provider" in sample:
+                    return
+            sid = sample_id(sample)
+            if sid is not None and sid == _station_last_id["id"]:
+                return
+            lat = state.latitude_deg if state.latitude_deg is not None else settings.latitude_deg
+            lon = state.longitude_deg if state.longitude_deg is not None else settings.longitude_deg
+            if lat is None or lon is None:
+                return
+            try:
+                obs = sample_to_observation(sample) if "provider" not in sample else sample
+                append_observation(
+                    weather_dir,
+                    obs,
+                    latitude_deg=float(lat),
+                    longitude_deg=float(lon),
+                    source=SOURCE_WEATHER_SERVER,
+                    label=settings.local_weather_label,
+                )
+                _station_last_id["id"] = sid
+            except OSError:
                 return
 
         def refresh_meta() -> None:
             _call(state.refs.get("refresh_meta"))
             apply_weather_summary()
+            apply_weather_safety_panel()
 
         def preview_url() -> str | None:
             if state.image_path is None:
@@ -2889,6 +3425,10 @@ def run_app(port: int | None = None) -> None:
         ui.timer(3.0, poll_synscan_status)
         ui.timer(0.3, poll_nina_app_status, once=True)
         ui.timer(3.0, poll_nina_app_status)
+        if settings.local_weather_enabled and (settings.local_weather_server_url or "").strip():
+            poll_s = max(15.0, float(settings.local_weather_poll_interval_s or 60.0))
+            ui.timer(0.5, poll_weather_server, once=True)
+            ui.timer(poll_s, poll_weather_server)
         # Default-Standort: verknuepftes 360-Panorama beim Session-Start laden
         if active_loc is not None and active_loc.pano_stem:
             media = _media_for_stem(active_loc.pano_stem)

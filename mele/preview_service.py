@@ -1,9 +1,8 @@
-"""Session-Preview: FITS → gestretchtes JPEG (Farbe/Debayer + Fokus-ROI).
+"""Session-Preview: FITS/Kamera-RAW → gestretchtes JPEG (Farbe/Debayer + Fokus-ROI).
 
-Original-FITS bleiben unverändert. Previews landen unter ``{session}/preview/``.
-Schwere Arbeit (Debayer 24 MP, ROI) läuft im NiceGUI-``io_bound``-Thread —
-kein separater Hintergrundprozess nötig; Übersicht bleibt ~1600 px, volle
-Auflösung nur im ROI-Ausschnitt.
+Originaldateien bleiben unverändert. Previews landen unter ``{session}/preview/``.
+FITS: Debayer wie bisher. Lumix-Native ``.rw2`` (u. a.): Decode via ``rawpy``/LibRaw.
+Schwere Arbeit läuft im NiceGUI-``io_bound``-Thread; Übersicht bleibt ~1600 px.
 """
 
 from __future__ import annotations
@@ -18,6 +17,9 @@ from astropy.visualization import AsinhStretch, PercentileInterval
 from PIL import Image
 
 FITS_SUFFIXES = {".fits", ".fit", ".fts", ".FIT", ".FITS", ".FTS"}
+# Kamera-RAW (z.B. Lumix-Native in NINA schreibt .rw2 statt FITS)
+CAPTURE_RAW_SUFFIXES = {".rw2", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raf", ".RW2", ".CR2", ".CR3", ".NEF", ".ARW", ".DNG", ".RAF"}
+CAPTURE_SUFFIXES = FITS_SUFFIXES | CAPTURE_RAW_SUFFIXES
 DEFAULT_MAX_WIDTH = 1600
 DEFAULT_MAX_HEIGHT = 1200
 DEFAULT_PERCENTILE = 99.5
@@ -130,17 +132,35 @@ def find_latest_focus(session_dir: str | Path) -> Path | None:
 
 
 def is_fits_path(path: Path) -> bool:
-    return path.suffix in FITS_SUFFIXES
+    return path.suffix in FITS_SUFFIXES or path.suffix.lower() in {
+        s.lower() for s in FITS_SUFFIXES
+    }
+
+
+def is_raw_path(path: Path) -> bool:
+    return path.suffix in CAPTURE_RAW_SUFFIXES or path.suffix.lower() in {
+        s.lower() for s in CAPTURE_RAW_SUFFIXES
+    }
+
+
+def is_capture_path(path: Path) -> bool:
+    """FITS oder Kamera-RAW (RW2/CR3/…)."""
+    return is_fits_path(path) or is_raw_path(path)
 
 
 def find_fits_files(session_dir: str | Path) -> list[Path]:
     """FITS im Session-Ordner (nicht unter ``preview/``), neueste zuerst."""
+    return [p for p in find_capture_files(session_dir) if is_fits_path(p)]
+
+
+def find_capture_files(session_dir: str | Path) -> list[Path]:
+    """FITS + RAW im Ordner (nicht unter ``preview/``), neueste zuerst."""
     root = Path(session_dir)
     if not root.is_dir():
         return []
     found: list[Path] = []
     for path in root.rglob("*"):
-        if not path.is_file() or not is_fits_path(path):
+        if not path.is_file() or not is_capture_path(path):
             continue
         try:
             if PREVIEW_SUBDIR in path.relative_to(root).parts:
@@ -152,8 +172,84 @@ def find_fits_files(session_dir: str | Path) -> list[Path]:
     return found
 
 
+def wait_for_new_capture_file(
+    session_dir: str | Path,
+    *,
+    before: set[str] | None = None,
+    timeout_s: float = 90.0,
+    poll_s: float = 0.4,
+    min_size_bytes: int = 1024,
+    stable_s: float = 0.6,
+) -> Path | None:
+    """Wartet auf eine neue Capture-Datei (FITS/RAW) mit stabiler Groesse.
+
+    Wichtig fuer Lumix-Native: Download von der Kamera endet oft erst nach
+    IsExposing=false — ohne dieses Warten gehen Frames verloren.
+    """
+    import time
+
+    root = Path(session_dir)
+    known = set(before or ())
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    candidate: Path | None = None
+    last_size = -1
+    stable_since: float | None = None
+
+    while time.monotonic() < deadline:
+        newest: Path | None = None
+        for path in find_capture_files(root):
+            if str(path) in known:
+                continue
+            newest = path
+            break
+        if newest is None:
+            candidate = None
+            last_size = -1
+            stable_since = None
+            time.sleep(poll_s)
+            continue
+        try:
+            size = newest.stat().st_size
+        except OSError:
+            time.sleep(poll_s)
+            continue
+        if size < min_size_bytes:
+            time.sleep(poll_s)
+            continue
+        if candidate is None or candidate != newest or size != last_size:
+            candidate = newest
+            last_size = size
+            stable_since = time.monotonic()
+            time.sleep(poll_s)
+            continue
+        if stable_since is not None and (time.monotonic() - stable_since) >= stable_s:
+            return candidate
+        time.sleep(poll_s)
+    return None
+
+
 def find_latest_fits(session_dir: str | Path) -> Path | None:
-    files = find_fits_files(session_dir)
+    """Neuestes FITS; bevorzugt LIGHTS/ (Darks sind fuer Preview unbrauchbar)."""
+    return find_latest_capture(session_dir, fits_only=True)
+
+
+def find_latest_capture(
+    session_dir: str | Path,
+    *,
+    fits_only: bool = False,
+) -> Path | None:
+    """Neueste Capture-Datei (FITS und/oder RAW); bevorzugt LIGHTS/."""
+    root = Path(session_dir)
+    finder = find_fits_files if fits_only else find_capture_files
+    lights = root / "LIGHTS"
+    if lights.is_dir():
+        files = finder(lights)
+        if files:
+            return files[0]
+    files = finder(root)
+    non_dark = [p for p in files if "DARKS" not in {part.upper() for part in p.parts}]
+    if non_dark:
+        return non_dark[0]
     return files[0] if files else None
 
 
@@ -381,17 +477,113 @@ def load_source_image(
     *,
     debayer: bool = True,
 ) -> tuple[np.ndarray, dict[str, Any], str | None]:
-    """Eingabebild laden. Phase 1: nur FITS; Hook für RAW/TIFF später.
+    """Eingabebild laden (FITS oder Kamera-RAW via rawpy).
 
     Returns:
-        (array, header, bayer_pattern|None) — array 2D Mono oder HxWx3 RGB.
+        (array, header, bayer_pattern|None) — array 2D Mono/CFA oder HxWx3 RGB.
     """
     src = Path(path)
     if not src.is_file():
         raise PreviewError(f"Datei fehlt: {src}")
     if is_fits_path(src):
         return _load_fits_image(src, debayer=debayer)
-    raise PreviewError(f"Format noch nicht unterstützt: {src.suffix} (Phase 1: nur FITS)")
+    if is_raw_path(src):
+        return _load_raw_image(src, debayer=debayer)
+    raise PreviewError(f"Format nicht unterstützt: {src.suffix} (FITS/RW2/…)")
+
+
+def _bayer_pattern_from_rawpy(raw: Any) -> str:
+    desc = raw.color_desc
+    if isinstance(desc, (bytes, bytearray)):
+        desc = desc.decode("ascii", errors="replace")
+    desc = str(desc or "RGBG")
+    try:
+        pat = np.asarray(raw.raw_pattern)
+        chars: list[str] = []
+        for y in range(2):
+            for x in range(2):
+                idx = int(pat[y, x])
+                ch = desc[idx] if 0 <= idx < len(desc) else "G"
+                ch_u = ch.upper()
+                chars.append(ch_u if ch_u in "RGB" else "G")
+        s = "".join(chars)
+        if s in BAYER_PATTERNS:
+            return s
+    except Exception:  # noqa: BLE001
+        pass
+    return "RGGB"
+
+
+def _load_raw_image(
+    path: Path,
+    *,
+    debayer: bool = True,
+) -> tuple[np.ndarray, dict[str, Any], str | None]:
+    """Kamera-RAW (RW2/…) → CFA oder RGB (LibRaw/rawpy)."""
+    try:
+        import rawpy
+    except ImportError as exc:  # pragma: no cover
+        raise PreviewError(
+            "rawpy fehlt — bitte `pip install rawpy` für Lumix-RW2-Previews"
+        ) from exc
+
+    try:
+        with rawpy.imread(str(path)) as raw:
+            sizes = raw.sizes
+            full_w = int(getattr(sizes, "width", 0) or getattr(sizes, "iwidth", 0) or 0)
+            full_h = int(getattr(sizes, "height", 0) or getattr(sizes, "iheight", 0) or 0)
+            if full_w <= 0 or full_h <= 0:
+                shape = np.asarray(raw.raw_image).shape
+                full_h, full_w = int(shape[0]), int(shape[1])
+            bayer = _bayer_pattern_from_rawpy(raw)
+            black = raw.black_level_per_channel
+            try:
+                black_mean = float(np.mean(black)) if black is not None else 0.0
+            except Exception:  # noqa: BLE001
+                black_mean = 0.0
+            white = int(getattr(raw, "white_level", 0) or 0)
+            exif: dict[str, Any] = {
+                "NAXIS": 2,
+                "NAXIS1": full_w,
+                "NAXIS2": full_h,
+                "BAYERPAT": bayer,
+                "INSTRUME": "RAW",
+                "XBAYROFF": 0,
+                "YBAYROFF": 0,
+                "BLACK": black_mean,
+                "WHITE": white,
+                "SOURCE": path.suffix.lower().lstrip("."),
+            }
+            try:
+                wb = list(raw.camera_whitebalance or [])
+                if wb:
+                    exif["WB_R"] = float(wb[0])
+                    exif["WB_G"] = float(wb[1]) if len(wb) > 1 else 1.0
+                    exif["WB_B"] = float(wb[2]) if len(wb) > 2 else 1.0
+            except Exception:  # noqa: BLE001
+                pass
+
+            if debayer:
+                # Linear + Kamera-WB; Stretch macht MeLE (wie bei FITS)
+                rgb = raw.postprocess(
+                    use_camera_wb=True,
+                    half_size=True,
+                    no_auto_bright=True,
+                    gamma=(1, 1),
+                    output_bps=16,
+                    adjust_maximum_thr=0.0,
+                )
+                arr = np.asarray(rgb, dtype=np.float32)
+                return arr, exif, bayer
+
+            cfa = np.asarray(raw.raw_image, dtype=np.float32).copy()
+            if black_mean > 0:
+                cfa = np.clip(cfa - black_mean, 0.0, None)
+            return cfa, exif, None
+    except PreviewError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise PreviewError(f"RAW-Decode fehlgeschlagen ({path.name}): {exc}") from exc
 
 
 def _load_fits_image(
@@ -846,15 +1038,15 @@ def preview_for_session(
     max_width: int = DEFAULT_MAX_WIDTH,
     max_height: int = DEFAULT_MAX_HEIGHT,
 ) -> PreviewResult:
-    """Neuestes FITS der Session → Preview (ggf. erzeugen)."""
+    """Neueste Capture-Datei der Session (FITS oder RAW) → Preview."""
     root = Path(session_dir)
     if not root.is_dir():
         raise PreviewError(f"Session-Ordner fehlt: {root}")
-    fits_path = find_latest_fits(root)
-    if fits_path is None:
-        raise PreviewError("Kein FITS in Session")
+    source = find_latest_capture(root)
+    if source is None:
+        raise PreviewError("Kein FITS/RAW in Session")
     return generate_preview(
-        fits_path,
+        source,
         session_dir=root,
         stretch=stretch,
         force=force,
@@ -872,20 +1064,37 @@ def wait_for_fits(
     min_size_bytes: int = 1024,
 ) -> Path | None:
     """Wartet bis ein FITS im Session-Ordner liegt (NINA schreibt asynchron)."""
+    return wait_for_capture(
+        session_dir,
+        timeout_s=timeout_s,
+        poll_s=poll_s,
+        min_size_bytes=min_size_bytes,
+        fits_only=True,
+    )
+
+
+def wait_for_capture(
+    session_dir: str | Path,
+    *,
+    timeout_s: float = 90.0,
+    poll_s: float = 1.0,
+    min_size_bytes: int = 1024,
+    fits_only: bool = False,
+) -> Path | None:
+    """Wartet bis FITS/RAW im Session-Ordner liegt (NINA schreibt asynchron)."""
     import time
 
     root = Path(session_dir)
     deadline = time.monotonic() + max(0.0, float(timeout_s))
     last_seen: Path | None = None
     while True:
-        found = find_latest_fits(root)
+        found = find_latest_capture(root, fits_only=fits_only)
         if found is not None:
             try:
                 size = found.stat().st_size
             except OSError:
                 size = 0
             if size >= min_size_bytes:
-                # kurze Stabilität: Größe nicht mehr wachsend
                 time.sleep(min(0.4, poll_s))
                 try:
                     size2 = found.stat().st_size
@@ -907,12 +1116,12 @@ def wait_and_preview(
     force: bool = True,
     color: bool = True,
 ) -> PreviewResult:
-    """Nach Capture: auf FITS warten, dann JPEG erzeugen."""
-    fits_path = wait_for_fits(session_dir, timeout_s=timeout_s)
-    if fits_path is None:
-        raise PreviewError("Kein FITS nach Capture (Timeout)")
+    """Nach Capture: auf FITS/RAW warten, dann JPEG erzeugen."""
+    source = wait_for_capture(session_dir, timeout_s=timeout_s)
+    if source is None:
+        raise PreviewError("Kein FITS/RAW nach Capture (Timeout)")
     return generate_preview(
-        fits_path,
+        source,
         session_dir=session_dir,
         stretch=stretch,
         force=force,
@@ -927,6 +1136,7 @@ def session_preview_status(
 ) -> dict[str, Any]:
     """Leichte Info ohne Erzeugung (für UI-Polling später)."""
     root = Path(session_dir)
+    capture = find_latest_capture(root) if root.is_dir() else None
     fits_path = find_latest_fits(root) if root.is_dir() else None
     preview = find_latest_preview(root, color=color) if root.is_dir() else None
     focus = find_latest_focus(root) if root.is_dir() else None
@@ -934,6 +1144,8 @@ def session_preview_status(
         "session_dir": str(root),
         "has_fits": fits_path is not None,
         "fits_path": str(fits_path) if fits_path else None,
+        "has_capture": capture is not None,
+        "capture_path": str(capture) if capture else None,
         "has_preview": preview is not None,
         "preview_path": str(preview) if preview else None,
         "has_focus": focus is not None,
@@ -958,14 +1170,14 @@ def roi_preview_for_session(
     stretch: StretchParams | None = None,
     scale: float = DEFAULT_FOCUS_SCALE,
 ) -> PreviewResult:
-    """ROI für neuestes Session-FITS (Quell- oder Preview-Koordinaten)."""
+    """ROI für neueste Session-Capture (FITS oder RAW)."""
     root = Path(session_dir)
-    fits_path = find_latest_fits(root)
-    if fits_path is None:
-        raise PreviewError("Kein FITS in Session")
+    source = find_latest_capture(root)
+    if source is None:
+        raise PreviewError("Kein FITS/RAW in Session")
     if preview_x is not None and preview_y is not None and preview_w and preview_h:
         return generate_roi_from_preview_click(
-            fits_path,
+            source,
             session_dir=root,
             preview_x=float(preview_x),
             preview_y=float(preview_y),
@@ -980,7 +1192,7 @@ def roi_preview_for_session(
     if x is None or y is None:
         raise PreviewError("ROI: x/y oder preview_x/preview_y nötig")
     return generate_roi_preview(
-        fits_path,
+        source,
         session_dir=root,
         x=int(x),
         y=int(y),

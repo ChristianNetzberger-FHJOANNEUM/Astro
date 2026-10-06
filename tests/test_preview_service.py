@@ -1,10 +1,11 @@
-"""Phase-1 PreviewService: FITS → gestretchtes JPEG + Header."""
+"""PreviewService: FITS/Kamera-RAW → gestretchtes JPEG + Header."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
+import pytest
 from astropy.io import fits
 from PIL import Image
 
@@ -283,3 +284,138 @@ def test_nina_style_bzero_fits_and_latest_in_light_subdir(tmp_path: Path) -> Non
     assert result.source_path == newer
     assert result.preview_path.is_file()
     assert result.header.get("EXPTIME") == 2.0
+
+
+def test_find_capture_files_includes_rw2(tmp_path: Path) -> None:
+    lights = tmp_path / "LIGHTS"
+    lights.mkdir()
+    rw2 = lights / "2026-10-06_21-07-19_3.00s_0000.rw2"
+    rw2.write_bytes(b"0" * 2048)
+    fits_file = lights / "old.fits"
+    fits_file.write_bytes(b"SIMPLE  =                    T" + b" " * 2000)
+
+    from mele.preview_service import find_capture_files, is_capture_path
+
+    assert is_capture_path(rw2)
+    found = find_capture_files(lights)
+    names = {p.name for p in found}
+    assert rw2.name in names
+    assert fits_file.name in names
+
+
+def test_wait_for_new_capture_file_stable_rw2(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    from mele.preview_service import wait_for_new_capture_file
+
+    lights = tmp_path / "LIGHTS"
+    lights.mkdir()
+    existing = lights / "already.rw2"
+    existing.write_bytes(b"x" * 2048)
+    before = {str(existing)}
+    target = lights / "new.rw2"
+
+    def _write_later() -> None:
+        time.sleep(0.3)
+        with target.open("wb") as fh:
+            fh.write(b"a" * 1500)
+            fh.flush()
+            time.sleep(0.2)
+            fh.write(b"b" * 1500)
+
+    threading.Thread(target=_write_later, daemon=True).start()
+    found = wait_for_new_capture_file(
+        lights,
+        before=before,
+        timeout_s=5.0,
+        poll_s=0.15,
+        min_size_bytes=1024,
+        stable_s=0.4,
+    )
+    assert found is not None
+    assert found.name == target.name
+    assert found.stat().st_size >= 3000
+
+
+def test_generate_preview_from_rw2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """RW2-Preview: rawpy-Decode → Stretch-JPEG (ohne echte LibRaw-Datei)."""
+    import types
+
+    from mele import preview_service as ps
+
+    class _FakeSizes:
+        width = 64
+        height = 48
+        iwidth = 64
+        iheight = 48
+
+    class _FakeRaw:
+        sizes = _FakeSizes()
+        color_desc = b"RGBG"
+        raw_pattern = np.array([[0, 1], [3, 2]], dtype=np.uint8)
+        black_level_per_channel = [100, 100, 100, 100]
+        white_level = 16000
+        camera_whitebalance = [1.3, 1.0, 1.8, 0.0]
+        raw_image = (np.random.default_rng(0).integers(100, 400, size=(48, 64))).astype(np.uint16)
+
+        def postprocess(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            yy, xx = np.mgrid[0:24, 0:32]
+            base = 200 + 20 * np.sin(xx / 5.0) + 15 * np.cos(yy / 4.0)
+            star = 8000 * np.exp(-((yy - 12) ** 2 + (xx - 16) ** 2) / 8.0)
+            plane = (base + star).astype(np.uint16)
+            return np.stack([plane, plane * 0.9, plane * 1.1], axis=-1).astype(np.uint16)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):  # noqa: ANN002
+            return False
+
+    fake_rawpy = types.SimpleNamespace(imread=lambda _p: _FakeRaw())
+    monkeypatch.setitem(__import__("sys").modules, "rawpy", fake_rawpy)
+
+    rw2 = tmp_path / "LIGHTS"
+    rw2.mkdir()
+    src = rw2 / "frame.rw2"
+    src.write_bytes(b"fake-rw2")
+    result = ps.generate_preview(src, session_dir=tmp_path, force=True, color=True)
+    assert result.created is True
+    assert result.preview_path.is_file()
+    assert result.color is True
+    assert result.source_width == 64
+    assert result.source_height == 48
+    with Image.open(result.preview_path) as img:
+        assert img.mode == "RGB"
+        assert img.size[0] > 0
+
+
+def test_preview_for_session_prefers_rw2_in_lights(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from mele import preview_service as ps
+
+    lights = tmp_path / "LIGHTS"
+    lights.mkdir()
+    rw2 = lights / "new.rw2"
+    rw2.write_bytes(b"x" * 100)
+
+    called: list[Path] = []
+
+    def fake_generate(source, **kwargs):  # noqa: ANN003
+        called.append(Path(source))
+        dest = tmp_path / "preview" / "x.preview.jpg"
+        dest.parent.mkdir(exist_ok=True)
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(dest)
+        return ps.PreviewResult(
+            preview_path=dest,
+            source_path=Path(source),
+            created=True,
+            width=8,
+            height=8,
+            color=True,
+        )
+
+    monkeypatch.setattr(ps, "generate_preview", fake_generate)
+    out = ps.preview_for_session(tmp_path, force=True)
+    assert called == [rw2]
+    assert out.preview_path.is_file()

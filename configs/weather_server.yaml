@@ -1,0 +1,14 @@
+# Standalone Ecowitt weather logger (Pull → SQLite → REST)
+# Start: python -m weather_server
+
+gateway_base_url: "http://192.168.0.149"
+livedata_path: "/get_livedata_info"
+poll_interval_s: 30
+request_timeout_s: 10
+
+api_host: "0.0.0.0"
+api_port: 8765
+open_browser: true
+
+db_path: "data/weather_server/weather.sqlite"
+label: "GW1200"

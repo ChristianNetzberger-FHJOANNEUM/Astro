@@ -20,6 +20,7 @@ DEFAULTS = {
     "grid_ecliptic": False,
     "horizon_points": True,
     "tonight": False,
+    "show_favorites": False,
     "show_stars": True,
     "show_const": True,
     "show_messier": True,
@@ -74,6 +75,7 @@ def load_prefs(path: Path) -> dict[str, Any]:
         data["grid_ecliptic"] = _as_bool(data.get("grid_ecliptic"), False)
         data["horizon_points"] = _as_bool(data.get("horizon_points"), True)
         data["tonight"] = _as_bool(data.get("tonight"), False)
+        data["show_favorites"] = _as_bool(data.get("show_favorites"), False)
         data["show_stars"] = _as_bool(data.get("show_stars"), True)
         data["show_const"] = _as_bool(data.get("show_const"), True)
         data["show_messier"] = _as_bool(data.get("show_messier"), True)
@@ -87,15 +89,46 @@ def load_prefs(path: Path) -> dict[str, Any]:
     return data
 
 
+def _atomic_replace(tmp: Path, path: Path) -> None:
+    """Windows-sicher: os.replace kann scheitern, wenn die Zieldatei gesperrt ist."""
+    last_err: OSError | None = None
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            last_err = exc
+            # kurz warten — Antivirus/Explorer hält die Datei oft kurz fest
+            import time
+
+            time.sleep(0.05 * (attempt + 1))
+        except OSError as exc:
+            last_err = exc
+            break
+    # Fallback: direkt überschreiben (kein atomarer Swap)
+    try:
+        path.write_text(tmp.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    except OSError:
+        if last_err is not None:
+            raise last_err
+        raise
+
+
 def save_prefs(path: Path, updates: dict[str, Any]) -> dict[str, Any]:
     data = load_prefs(path)
     data.update(updates)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    _atomic_replace(tmp, path)
     cleaned = load_prefs(path)
     if cleaned != data:
+        tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(cleaned, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        _atomic_replace(tmp, path)
     return cleaned

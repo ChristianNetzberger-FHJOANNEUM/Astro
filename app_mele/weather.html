@@ -103,6 +103,11 @@
     <p class="meta" id="site">Standort —</p>
     <p id="summary">Lade …</p>
     <p id="status"></p>
+    <div class="chart-block" id="station-block" style="display:none">
+      <h2>Lokale Station</h2>
+      <p id="station-summary" style="font-size:18px;margin:8px 0"></p>
+      <p class="meta" id="station-meta"></p>
+    </div>
     <div class="chart-block">
       <h2>Prognose (60 h)</h2>
       <p class="legend">
@@ -299,6 +304,33 @@
       return labels[Math.floor(((deg % 360) + 11.25) / 22.5) % 16];
     }
 
+    async function loadStation() {
+      const block = document.getElementById("station-block");
+      const sum = document.getElementById("station-summary");
+      const meta = document.getElementById("station-meta");
+      try {
+        const response = await fetch("/weather/station");
+        const data = await response.json();
+        if (!data.ok) {
+          block.style.display = "none";
+          return;
+        }
+        block.style.display = "";
+        sum.textContent = data.summary || "—";
+        const obs = data.observation || {};
+        const bits = [];
+        if (obs.when) bits.push(new Date(obs.when).toLocaleString());
+        if (obs.humidity_pct != null) bits.push(`Feuchte ${Number(obs.humidity_pct).toFixed(0)} %`);
+        if (obs.dewpoint_c != null) bits.push(`Taupunkt ${Number(obs.dewpoint_c).toFixed(1)} °C`);
+        if (obs.wind_ms != null) bits.push(`Wind ${Number(obs.wind_ms).toFixed(1)} m/s`);
+        if (obs.pressure_hpa != null) bits.push(`${Number(obs.pressure_hpa).toFixed(0)} hPa`);
+        if (data.sample_id != null) bits.push(`Sample #${data.sample_id}`);
+        meta.textContent = bits.join(" · ");
+      } catch (_err) {
+        block.style.display = "none";
+      }
+    }
+
     async function load(refresh) {
       if (!lat || !lon) {
         sumEl.textContent = "Standort fehlt.";
@@ -337,10 +369,12 @@
       } finally {
         btn.disabled = false;
       }
+      loadStation();
     }
 
     btn.addEventListener("click", () => load(true));
     load(false);
+    setInterval(loadStation, 60000);
   </script>
 </body>
 </html>

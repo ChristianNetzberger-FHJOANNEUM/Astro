@@ -7,9 +7,12 @@ from mele.catalog import (
     build_database,
     catalog_ready,
     classify_daylight,
+    normalize_object_query,
     object_track,
     parse_constellation_fab,
     query_overlay,
+    resolve_catalog_object,
+    search_catalog,
 )
 from mele.horizon import HorizonPoint, HorizonProfile
 from mele.sky import radec_to_az_alt
@@ -265,3 +268,61 @@ def test_object_track_marks_day_twilight_night() -> None:
         end = datetime.fromisoformat(night_slots[0]["end"].replace("Z", "+00:00"))
         assert end > start
         assert (end - start).total_seconds() > 3 * 3600
+
+
+def test_normalize_object_query() -> None:
+    assert normalize_object_query("NGC 6960") == "NGC6960"
+    assert normalize_object_query("ngc0224") == "NGC0224"
+    assert normalize_object_query("M 31") == "M31"
+    assert normalize_object_query("hip 97649") == "HIP97649"
+
+
+def test_search_and_resolve_without_overlay_filters(tmp_path: Path) -> None:
+    """Resolve findet M31/Altair auch wenn Overlay nur Sterne o.ae. laden wuerde."""
+    db = _build(tmp_path)
+    when = datetime(2026, 9, 23, 22, 0, tzinfo=timezone.utc)
+
+    hits = search_catalog("M31", db_path=db, limit=10)
+    assert any(h["key"] == "M31" for h in hits)
+
+    veilish = search_catalog("Andromeda", db_path=db, limit=10)
+    assert any("Andromeda" in (h.get("name") or "") for h in veilish)
+
+    stars = search_catalog("Altair", db_path=db, limit=5)
+    assert any(h.get("kind") == "star" and h.get("name") == "Altair" for h in stars)
+
+    m31 = resolve_catalog_object(
+        "M 31",
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        db_path=db,
+    )
+    assert m31 is not None
+    assert m31["key"] == "M31"
+    assert m31["kind"] == "messier"
+    assert "az" in m31 and "alt" in m31
+    assert m31["above"] is True or m31["above"] is False
+
+    altair = resolve_catalog_object(
+        "HIP97649",
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        db_path=db,
+    )
+    assert altair is not None
+    assert altair["kind"] == "star"
+    assert altair["hip"] == 97649
+
+    # Unbekannt
+    assert (
+        resolve_catalog_object(
+            "NGC99999",
+            latitude_deg=48.2,
+            longitude_deg=16.4,
+            when=when,
+            db_path=db,
+        )
+        is None
+    )

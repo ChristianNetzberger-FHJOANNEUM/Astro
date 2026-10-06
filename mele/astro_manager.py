@@ -21,7 +21,7 @@ from typing import Any
 
 from mele.config import REPO_ROOT, load_mele_settings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MANAGER_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_utc TEXT,
     frames_planned INTEGER,
     frames_completed INTEGER NOT NULL DEFAULT 0,
+    lights_planned INTEGER,
+    lights_completed INTEGER NOT NULL DEFAULT 0,
+    darks_planned INTEGER,
+    darks_completed INTEGER NOT NULL DEFAULT 0,
     exposure_s REAL,
     gain REAL,
     iso INTEGER,
@@ -92,6 +96,8 @@ CREATE INDEX IF NOT EXISTS idx_images_key ON images(catalog_key);
 """
 
 ARCHIVE_STATUSES = frozenset({"local", "pending", "archived", "missing"})
+FRAME_TYPE_LIGHT = "LIGHT"
+FRAME_TYPE_DARK = "DARK"
 
 
 @dataclass(frozen=True)
@@ -122,8 +128,12 @@ class ImagingSession:
     profile_id: int | None = None
     started_utc: str = ""
     ended_utc: str | None = None
-    frames_planned: int | None = None
-    frames_completed: int = 0
+    frames_planned: int | None = None  # Alias: Lights (Kompatibilitaet)
+    frames_completed: int = 0  # Alias: Lights
+    lights_planned: int | None = None
+    lights_completed: int = 0
+    darks_planned: int | None = None
+    darks_completed: int = 0
     exposure_s: float | None = None
     gain: float | None = None
     iso: int | None = None
@@ -176,6 +186,7 @@ def ensure_manager_db(db_path: Path | None = None) -> Path:
                 (str(SCHEMA_VERSION),),
             )
         _migrate_sessions_snapshot_columns(conn)
+        _migrate_sessions_light_dark_columns(conn)
         conn.commit()
     return path
 
@@ -194,6 +205,45 @@ def _migrate_sessions_snapshot_columns(conn: sqlite3.Connection) -> None:
     for name, sql in alterations:
         if name not in cols:
             conn.execute(sql)
+
+
+def _migrate_sessions_light_dark_columns(conn: sqlite3.Connection) -> None:
+    """Lights/Darks-Zaehler; bestehende frames_* → lights_* uebernehmen."""
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    alterations = [
+        ("lights_planned", "ALTER TABLE sessions ADD COLUMN lights_planned INTEGER"),
+        ("lights_completed", "ALTER TABLE sessions ADD COLUMN lights_completed INTEGER NOT NULL DEFAULT 0"),
+        ("darks_planned", "ALTER TABLE sessions ADD COLUMN darks_planned INTEGER"),
+        ("darks_completed", "ALTER TABLE sessions ADD COLUMN darks_completed INTEGER NOT NULL DEFAULT 0"),
+    ]
+    added = False
+    for name, sql in alterations:
+        if name not in cols:
+            conn.execute(sql)
+            added = True
+    migrated = conn.execute(
+        "SELECT value FROM meta WHERE key='lights_darks_backfill'"
+    ).fetchone()
+    if migrated is None or added:
+        conn.execute(
+            """
+            UPDATE sessions SET
+              lights_planned = COALESCE(lights_planned, frames_planned),
+              lights_completed = CASE
+                WHEN COALESCE(lights_completed, 0) > 0 THEN lights_completed
+                ELSE COALESCE(frames_completed, 0)
+              END,
+              darks_planned = COALESCE(darks_planned, NULL),
+              darks_completed = COALESCE(darks_completed, 0)
+            """
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('lights_darks_backfill', '1')"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -225,14 +275,42 @@ def _profile_from_row(row: sqlite3.Row) -> ImagingProfile:
 
 def _session_from_row(row: sqlite3.Row) -> ImagingSession:
     keys = set(row.keys())
+
+    def _opt_int(name: str) -> int | None:
+        if name not in keys or row[name] is None:
+            return None
+        return int(row[name])
+
+    def _int0(name: str) -> int:
+        if name not in keys or row[name] is None:
+            return 0
+        return int(row[name] or 0)
+
+    lights_planned = _opt_int("lights_planned")
+    if lights_planned is None:
+        lights_planned = _opt_int("frames_planned")
+    lights_completed = _int0("lights_completed")
+    if "lights_completed" not in keys:
+        lights_completed = _int0("frames_completed")
+    elif lights_completed == 0 and _int0("frames_completed") > 0 and lights_planned is None:
+        # Sehr alte Zeile ohne Backfill
+        lights_completed = _int0("frames_completed")
+
+    darks_planned = _opt_int("darks_planned")
+    darks_completed = _int0("darks_completed")
+
     return ImagingSession(
         id=int(row["id"]),
         catalog_key=str(row["catalog_key"]),
         profile_id=None if row["profile_id"] is None else int(row["profile_id"]),
         started_utc=str(row["started_utc"] or ""),
         ended_utc=None if row["ended_utc"] is None else str(row["ended_utc"]),
-        frames_planned=None if row["frames_planned"] is None else int(row["frames_planned"]),
-        frames_completed=int(row["frames_completed"] or 0),
+        frames_planned=lights_planned,
+        frames_completed=lights_completed,
+        lights_planned=lights_planned,
+        lights_completed=lights_completed,
+        darks_planned=darks_planned,
+        darks_completed=darks_completed,
         exposure_s=None if row["exposure_s"] is None else float(row["exposure_s"]),
         gain=None if "gain" not in keys or row["gain"] is None else float(row["gain"]),
         iso=None if "iso" not in keys or row["iso"] is None else int(row["iso"]),
@@ -384,6 +462,10 @@ def create_session(
     started_utc: str | None = None,
     frames_planned: int | None = None,
     frames_completed: int = 0,
+    lights_planned: int | None = None,
+    lights_completed: int | None = None,
+    darks_planned: int | None = None,
+    darks_completed: int = 0,
     exposure_s: float | None = None,
     gain: float | None = None,
     iso: int | None = None,
@@ -406,8 +488,13 @@ def create_session(
         status = "local"
     now = _utc_now()
     started = (started_utc or now).strip() or now
-    completed = max(0, int(frames_completed or 0))
-    planned = None if frames_planned is None else max(0, int(frames_planned))
+
+    lights_p = lights_planned if lights_planned is not None else frames_planned
+    lights_c = lights_completed if lights_completed is not None else frames_completed
+    lights_c = max(0, int(lights_c or 0))
+    lights_p = None if lights_p is None else max(0, int(lights_p))
+    darks_p = None if darks_planned is None else max(0, int(darks_planned))
+    darks_c = max(0, int(darks_completed or 0))
 
     # Bei neuer Session: fehlende Felder aus Profil uebernehmen (Snapshot)
     if apply_profile and profile_id is not None:
@@ -428,14 +515,14 @@ def create_session(
             filter_name = profile.filter_name
         if not str(equipment or "").strip():
             equipment = profile.equipment
-        if planned is None:
-            planned = profile.frames
+        if lights_p is None:
+            lights_p = profile.frames
 
     binning = str(binning or "1x1")
 
     integration = None
-    if exposure_s is not None and completed > 0:
-        integration = float(exposure_s) * completed
+    if exposure_s is not None and lights_c > 0:
+        integration = float(exposure_s) * lights_c
     with _connect(db_path) as conn:
         if profile_id is not None:
             exists = conn.execute(
@@ -447,19 +534,25 @@ def create_session(
         cur = conn.execute(
             """
             INSERT INTO sessions (
-              catalog_key, profile_id, started_utc, ended_utc, frames_planned,
-              frames_completed, exposure_s, gain, iso, offset_adu, binning,
+              catalog_key, profile_id, started_utc, ended_utc,
+              frames_planned, frames_completed,
+              lights_planned, lights_completed, darks_planned, darks_completed,
+              exposure_s, gain, iso, offset_adu, binning,
               filter_name, equipment, integration_s, local_path, archive_path,
               archive_status, notes, created_utc, updated_utc
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 key,
                 None if profile_id is None else int(profile_id),
                 started,
                 None,
-                planned,
-                completed,
+                lights_p,
+                lights_c,
+                lights_p,
+                lights_c,
+                darks_p,
+                darks_c,
                 exposure_s,
                 gain,
                 iso,
@@ -498,6 +591,10 @@ def update_session(
     profile_id: int | None = None,
     frames_planned: int | None = None,
     frames_completed: int | None = None,
+    lights_planned: int | None = None,
+    lights_completed: int | None = None,
+    darks_planned: int | None = None,
+    darks_completed: int | None = None,
     exposure_s: float | None = None,
     gain: float | None = None,
     iso: int | None = None,
@@ -521,6 +618,7 @@ def update_session(
         def _pick(new: object, old: object) -> object:
             return old if new is None else new
 
+        keys = set(row.keys())
         pid = row["profile_id"] if profile_id is None else profile_id
         if pid is not None:
             exists = conn.execute(
@@ -530,39 +628,58 @@ def update_session(
             if exists is None:
                 raise ValueError(f"Unbekanntes Profil: {pid}")
 
-        planned = _pick(frames_planned, row["frames_planned"])
-        if planned is not None:
-            planned = max(0, int(planned))
-        completed = int(row["frames_completed"] or 0)
-        if frames_completed is not None:
-            completed = max(0, int(frames_completed))
+        # Lights: neues Feld > frames_* Alias > DB
+        lights_p_in = lights_planned if lights_planned is not None else frames_planned
+        lights_c_in = lights_completed if lights_completed is not None else frames_completed
+        old_lights_p = row["lights_planned"] if "lights_planned" in keys else row["frames_planned"]
+        old_lights_c = (
+            int(row["lights_completed"] or 0)
+            if "lights_completed" in keys
+            else int(row["frames_completed"] or 0)
+        )
+        lights_p = _pick(lights_p_in, old_lights_p)
+        if lights_p is not None:
+            lights_p = max(0, int(lights_p))
+        lights_c = old_lights_c if lights_c_in is None else max(0, int(lights_c_in))
+
+        old_darks_p = row["darks_planned"] if "darks_planned" in keys else None
+        old_darks_c = int(row["darks_completed"] or 0) if "darks_completed" in keys else 0
+        darks_p = _pick(darks_planned, old_darks_p)
+        if darks_p is not None:
+            darks_p = max(0, int(darks_p))
+        darks_c = old_darks_c if darks_completed is None else max(0, int(darks_completed))
+
         exp = _pick(exposure_s, row["exposure_s"])
         if exp is not None:
             exp = float(exp)
-        g = _pick(gain, row["gain"] if "gain" in row.keys() else None)
+        g = _pick(gain, row["gain"] if "gain" in keys else None)
         if g is not None:
             g = float(g)
-        iso_v = _pick(iso, row["iso"] if "iso" in row.keys() else None)
+        iso_v = _pick(iso, row["iso"] if "iso" in keys else None)
         if iso_v is not None:
             iso_v = int(iso_v)
-        off = _pick(offset_adu, row["offset_adu"] if "offset_adu" in row.keys() else None)
+        off = _pick(offset_adu, row["offset_adu"] if "offset_adu" in keys else None)
         if off is not None:
             off = int(off)
-        binn = str(_pick(binning, row["binning"] if "binning" in row.keys() else "1x1") or "1x1")
-        filt = str(_pick(filter_name, row["filter_name"] if "filter_name" in row.keys() else "") or "")
-        equip = str(_pick(equipment, row["equipment"] if "equipment" in row.keys() else "") or "")
+        binn = str(_pick(binning, row["binning"] if "binning" in keys else "1x1") or "1x1")
+        filt = str(_pick(filter_name, row["filter_name"] if "filter_name" in keys else "") or "")
+        equip = str(_pick(equipment, row["equipment"] if "equipment" in keys else "") or "")
         local = str(_pick(local_path, row["local_path"]) or "")
         arch = str(_pick(archive_path, row["archive_path"]) or "")
         status = str(_pick(archive_status, row["archive_status"]) or "local").lower()
         if status not in ARCHIVE_STATUSES:
             status = "local"
         note = str(_pick(notes, row["notes"]) or "")
-        integration = None if exp is None else float(exp) * completed
+        integration = None if exp is None else float(exp) * lights_c
 
         conn.execute(
             """
             UPDATE sessions SET
-              profile_id=?, frames_planned=?, frames_completed=?, exposure_s=?,
+              profile_id=?,
+              frames_planned=?, frames_completed=?,
+              lights_planned=?, lights_completed=?,
+              darks_planned=?, darks_completed=?,
+              exposure_s=?,
               gain=?, iso=?, offset_adu=?, binning=?, filter_name=?, equipment=?,
               integration_s=?, local_path=?, archive_path=?, archive_status=?,
               notes=?, updated_utc=?
@@ -570,8 +687,12 @@ def update_session(
             """,
             (
                 None if pid is None else int(pid),
-                planned,
-                completed,
+                lights_p,
+                lights_c,
+                lights_p,
+                lights_c,
+                darks_p,
+                darks_c,
                 exp,
                 g,
                 iso_v,
@@ -598,28 +719,59 @@ def bump_session_capture(
     session_id: int,
     *,
     frames_delta: int = 1,
+    frame_type: str = FRAME_TYPE_LIGHT,
     db_path: Path | None = None,
 ) -> ImagingSession:
-    """Ein weiteres Frame an bestehende Session anrechnen."""
+    """Ein weiteres Frame (LIGHT oder DARK) an bestehende Session anrechnen."""
     delta = max(1, int(frames_delta))
+    kind = normalize_frame_type(frame_type)
     now = _utc_now()
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
         if row is None:
             raise ValueError(f"Unbekannte Session: {session_id}")
-        completed = int(row["frames_completed"] or 0) + delta
-        planned = row["frames_planned"]
-        if planned is not None:
-            planned = max(int(planned), completed)
+        keys = set(row.keys())
+
+        lights_c = (
+            int(row["lights_completed"] or 0)
+            if "lights_completed" in keys
+            else int(row["frames_completed"] or 0)
+        )
+        lights_p = row["lights_planned"] if "lights_planned" in keys else row["frames_planned"]
+        darks_c = int(row["darks_completed"] or 0) if "darks_completed" in keys else 0
+        darks_p = row["darks_planned"] if "darks_planned" in keys else None
+
+        if kind == FRAME_TYPE_DARK:
+            darks_c = darks_c + delta
+            if darks_p is not None:
+                darks_p = max(int(darks_p), darks_c)
+        else:
+            lights_c = lights_c + delta
+            if lights_p is not None:
+                lights_p = max(int(lights_p), lights_c)
+
         exposure = None if row["exposure_s"] is None else float(row["exposure_s"])
-        integration = None if exposure is None else exposure * completed
+        integration = None if exposure is None else exposure * lights_c
         conn.execute(
             """
             UPDATE sessions SET
-              frames_completed=?, frames_planned=?, integration_s=?, updated_utc=?
+              frames_completed=?, frames_planned=?,
+              lights_completed=?, lights_planned=?,
+              darks_completed=?, darks_planned=?,
+              integration_s=?, updated_utc=?
             WHERE id=?
             """,
-            (completed, planned, integration, now, int(session_id)),
+            (
+                lights_c,
+                lights_p,
+                lights_c,
+                lights_p,
+                darks_c,
+                darks_p,
+                integration,
+                now,
+                int(session_id),
+            ),
         )
         conn.commit()
         updated = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
@@ -660,6 +812,19 @@ def session_dir_slug(session_id: int) -> str:
     return f"s{int(session_id):05d}"
 
 
+def normalize_frame_type(frame_type: str | None) -> str:
+    """NINA image_type: LIGHT | DARK (spaeter FLAT/BIAS)."""
+    raw = str(frame_type or FRAME_TYPE_LIGHT).strip().upper()
+    if raw in ("DARK", "DARKS"):
+        return FRAME_TYPE_DARK
+    return FRAME_TYPE_LIGHT
+
+
+def frame_type_subdir(frame_type: str | None) -> str:
+    """Unterordner unter s#####/: LIGHTS oder DARKS."""
+    return "DARKS" if normalize_frame_type(frame_type) == FRAME_TYPE_DARK else "LIGHTS"
+
+
 def ensure_session_subdir(path: str | Path, session_id: int) -> Path:
     """Haengt s##### an, falls der Pfad noch keine Session-Ebene hat."""
     p = Path(str(path or "").strip())
@@ -669,6 +834,22 @@ def ensure_session_subdir(path: str | Path, session_id: int) -> Path:
     if any(part.lower() == slug.lower() for part in p.parts):
         return p
     return p / slug
+
+
+def ensure_capture_dir(
+    path: str | Path,
+    session_id: int,
+    *,
+    frame_type: str = FRAME_TYPE_LIGHT,
+) -> Path:
+    """Session-Root …/s#####/ plus Frame-Typ-Unterordner LIGHTS|DARKS."""
+    session_root = ensure_session_subdir(path, session_id)
+    # Wenn Aufrufer schon …/LIGHTS oder …/DARKS uebergibt: Session-Root ableiten
+    name = session_root.name.upper()
+    if name in ("LIGHTS", "DARKS", "FLATS", "BIAS"):
+        session_root = session_root.parent
+        session_root = ensure_session_subdir(session_root, session_id)
+    return session_root / frame_type_subdir(frame_type)
 
 
 def resolve_imaging_params(
@@ -700,8 +881,11 @@ def resolve_imaging_params(
         g = float(iso)
 
     fr = frames
-    if fr is None and session is not None and session.frames_planned is not None:
-        fr = session.frames_planned
+    if fr is None and session is not None:
+        if session.lights_planned is not None:
+            fr = session.lights_planned
+        elif session.frames_planned is not None:
+            fr = session.frames_planned
     if fr is None and profile is not None:
         fr = profile.frames
     if fr is None:

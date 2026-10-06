@@ -206,6 +206,8 @@ def test_parse_camera_connected() -> None:
                 "GainMin": 0,
                 "GainMax": 510,
                 "IsExposing": False,
+                "CameraState": "Idle",
+                "LastDownloadTime": 2.45,
                 "Temperature": -5.2,
                 "CoolerOn": True,
                 "CanSetGain": True,
@@ -223,6 +225,8 @@ def test_parse_camera_connected() -> None:
     assert status.camera.gain == 100
     assert status.camera.bin_x == 1
     assert status.camera.cooler_on is True
+    assert status.camera.camera_state == "Idle"
+    assert status.camera.last_download_time_s == 2.45
 
 
 def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,4 +309,7 @@ def test_prepare_mele_image_destination(monkeypatch: pytest.MonkeyPatch) -> None
     assert calls[1][1]["settingpath"] == "ImageFileSettings-FilePattern"
     assert "TARGETNAME" not in calls[1][1]["newValue"]
     assert "DATEMINUS12" not in calls[1][1]["newValue"]
-    assert "IMAGETYPE" in calls[1][1]["newValue"]
+    # FilePath ist bereits …/LIGHTS — kein $$IMAGETYPE$$-Unterordner (sonst LIGHTS/LIGHT/)
+    assert "IMAGETYPE" not in calls[1][1]["newValue"]
+    assert "DATETIME" in calls[1][1]["newValue"]
+    assert "FRAMENR" in calls[1][1]["newValue"]

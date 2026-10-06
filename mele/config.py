@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from mele.weather_safety import WeatherSafetyConfig, load_weather_safety_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -15,7 +17,6 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
-
 
 @dataclass
 class MeleSettings:
@@ -48,6 +49,10 @@ class MeleSettings:
     local_weather_enabled: bool = False
     local_weather_provider: str = "ecowitt"
     local_weather_label: str = ""
+    local_weather_server_url: str = "http://127.0.0.1:8765"
+    local_weather_poll_interval_s: float = 60.0
+    local_weather_journal: bool = True
+    weather_safety: WeatherSafetyConfig = field(default_factory=WeatherSafetyConfig)
 
 
 def _optional_bool(value: Any, default: bool = False) -> bool:
@@ -107,6 +112,13 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
     else:
         nina_exe = MeleSettings().nina_exe
     local = raw.get("local_weather") if isinstance(raw.get("local_weather"), dict) else {}
+    safety_raw = raw.get("weather_safety") if isinstance(raw.get("weather_safety"), dict) else {}
+    if isinstance(local.get("safety"), dict):
+        merged_safety = {**safety_raw, **local["safety"]}
+    else:
+        merged_safety = safety_raw
+    weather_safety = load_weather_safety_config(merged_safety)
+
     return MeleSettings(
         ui_port=int(raw.get("ui_port") or 8082),
         ui_host=str(raw.get("ui_host") or "0.0.0.0").strip() or "0.0.0.0",
@@ -130,6 +142,12 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         local_weather_enabled=_optional_bool(local.get("enabled"), False),
         local_weather_provider=str(local.get("provider") or "ecowitt").strip() or "ecowitt",
         local_weather_label=str(local.get("label") or "").strip(),
+        local_weather_server_url=str(
+            local.get("server_url") or local.get("weather_server_url") or "http://127.0.0.1:8765"
+        ).strip().rstrip("/"),
+        local_weather_poll_interval_s=float(local.get("poll_interval_s") or 60.0),
+        local_weather_journal=_optional_bool(local.get("journal"), True),
+        weather_safety=weather_safety,
     )
 
 
