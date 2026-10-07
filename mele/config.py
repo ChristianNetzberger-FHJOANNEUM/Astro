@@ -44,6 +44,10 @@ class MeleSettings:
     synscan_pro_exe: Path = Path(
         r"C:\Astro\SW\synscanpro_windows_2611\SynScanPro\SynScanPro.exe"
     )
+    phd2_exe: Path = Path(r"C:\Program Files (x86)\PHDGuiding2\phd2.exe")
+    phd2_host: str = "127.0.0.1"
+    phd2_port: int = 4400
+    phd2_fullframe_interval_s: float = 1.0
     weather_journal_enabled: bool = True
     weather_journal_interval_h: float = 1.0
     local_weather_enabled: bool = False
@@ -111,6 +115,13 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
             nina_exe = nina_exe / "NINA.exe"
     else:
         nina_exe = MeleSettings().nina_exe
+    phd2_exe_raw = str(raw.get("phd2_exe") or "").strip()
+    if phd2_exe_raw:
+        phd2_exe = Path(phd2_exe_raw)
+        if phd2_exe.is_dir():
+            phd2_exe = phd2_exe / "phd2.exe"
+    else:
+        phd2_exe = MeleSettings().phd2_exe
     local = raw.get("local_weather") if isinstance(raw.get("local_weather"), dict) else {}
     safety_raw = raw.get("weather_safety") if isinstance(raw.get("weather_safety"), dict) else {}
     if isinstance(local.get("safety"), dict):
@@ -137,6 +148,10 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         nina_base_url=str(raw.get("nina_base_url") or "http://localhost:1888/v2/api").strip().rstrip("/"),
         nina_exe=nina_exe,
         synscan_pro_exe=synscan,
+        phd2_exe=phd2_exe,
+        phd2_host=str(raw.get("phd2_host") or "127.0.0.1").strip() or "127.0.0.1",
+        phd2_port=int(raw.get("phd2_port") or 4400),
+        phd2_fullframe_interval_s=float(raw.get("phd2_fullframe_interval_s") or 1.0),
         weather_journal_enabled=_optional_bool(raw.get("weather_journal_enabled"), True),
         weather_journal_interval_h=float(raw.get("weather_journal_interval_h") or 1.0),
         local_weather_enabled=_optional_bool(local.get("enabled"), False),

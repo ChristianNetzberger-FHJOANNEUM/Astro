@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MeLE Guiding</title>
+  <style>
+    :root {
+      --bg: #0b1220; --panel: #0f172a; --border: #334155;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+      --btn: #1f4e5f; --ok: #15803d; --danger: #b91c1c; --warn: #a16207;
+      --touch: 52px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    #top {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 10px 12px; background: rgba(15,23,42,.97);
+      border-bottom: 1px solid var(--border);
+    }
+    #top .title { flex: 1; min-width: 160px; font-size: 18px; font-weight: 650; }
+    #top .meta { width: 100%; font-size: 12px; color: var(--muted); }
+    .btn, button, select {
+      min-height: var(--touch); min-width: var(--touch);
+      padding: 10px 14px; border: 0; border-radius: 8px;
+      background: var(--btn); color: var(--text); font-size: 15px; cursor: pointer;
+    }
+    .btn.ok { background: var(--ok); }
+    .btn.danger { background: var(--danger); }
+    .btn.warn { background: var(--warn); }
+    .btn:disabled { opacity: .45; cursor: default; }
+    .btn.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+    main {
+      display: grid; gap: 12px; padding: 12px;
+      grid-template-columns: 1fr;
+      max-width: 1600px; margin: 0 auto;
+    }
+    @media (min-width: 1000px) {
+      main { grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.85fr); }
+    }
+    section {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px;
+    }
+    h2 { margin: 0 0 10px; font-size: 14px; color: #7dd3fc; letter-spacing: .04em; text-transform: uppercase; }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
+      margin-bottom: 10px;
+    }
+    #guide-frame {
+      width: 100%; aspect-ratio: 4/3; background: #020617;
+      border: 1px solid var(--border); border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      overflow: auto; position: relative;
+    }
+    #guide-stage {
+      position: relative; display: inline-block;
+      max-width: 100%; max-height: 100%;
+      line-height: 0;
+    }
+    #guide-frame.mode-fit #guide-stage { max-width: 100%; max-height: 100%; }
+    #guide-frame.mode-fit #guide-stage img {
+      max-width: 100%; max-height: min(100%, calc(100vw * 0.55));
+      width: auto; height: auto; display: block;
+      object-fit: contain; transform: none;
+    }
+    #guide-frame.mode-zoom #guide-stage img {
+      max-width: none; max-height: none; display: block;
+      image-rendering: pixelated;
+      transform-origin: center center;
+    }
+    #star-frame {
+      width: 240px; height: 240px; margin: 0 auto 10px;
+      background: #020617; border: 1px solid var(--border); border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    #star-frame img {
+      width: 100%; height: 100%; object-fit: contain;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    #star-metrics {
+      font-size: 15px; line-height: 1.45; margin-bottom: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+    .pad {
+      display: grid; grid-template-columns: 64px 64px 64px;
+      grid-template-rows: 64px 64px 64px; gap: 8px; justify-content: center;
+      margin: 12px 0;
+    }
+    .pad button { width: 64px; height: 64px; font-size: 20px; font-weight: 700; }
+    .pad .n { grid-column: 2; grid-row: 1; }
+    .pad .w { grid-column: 1; grid-row: 2; }
+    .pad .sstop { grid-column: 2; grid-row: 2; background: var(--danger); }
+    .pad .e { grid-column: 3; grid-row: 2; }
+    .pad .s { grid-column: 2; grid-row: 3; }
+    .telemetry { font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .led {
+      display: inline-block; width: .75em; height: .75em; border-radius: 50%;
+      background: #64748b; margin-right: 6px;
+      box-shadow: inset 0 0 0 1px rgba(15,23,42,.55);
+    }
+    .led.on { background: #22c55e; }
+    .led.warn { background: #eab308; }
+    .led.err { background: #ef4444; }
+    label.field { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+    select { background: #020617; border: 1px solid var(--border); }
+    #zoom-label { min-width: 4em; color: var(--muted); font-size: 13px; align-self: center; }
+    .side-stack { display: flex; flex-direction: column; gap: 12px; }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <div class="title">Guiding / ASI120</div>
+    <div id="phd-pill"><span class="led" id="led"></span><span id="pill-text">…</span></div>
+    <div class="meta" id="top-meta">PHD2 Event-Server · Fullframe + Star-Crop · kein Direktzugriff auf ASI120</div>
+  </div>
+  <main>
+    <section>
+      <h2>Guide Camera — Full</h2>
+      <div class="toolbar">
+        <button class="btn active" id="btn-fit" type="button" title="In Viewport einpassen">Fit</button>
+        <button class="btn" id="btn-1to1" type="button" title="1 Sensorpixel ≈ 1 Bildschirmpixel">1:1</button>
+        <button class="btn" id="btn-zoom-in" type="button">+</button>
+        <button class="btn" id="btn-zoom-out" type="button">−</button>
+        <span id="zoom-label">Fit</span>
+        <label class="field">Full Update
+          <select id="ff-interval" title="Mindestabstand Fullframe save_image→JPEG">
+            <option value="0.2">0.2 s</option>
+            <option value="0.25">0.25 s</option>
+            <option value="0.5">0.5 s</option>
+            <option value="1" selected>1 s</option>
+            <option value="2">2 s</option>
+            <option value="3">3 s</option>
+            <option value="5">5 s</option>
+          </select>
+        </label>
+        <span class="muted" id="img-meta"></span>
+      </div>
+      <div id="guide-frame" class="mode-fit">
+        <div class="muted" id="img-hint">Warte auf Fullframe…</div>
+        <div id="guide-stage" style="display:none;">
+          <img id="guide-img" alt="Guide fullframe" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <label class="field">Exposure
+          <select id="exposure"></select>
+        </label>
+        <button class="btn ok" id="btn-loop" type="button">LOOP</button>
+        <button class="btn" id="btn-find" type="button">AUTO STAR</button>
+        <button class="btn ok" id="btn-guide" type="button">GUIDE</button>
+        <button class="btn warn" id="btn-pause" type="button">PAUSE</button>
+        <button class="btn danger" id="btn-stop" type="button">STOP</button>
+      </div>
+      <div class="muted" style="margin-top:8px;" id="action-status"></div>
+    </section>
+    <div class="side-stack">
+      <section>
+        <h2>Guide Star</h2>
+        <div id="star-frame"><div class="muted" id="star-hint">Kein Leitstern</div></div>
+        <div id="star-metrics">SNR: — · HFD: —</div>
+        <div class="muted" id="star-meta">get_star_image · pixelated</div>
+      </section>
+      <section>
+        <h2>Mount Pad</h2>
+        <div class="muted" id="pad-hint">NINA MoveAxis · nur wenn Mount verbunden und PHD2 nicht guidet</div>
+        <label class="field" style="margin-top:8px;">Rate (deg/s)
+          <select id="rate" title="ASCOM MoveAxis Rate in Grad/Sekunde">
+            <option value="0.005">0.005 °/s</option>
+            <option value="0.01" selected>0.01 °/s</option>
+            <option value="0.02">0.02 °/s</option>
+            <option value="0.05">0.05 °/s</option>
+            <option value="0.1">0.1 °/s</option>
+            <option value="0.5">0.5 °/s</option>
+          </select>
+        </label>
+        <div class="pad">
+          <button type="button" class="n" data-dir="north">DEC+</button>
+          <button type="button" class="w" data-dir="west">RA−</button>
+          <button type="button" class="sstop" id="pad-stop">STOP</button>
+          <button type="button" class="e" data-dir="east">RA+</button>
+          <button type="button" class="s" data-dir="south">DEC−</button>
+        </div>
+      </section>
+      <section>
+        <h2>Telemetry</h2>
+        <div class="telemetry" id="telemetry">—</div>
+        <div class="muted" style="margin-top:10px;">Graph-Platzhalter (RA/DEC vs Zeit) — Datenpuffer aktiv, Plot Phase 1 optional.</div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let padAllowed = false;
+    let pollBusy = false;
+    let fullBusy = false;
+    let starBusy = false;
+    let moving = false;
+    let zoomMode = "fit";
+    let zoomScale = 1;
+    let fullTimer = null;
+    let starTimer = null;
+    let serverIntervalS = 1;
+    let exposureSyncLock = false;
+    let lastStarOk = false;
+    let lockX = null;
+    let lockY = null;
+
+    function setStatus(msg) { $("action-status").textContent = msg || ""; }
+
+    function ledClass(connection) {
+      if (connection === "GUIDING" || connection === "LOOPING" || connection === "CONNECTED") return "on";
+      if (connection === "LOST_STAR" || connection === "PAUSED" || connection === "CALIBRATING") return "warn";
+      if (connection === "ERROR" || connection === "OFFLINE") return "err";
+      return "";
+    }
+
+    async function postJson(url, body) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body == null ? "{}" : JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    function applyZoom() {
+      const frame = $("guide-frame");
+      const img = $("guide-img");
+      $("btn-fit").classList.toggle("active", zoomMode === "fit");
+      $("btn-1to1").classList.toggle("active", zoomMode === "zoom" && Math.abs(zoomScale - 1) < 0.01);
+      if (zoomMode === "fit") {
+        frame.className = "mode-fit";
+        $("zoom-label").textContent = "Fit";
+        if (img) {
+          img.style.width = "";
+          img.style.height = "";
+          img.style.transform = "";
+        }
+        return;
+      }
+      frame.className = "mode-zoom";
+      $("zoom-label").textContent = `${zoomScale.toFixed(2)}×`;
+      if (!img) return;
+      const nw = img.naturalWidth || 0;
+      const nh = img.naturalHeight || 0;
+      if (nw > 0 && nh > 0) {
+        img.style.width = `${Math.round(nw * zoomScale)}px`;
+        img.style.height = `${Math.round(nh * zoomScale)}px`;
+        img.style.transform = "";
+      }
+    }
+
+    function setFit() { zoomMode = "fit"; zoomScale = 1; applyZoom(); }
+    function setOneToOne() { zoomMode = "zoom"; zoomScale = 1; applyZoom(); }
+    function bumpZoom(factor) {
+      if (zoomMode === "fit") { zoomMode = "zoom"; zoomScale = 1; }
+      zoomScale = Math.max(0.25, Math.min(8, zoomScale * factor));
+      applyZoom();
+    }
+
+    function syncExposureSelect(exposureMs) {
+      if (exposureMs == null || !Number.isFinite(Number(exposureMs))) return;
+      const sel = $("exposure");
+      const want = String(Number(exposureMs));
+      if (document.activeElement === sel) return;
+      let found = false;
+      for (const opt of sel.options) {
+        if (opt.value === want) {
+          if (!opt.selected) {
+            exposureSyncLock = true;
+            opt.selected = true;
+            exposureSyncLock = false;
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found && sel.options.length) {
+        const opt = document.createElement("option");
+        opt.value = want;
+        opt.textContent = `${(Number(exposureMs) / 1000).toFixed(Number(exposureMs) >= 1000 ? 1 : 2)} s`;
+        opt.selected = true;
+        exposureSyncLock = true;
+        sel.appendChild(opt);
+        exposureSyncLock = false;
+      }
+    }
+
+    async function refreshExposures() {
+      try {
+        const response = await fetch("/phd2/exposures");
+        const data = await response.json();
+        const sel = $("exposure");
+        const durations = (data.durations_ms && data.durations_ms.length)
+          ? data.durations_ms
+          : [500, 1000, 2000, 3000, 5000];
+        const current = data.exposure_ms;
+        const prev = sel.value;
+        sel.innerHTML = "";
+        durations.forEach((ms) => {
+          const opt = document.createElement("option");
+          opt.value = String(ms);
+          opt.textContent = `${(ms / 1000).toFixed(ms >= 1000 ? 1 : 2)} s`;
+          sel.appendChild(opt);
+        });
+        const pick = current != null ? String(current) : (prev || "1000");
+        exposureSyncLock = true;
+        sel.value = pick;
+        if (sel.value !== pick && sel.options.length) sel.selectedIndex = 0;
+        exposureSyncLock = false;
+      } catch (_) {
+        const sel = $("exposure");
+        if (!sel.options.length) {
+          [500, 1000, 2000, 3000, 5000].forEach((ms) => {
+            const opt = document.createElement("option");
+            opt.value = String(ms);
+            opt.textContent = `${ms / 1000} s`;
+            if (ms === 1000) opt.selected = true;
+            sel.appendChild(opt);
+          });
+        }
+      }
+    }
+
+    function fmt(v, digits) {
+      if (v == null || !Number.isFinite(Number(v))) return "—";
+      return Number(v).toFixed(digits);
+    }
+
+    function syncIntervalSelect(seconds) {
+      const sel = $("ff-interval");
+      const val = String(seconds);
+      for (const opt of sel.options) {
+        if (opt.value === val || Number(opt.value) === Number(seconds)) {
+          opt.selected = true;
+          return;
+        }
+      }
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = `${seconds} s`;
+      opt.selected = true;
+      sel.appendChild(opt);
+    }
+
+    function restartFullTimer() {
+      if (fullTimer) clearInterval(fullTimer);
+      const clientMs = Math.max(200, Math.round(serverIntervalS * 1000) + 50);
+      fullTimer = setInterval(refreshFull, clientMs);
+    }
+
+    function restartStarTimer() {
+      if (starTimer) clearInterval(starTimer);
+      // Star-Crop darf schneller als Fullframe; ~0.5 s oder Exposure-Takt
+      starTimer = setInterval(refreshStar, 500);
+    }
+
+    async function pollStatus() {
+      if (pollBusy) return;
+      pollBusy = true;
+      try {
+        const [stRes, telRes] = await Promise.all([
+          fetch("/phd2/status"),
+          fetch("/phd2/telemetry?limit=60"),
+        ]);
+        const st = await stRes.json();
+        const tel = await telRes.json();
+        const s = (st.status || {});
+        const conn = s.connection || "OFFLINE";
+        $("led").className = "led " + ledClass(conn);
+        $("pill-text").textContent = `PHD2 · ${conn}` + (s.app_state ? ` (${s.app_state})` : "");
+        const ff = st.fullframe_interval_s != null ? Number(st.fullframe_interval_s) : serverIntervalS;
+        if (Number.isFinite(ff) && ff !== serverIntervalS) {
+          serverIntervalS = ff;
+          syncIntervalSelect(ff);
+          restartFullTimer();
+        }
+        // Multi-Client: Exposure aus PHD2 (SoT) in alle offenen Browser ziehen
+        syncExposureSelect(s.exposure_ms);
+        lockX = s.lock_x != null ? Number(s.lock_x) : null;
+        lockY = s.lock_y != null ? Number(s.lock_y) : null;
+        $("top-meta").textContent =
+          `${s.camera_name || "Kamera ?"} · Mount ${s.mount_name || "?"} · ` +
+          `Exp ${s.exposure_ms != null ? (s.exposure_ms / 1000).toFixed(2) + "s" : "?"} · ` +
+          `Full ≥ ${ff}s` +
+          (lockX != null && lockY != null ? ` · Lock ${lockX.toFixed(0)},${lockY.toFixed(0)}` : "");
+        padAllowed = !!st.pad_allowed;
+        $("pad-hint").textContent = st.pad_reason
+          || (padAllowed ? "Pad bereit (NINA MoveAxis)." : "Pad gesperrt.");
+        document.querySelectorAll(".pad button[data-dir]").forEach((btn) => {
+          btn.disabled = !padAllowed;
+        });
+
+        const step = s.last_step || {};
+        $("star-metrics").textContent =
+          `SNR: ${fmt(step.snr, 1)} · HFD: ${fmt(step.hfd, 2)}`;
+        const lines = [
+          `State: ${conn}`,
+          s.star_selected ? "Star: selected" : "Star: —",
+          s.lost_star ? "Star: LOST" : "",
+          `RA err: ${fmt(step.ra_distance, 2)}″   DEC err: ${fmt(step.dec_distance, 2)}″`,
+          `RA RMS: ${fmt(tel.ra_rms, 2)}″   DEC RMS: ${fmt(tel.dec_rms, 2)}″   Tot: ${fmt(tel.total_rms, 2)}″`,
+          `Steps: ${tel.count || 0}`,
+          s.last_error ? `Last error: ${s.last_error}` : "",
+        ].filter(Boolean);
+        $("telemetry").textContent = lines.join("\n");
+      } catch (err) {
+        $("pill-text").textContent = "PHD2 · offline";
+        $("led").className = "led err";
+      } finally {
+        pollBusy = false;
+      }
+    }
+
+    async function setStarImage(blob) {
+      const frame = $("star-frame");
+      const hint = $("star-hint");
+      const objectUrl = URL.createObjectURL(blob);
+      let img = frame.querySelector("img");
+      if (!img) {
+        img = document.createElement("img");
+        img.alt = "Guide star crop";
+        frame.appendChild(img);
+      }
+      if (hint) hint.style.display = "none";
+      const prev = img.src;
+      img.onload = () => {
+        if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      };
+      img.src = objectUrl;
+    }
+
+    async function refreshFull() {
+      if (fullBusy) return;
+      fullBusy = true;
+      try {
+        const maxW = zoomMode === "zoom" ? 2400 : 1400;
+        const url = `/phd2/image?kind=full&max_width=${maxW}&t=${Date.now()}`;
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          $("img-hint").textContent = data.error || "Kein Fullframe";
+          $("img-hint").style.display = "";
+          $("guide-stage").style.display = "none";
+          $("img-meta").textContent = "";
+          return;
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const img = $("guide-img");
+        const prev = img.src;
+        $("img-hint").style.display = "none";
+        $("guide-stage").style.display = "inline-block";
+        img.onload = () => {
+          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+          applyZoom();
+        };
+        img.src = objectUrl;
+        $("img-meta").textContent = "full";
+      } catch (err) {
+        $("img-hint").textContent = String(err.message || err);
+        $("img-hint").style.display = "";
+        $("guide-stage").style.display = "none";
+      } finally {
+        fullBusy = false;
+      }
+    }
+
+    async function refreshStar() {
+      if (starBusy) return;
+      starBusy = true;
+      try {
+        const url = `/phd2/image?kind=star&max_width=256&t=${Date.now()}`;
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          $("star-hint").textContent = data.error || "Kein Leitstern";
+          $("star-hint").style.display = "";
+          const old = $("star-frame").querySelector("img");
+          if (old) old.remove();
+          $("star-meta").textContent = lastStarOk ? "Star verloren / nicht verfügbar" : "AUTO STAR wählen";
+          lastStarOk = false;
+          return;
+        }
+        await setStarImage(await response.blob());
+        $("star-meta").textContent = "star crop · pixelated";
+        lastStarOk = true;
+      } catch (err) {
+        $("star-hint").textContent = String(err.message || err);
+        $("star-hint").style.display = "";
+        lastStarOk = false;
+      } finally {
+        starBusy = false;
+      }
+    }
+
+    async function moveStart(direction) {
+      if (!padAllowed) {
+        setStatus("Pad gesperrt: " + ($("pad-hint").textContent || ""));
+        return;
+      }
+      if (moving) return;
+      moving = true;
+      const rate = Number($("rate").value || 0.01);
+      setStatus(`Pad ↓ ${direction} @ ${rate} °/s …`);
+      try {
+        const data = await postJson("/nina/mount/move", { direction, rate });
+        setStatus(
+          `Pad OK ${direction}`
+          + (data.message ? ` · ${data.message}` : "")
+          + (data.ws_url ? ` · ${data.ws_url}` : "")
+        );
+      } catch (err) {
+        setStatus("Pad Fehler: " + String(err.message || err));
+        moving = false;
+      }
+    }
+
+    async function moveStop() {
+      moving = false;
+      setStatus("Pad ↑ STOP …");
+      try {
+        const data = await postJson("/nina/mount/move/stop", {});
+        setStatus("Pad STOP" + (data.message ? ` · ${data.message}` : ""));
+      } catch (err) {
+        setStatus("Pad STOP Fehler: " + String(err.message || err));
+      }
+    }
+
+    function bindPad() {
+      document.querySelectorAll(".pad button[data-dir]").forEach((btn) => {
+        const dir = btn.getAttribute("data-dir");
+        const start = (ev) => {
+          ev.preventDefault();
+          try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
+          moveStart(dir);
+        };
+        const stop = (ev) => {
+          ev.preventDefault();
+          try { if (btn.hasPointerCapture(ev.pointerId)) btn.releasePointerCapture(ev.pointerId); } catch (_) {}
+          moveStop();
+        };
+        btn.addEventListener("pointerdown", start);
+        btn.addEventListener("pointerup", stop);
+        btn.addEventListener("lostpointercapture", () => moveStop());
+        btn.addEventListener("pointercancel", stop);
+      });
+      $("pad-stop").addEventListener("click", () => moveStop());
+      window.addEventListener("blur", () => moveStop());
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) moveStop();
+      });
+    }
+
+    $("btn-fit").addEventListener("click", () => setFit());
+    $("btn-1to1").addEventListener("click", () => setOneToOne());
+    $("btn-zoom-in").addEventListener("click", () => bumpZoom(1.25));
+    $("btn-zoom-out").addEventListener("click", () => bumpZoom(1 / 1.25));
+
+    $("btn-loop").addEventListener("click", async () => {
+      try {
+        await postJson("/phd2/exposure", { exposure_ms: Number($("exposure").value) });
+        await postJson("/phd2/loop", {});
+        setStatus("LOOP gestartet");
+        pollStatus();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("btn-find").addEventListener("click", async () => {
+      try {
+        const data = await postJson("/phd2/find-star", {});
+        setStatus("AUTO STAR: " + JSON.stringify(data.result));
+        pollStatus();
+        refreshStar();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("btn-guide").addEventListener("click", async () => {
+      try {
+        await postJson("/phd2/guide", { recalibrate: false });
+        setStatus("GUIDE gestartet");
+        pollStatus();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("btn-pause").addEventListener("click", async () => {
+      try {
+        await postJson("/phd2/pause", { paused: true });
+        setStatus("PAUSE");
+        pollStatus();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("btn-stop").addEventListener("click", async () => {
+      try {
+        await postJson("/phd2/stop", {});
+        setStatus("STOP capture");
+        pollStatus();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("exposure").addEventListener("change", async () => {
+      if (exposureSyncLock) return;
+      try {
+        await postJson("/phd2/exposure", { exposure_ms: Number($("exposure").value) });
+        setStatus("Exposure gesetzt");
+        pollStatus();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+    $("ff-interval").addEventListener("change", async () => {
+      try {
+        const seconds = Number($("ff-interval").value);
+        const data = await postJson("/phd2/fullframe-interval", { seconds });
+        serverIntervalS = Number(data.fullframe_interval_s) || seconds;
+        restartFullTimer();
+        setStatus(`Fullframe-Update ≥ ${serverIntervalS}s`);
+        pollStatus();
+        refreshFull();
+      } catch (err) { setStatus(String(err.message || err)); }
+    });
+
+    bindPad();
+    refreshExposures();
+    pollStatus();
+    refreshFull();
+    refreshStar();
+    setInterval(pollStatus, 1000);
+    setInterval(refreshExposures, 15000);
+    restartFullTimer();
+    restartStarTimer();
+  </script>
+</body>
+</html>

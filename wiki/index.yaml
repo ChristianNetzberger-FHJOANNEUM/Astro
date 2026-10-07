@@ -22,6 +22,12 @@ sections:
       - id: mele-pc-autostart
         title: MeLE-PC Autostart (Windows)
         file: knowledge/mele-pc-autostart.md
+      - id: phd2-guiding-phase1-spec
+        title: PHD2 Guiding Phase 1 (Agent-Spec)
+        file: knowledge/phd2-guiding-phase1-spec.md
+      - id: phd2-guiding-phase1-indoor-report
+        title: PHD2 Guiding Phase 1 (Indoor-Testbericht)
+        file: knowledge/phd2-guiding-phase1-indoor-report.md
 
   - id: inventar
     title: Inventar

@@ -131,6 +131,9 @@ def build_ui(
     on_set_site: Callable[[float, float, str], None],
     on_start_synscan: Callable[[], None],
     on_start_nina: Callable[[], None],
+    on_start_phd2: Callable[[], None],
+    on_start_weather_server: Callable[[], None],
+    on_open_guiding: Callable[[], None],
     locations_fn: Callable[[], list[tuple[str, str, float, float, str]]],
     active_location_id_fn: Callable[[], str],
     on_apply_location: Callable[[str], bool],
@@ -245,6 +248,21 @@ def build_ui(
                     "True North / Sonnenmeridian (offline)"
                 )
                 with ui.row().classes("items-center no-wrap q-gutter-xs"):
+                    weather_led = ui.html(
+                        '<span style="display:inline-block;width:0.7em;height:0.7em;'
+                        "border-radius:50%;background:#64748b;"
+                        'box-shadow:inset 0 0 0 1px rgba(15,23,42,.55);"></span>'
+                    )
+                    state.refs["weather_server_led"] = weather_led
+                    ui.button(
+                        "WxServer",
+                        icon="cloud_sync",
+                        on_click=on_start_weather_server,
+                    ).props("flat dense").tooltip(
+                        "weather_server starten (Ecowitt→SQLite→:8765). "
+                        "LED gruen = Prozess/API erreichbar. Autostart bleibt Task Scheduler."
+                    )
+                with ui.row().classes("items-center no-wrap q-gutter-xs"):
                     nina_led = ui.html(
                         '<span style="display:inline-block;width:0.7em;height:0.7em;'
                         "border-radius:50%;background:#64748b;"
@@ -266,6 +284,21 @@ def build_ui(
                     ).tooltip(
                         "SynScan Pro starten (Skywatcher-Montierung). LED gruen = laeuft bereits."
                     )
+                with ui.row().classes("items-center no-wrap q-gutter-xs"):
+                    phd2_led = ui.html(
+                        '<span style="display:inline-block;width:0.7em;height:0.7em;'
+                        "border-radius:50%;background:#64748b;"
+                        'box-shadow:inset 0 0 0 1px rgba(15,23,42,.55);"></span>'
+                    )
+                    state.refs["phd2_led"] = phd2_led
+                    ui.button("PHD2", icon="filter_center_focus", on_click=on_start_phd2).props(
+                        "flat dense"
+                    ).tooltip(
+                        "PHD2 Guiding starten (ASI120). LED gruen = phd2.exe laeuft."
+                    )
+                    ui.button("Guiding", icon="open_in_new", on_click=on_open_guiding).props(
+                        "flat dense"
+                    ).tooltip("Guiding-Seite: ASI120-Bild, Loop, Mount-Pad")
 
             # Kontext-Box: Live | Forecast | Ort+Himmel
             with ui.card().classes("w-full q-pa-sm q-mb-sm").props("flat bordered") as safety_card:

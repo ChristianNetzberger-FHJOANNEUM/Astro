@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -10,8 +11,10 @@ from datetime import date, datetime, timezone
 import time
 from urllib.parse import urlencode
 
+logger = logging.getLogger(__name__)
+
 from fastapi import Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from nicegui import app, run, ui
 
 from app_mele.layout import build_ui
@@ -136,6 +139,13 @@ from mele.network import (
 )
 from mele.synscan import get_synscan_status, start_synscan
 from mele.nina_launch import get_nina_app_status, start_nina_app
+from mele.phd2_launch import get_phd2_app_status, start_phd2_app
+from mele.phd2 import Phd2Error, get_shared_phd2_client
+from mele.nina_mount_move import get_mount_mover
+from mele.weather_server_launch import (
+    get_weather_server_app_status,
+    start_weather_server_app,
+)
 from mele.nina import NinaClient, NinaCommandResult, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
@@ -243,6 +253,7 @@ def run_app(port: int | None = None) -> None:
     imaging_html = (Path(__file__).resolve().parent / "imaging.html").read_text(encoding="utf-8")
     observe_html = (Path(__file__).resolve().parent / "observe.html").read_text(encoding="utf-8")
     tools_html = (Path(__file__).resolve().parent / "tools.html").read_text(encoding="utf-8")
+    guiding_html = (Path(__file__).resolve().parent / "guiding.html").read_text(encoding="utf-8")
     app.add_static_files("/mele-media", preview_dir)
     app.add_static_files("/mele-export", settings.horizon_dir)
     app.add_static_files("/mele-source", settings.media_dir)
@@ -252,11 +263,18 @@ def run_app(port: int | None = None) -> None:
     app.add_static_files("/wiki-media", wiki_media_dir)
     pano_html = (Path(__file__).resolve().parent / "pano.html").read_text(encoding="utf-8")
     nina = NinaClient(settings.nina_base_url)
+    phd2 = get_shared_phd2_client(host=settings.phd2_host, port=settings.phd2_port)
+    phd2.set_fullframe_min_interval(settings.phd2_fullframe_interval_s)
+    mount_mover = get_mount_mover(settings.nina_base_url)
     ensure_manager_db(settings.astro_manager_db)
 
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
         return HTMLResponse(pano_html)
+
+    @app.get("/guiding-view")
+    def guiding_view() -> HTMLResponse:
+        return HTMLResponse(guiding_html)
 
     @app.get("/astro/object/{catalog_key}")
     def astro_object(catalog_key: str, name: str = "") -> JSONResponse:
@@ -1088,6 +1106,218 @@ def run_app(port: int | None = None) -> None:
                 {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "camera": None}
             )
         return JSONResponse(status.to_dict())
+
+    def _phd2_pad_allowed() -> tuple[bool, str]:
+        st = phd2.get_status()
+        if st.connection == "GUIDING" or st.guiding:
+            return False, "Pad deaktiviert während PHD2 Guiding"
+        if st.connection == "CALIBRATING":
+            return False, "Pad deaktiviert während PHD2-Kalibrierung"
+        try:
+            mount = nina.get_mount_info()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"NINA Mount nicht erreichbar: {exc}"
+        if not mount.api_online:
+            return False, mount.error or "NINA API offline"
+        if mount.mount is None or not mount.mount.connected:
+            return False, "Montierung in NINA nicht verbunden"
+        if getattr(mount.mount, "at_park", False):
+            return False, "Montierung geparkt"
+        return True, ""
+
+    @app.get("/phd2/app")
+    def phd2_app_status() -> JSONResponse:
+        return JSONResponse(get_phd2_app_status(settings.phd2_exe).to_dict())
+
+    @app.post("/phd2/app/start")
+    def phd2_app_start() -> JSONResponse:
+        result = start_phd2_app(settings.phd2_exe)
+        status = 200 if result.ok else 500
+        return JSONResponse(result.to_dict(), status_code=status)
+
+    @app.get("/phd2/status")
+    def phd2_status() -> JSONResponse:
+        try:
+            phd2.refresh_equipment()
+        except Exception:  # noqa: BLE001
+            pass
+        st = phd2.get_status()
+        pad_ok, pad_reason = _phd2_pad_allowed()
+        return JSONResponse(
+            {
+                "ok": True,
+                "status": st.to_dict(),
+                "pad_allowed": pad_ok,
+                "pad_reason": pad_reason,
+                "fullframe_interval_s": settings.phd2_fullframe_interval_s,
+                "app": get_phd2_app_status(settings.phd2_exe).to_dict(),
+            }
+        )
+
+    @app.post("/phd2/loop")
+    def phd2_loop() -> JSONResponse:
+        try:
+            phd2.loop()
+            return JSONResponse({"ok": True})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.post("/phd2/stop")
+    def phd2_stop() -> JSONResponse:
+        try:
+            phd2.stop_capture()
+            return JSONResponse({"ok": True})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.post("/phd2/find-star")
+    def phd2_find_star() -> JSONResponse:
+        try:
+            result = phd2.find_star()
+            return JSONResponse({"ok": True, "result": result})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.post("/phd2/guide")
+    async def phd2_guide(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        recal = bool(body.get("recalibrate"))
+        try:
+            phd2.guide(recalibrate=recal)
+            return JSONResponse({"ok": True})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.post("/phd2/pause")
+    async def phd2_pause(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        paused = body.get("paused")
+        if paused is None:
+            paused = True
+        try:
+            phd2.set_paused(bool(paused), full=bool(body.get("full")))
+            return JSONResponse({"ok": True})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.post("/phd2/exposure")
+    async def phd2_exposure(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        ms = body.get("exposure_ms")
+        try:
+            exposure_ms = int(ms)
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "exposure_ms ungültig"}, status_code=400)
+        try:
+            phd2.set_exposure(exposure_ms)
+            return JSONResponse({"ok": True, "exposure_ms": exposure_ms})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    @app.get("/phd2/exposures")
+    def phd2_exposures() -> JSONResponse:
+        try:
+            durations = phd2.get_exposure_durations()
+            current = phd2.get_exposure()
+            return JSONResponse({"ok": True, "durations_ms": durations, "exposure_ms": current})
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc), "durations_ms": []}, status_code=502)
+
+    @app.get("/phd2/telemetry")
+    def phd2_telemetry(limit: int = Query(120)) -> JSONResponse:
+        return JSONResponse({"ok": True, **phd2.telemetry(limit=limit)})
+
+    @app.post("/phd2/fullframe-interval")
+    async def phd2_fullframe_interval(request: Request) -> JSONResponse:
+        """Aktualisierungs-Untergrenze für save_image→JPEG (Sekunden)."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            seconds = float(body.get("seconds"))
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "seconds ungültig"}, status_code=400)
+        seconds = max(0.2, min(seconds, 30.0))
+        settings.phd2_fullframe_interval_s = seconds
+        phd2.set_fullframe_min_interval(seconds)
+        return JSONResponse({"ok": True, "fullframe_interval_s": seconds})
+
+    @app.get("/phd2/image", response_model=None)
+    def phd2_image(
+        kind: str = Query("auto"),
+        max_width: int = Query(1280),
+    ):
+        try:
+            jpeg, meta = phd2.guide_image_jpeg(
+                kind=kind,
+                fullframe_min_interval_s=settings.phd2_fullframe_interval_s,
+                max_width=max(320, min(int(max_width), 2400)),
+            )
+        except Phd2Error as exc:
+            return JSONResponse({"ok": False, "error": str(exc), **{}}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        headers = {
+            "Cache-Control": "no-store",
+            "X-MeLE-Image-Kind": str(meta.get("kind") or kind),
+        }
+        return Response(content=jpeg, media_type="image/jpeg", headers=headers)
+
+    @app.get("/nina/mount/move/status")
+    def nina_mount_move_status() -> JSONResponse:
+        """Debug: aktueller MoveAxis-Mover-Zustand."""
+        return JSONResponse({"ok": True, **mount_mover.status()})
+
+    @app.post("/nina/mount/move")
+    async def nina_mount_move(request: Request) -> JSONResponse:
+        """Manuelles Joggen via NINA MoveAxis-WebSocket."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        # Blocking HTTP/WS nicht auf dem Event-Loop — sonst hängt die ganze UI.
+        allowed, reason = await asyncio.to_thread(_phd2_pad_allowed)
+        if not allowed:
+            return JSONResponse({"ok": False, "error": reason, "pad_allowed": False}, status_code=409)
+        direction = str(body.get("direction") or "")
+        try:
+            rate = float(body.get("rate", 0.01))
+        except (TypeError, ValueError):
+            rate = 0.01
+        logger.info("mount/move request direction=%s rate=%s ws=%s", direction, rate, mount_mover.ws_url)
+        result = await asyncio.to_thread(mount_mover.move, direction, rate)
+        if not result.ok:
+            logger.warning("mount/move failed: %s", result.error)
+        status = 200 if result.ok else 502
+        payload = result.to_dict()
+        payload["ws_url"] = mount_mover.ws_url
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/nina/mount/move/stop")
+    async def nina_mount_move_stop() -> JSONResponse:
+        result = await asyncio.to_thread(mount_mover.stop)
+        logger.info("mount/move/stop ok=%s", result.ok)
+        return JSONResponse(result.to_dict())
 
     @app.get("/network/wifi")
     def network_wifi() -> JSONResponse:
@@ -3383,6 +3613,76 @@ def run_app(port: int | None = None) -> None:
                 ui.notify(result.error or "NINA-Start fehlgeschlagen", type="negative")
             ui.timer(0.4, poll_nina_app_status, once=True)
 
+        async def poll_phd2_app_status() -> None:
+            try:
+                status = await asyncio.to_thread(get_phd2_app_status, settings.phd2_exe)
+            except Exception:  # noqa: BLE001
+                return
+            tip = "PHD2 laeuft" if status.running else "PHD2 nicht gestartet"
+            if not status.exe_exists:
+                tip = f"phd2.exe fehlt: {status.exe_path}"
+            elif status.error:
+                tip = status.error
+            _set_app_led(
+                "phd2_led",
+                running=status.running,
+                exe_exists=status.exe_exists,
+                tip=tip,
+            )
+
+        def on_start_phd2() -> None:
+            result = start_phd2_app(settings.phd2_exe)
+            if result.ok and result.already_running:
+                ui.notify("PHD2 laeuft bereits.", type="info")
+            elif result.ok:
+                ui.notify("PHD2 gestartet.", type="positive")
+            else:
+                ui.notify(result.error or "PHD2-Start fehlgeschlagen", type="negative")
+            ui.timer(0.4, poll_phd2_app_status, once=True)
+
+        async def poll_weather_server_app_status() -> None:
+            try:
+                status = await asyncio.to_thread(
+                    get_weather_server_app_status,
+                    settings.local_weather_server_url or "http://127.0.0.1:8765",
+                )
+            except Exception:  # noqa: BLE001
+                return
+            tip = "weather_server erreichbar" if status.reachable else (
+                "weather_server-Prozess laeuft" if status.running else "weather_server nicht gestartet"
+            )
+            if not status.python_exists:
+                tip = f"Python fehlt: {status.python_path}"
+            elif status.error:
+                tip = status.error
+            elif status.running and not status.reachable:
+                tip = "weather_server startet / Port noch nicht bereit"
+            _set_app_led(
+                "weather_server_led",
+                running=status.running,
+                exe_exists=status.python_exists,
+                tip=tip,
+            )
+
+        def on_start_weather_server() -> None:
+            result = start_weather_server_app(
+                settings.local_weather_server_url or "http://127.0.0.1:8765",
+                no_browser=True,
+            )
+            if result.ok and result.already_running:
+                ui.notify("weather_server laeuft bereits.", type="info")
+            elif result.ok:
+                ui.notify("weather_server gestartet (Hintergrund).", type="positive")
+            else:
+                ui.notify(result.error or "weather_server-Start fehlgeschlagen", type="negative")
+            ui.timer(0.8, poll_weather_server_app_status, once=True)
+            ui.timer(2.5, poll_weather_server_app_status, once=True)
+            if settings.local_weather_enabled:
+                ui.timer(3.0, poll_weather_server, once=True)
+
+        def on_open_guiding() -> None:
+            ui.run_javascript("window.open('/guiding-view', '_blank')")
+
         build_ui(
             state=state,
             media_dir=settings.media_dir,
@@ -3410,6 +3710,9 @@ def run_app(port: int | None = None) -> None:
             on_set_site=on_set_site,
             on_start_synscan=on_start_synscan,
             on_start_nina=on_start_nina,
+            on_start_phd2=on_start_phd2,
+            on_start_weather_server=on_start_weather_server,
+            on_open_guiding=on_open_guiding,
             locations_fn=locations_list,
             active_location_id_fn=active_location_id,
             on_apply_location=on_apply_location,
@@ -3425,6 +3728,10 @@ def run_app(port: int | None = None) -> None:
         ui.timer(3.0, poll_synscan_status)
         ui.timer(0.3, poll_nina_app_status, once=True)
         ui.timer(3.0, poll_nina_app_status)
+        ui.timer(0.35, poll_phd2_app_status, once=True)
+        ui.timer(3.0, poll_phd2_app_status)
+        ui.timer(0.4, poll_weather_server_app_status, once=True)
+        ui.timer(5.0, poll_weather_server_app_status)
         if settings.local_weather_enabled and (settings.local_weather_server_url or "").strip():
             poll_s = max(15.0, float(settings.local_weather_poll_interval_s or 60.0))
             ui.timer(0.5, poll_weather_server, once=True)
@@ -3435,6 +3742,9 @@ def run_app(port: int | None = None) -> None:
             if media is not None:
                 _queue_select_image(media.name, keep_site=True)
 
+    # Default reconnect_timeout=3s: Chrome drosselt Hintergrund-Tabs (360/Guiding/Wetter).
+    # Nach >3s ohne Pong loescht NiceGUI den Client → index() neu, Panorama wird neu geladen.
+    # Observing-Workflow: langer Timeout, damit Hauptfenster beim Tab-Wechsel erhalten bleibt.
     ui.run(
         root=index,
         title="MeLE Astro-Computer",
@@ -3442,4 +3752,5 @@ def run_app(port: int | None = None) -> None:
         host=settings.ui_host,
         show=True,
         reload=False,
+        reconnect_timeout=600.0,
     )

@@ -24,6 +24,12 @@ nina_base_url: http://localhost:1888/v2/api
 nina_exe: C:/Program Files/N.I.N.A. - Nighttime Imaging 'N' Astronomy/NINA.exe
 # SynScan Pro (Skywatcher-Montierung). Verzeichnis oder Pfad zur .exe.
 synscan_pro_exe: C:/Astro/SW/synscanpro_windows_2611/SynScanPro/SynScanPro.exe
+# PHD2 Guiding (ASI120). Event-Server typisch Port 4400.
+phd2_exe: C:/Program Files (x86)/PHDGuiding2/phd2.exe
+phd2_host: 127.0.0.1
+phd2_port: 4400
+# Fullframe via save_image → FITS → JPEG (Setup/Navigation), nicht jedes Guide-Frame
+phd2_fullframe_interval_s: 1.0
 # GeoSphere-Forecast-Journal (stündlich via Task Scheduler / CLI).
 weather_journal_enabled: true
 weather_journal_interval_h: 1
