@@ -37,6 +37,10 @@ class MeleSettings:
     # Aufnahme lokal (SSD); Archiv spaeter NAS — nur Pfad-Config in Phase 1
     local_capture_root: Path = Path(r"C:\Astro\Capture\Mele")
     archive_root: Path = Path(r"\\NAS\Astro\Capture\Mele")
+    # WORK: UNC vom MeLE (Transfer) vs. Notebook-Lokalpfad (Siril-Anzeige)
+    work_transfer_root: Path | None = None
+    work_local_root: Path | None = None
+    siril_home_dirname: str = "siril_home"
     nina_base_url: str = "http://localhost:1888/v2/api"
     nina_exe: Path = Path(
         r"C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy\NINA.exe"
@@ -73,6 +77,13 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _optional_path(value: Any) -> Path | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
 def load_mele_settings(path: Path | None = None) -> MeleSettings:
     cfg_path = path or REPO_ROOT / "configs" / "mele.yaml"
     raw = _load_yaml(cfg_path)
@@ -101,6 +112,9 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         manager_db = catalogs / "astro_manager.sqlite"
     local_cap = Path(str(raw.get("local_capture_root") or r"C:\Astro\Capture\Mele").strip() or r"C:\Astro\Capture\Mele")
     archive = Path(str(raw.get("archive_root") or r"\\NAS\Astro\Capture\Mele").strip() or r"\\NAS\Astro\Capture\Mele")
+    work_transfer = _optional_path(raw.get("work_transfer_root"))
+    work_local = _optional_path(raw.get("work_local_root"))
+    siril_home = str(raw.get("siril_home_dirname") or "siril_home").strip() or "siril_home"
     synscan_raw = str(raw.get("synscan_pro_exe") or "").strip()
     if synscan_raw:
         synscan = Path(synscan_raw)
@@ -145,6 +159,9 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         astro_manager_db=manager_db,
         local_capture_root=local_cap,
         archive_root=archive,
+        work_transfer_root=work_transfer,
+        work_local_root=work_local,
+        siril_home_dirname=siril_home,
         nina_base_url=str(raw.get("nina_base_url") or "http://localhost:1888/v2/api").strip().rstrip("/"),
         nina_exe=nina_exe,
         synscan_pro_exe=synscan,
@@ -173,16 +190,63 @@ def _replace_yaml_scalar(text: str, key: str, value: str) -> str:
     return text.rstrip() + f"\n{key}: {value}\n"
 
 
+def mele_yaml_path(path: Path | None = None) -> Path:
+    return path or (REPO_ROOT / "configs" / "mele.yaml")
+
+
+def _yaml_scalar_value(value: str) -> str:
+    """Pfad/String fuer YAML-Zeile (keine Secrets). Leer → \"\"."""
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return '""'
+    if any(ch in raw for ch in ' #"\'{}[]:&*?|>!%@`'):
+        escaped = raw.replace('"', '\\"')
+        return f'"{escaped}"'
+    return raw
+
+
 def save_site(
     latitude_deg: float,
     longitude_deg: float,
     path: Path | None = None,
 ) -> Path:
     """Schreibt lat/lon nach mele.yaml, laesst Kommentare stehen."""
-    cfg_path = path or REPO_ROOT / "configs" / "mele.yaml"
+    cfg_path = mele_yaml_path(path)
     text = cfg_path.read_text(encoding="utf-8") if cfg_path.is_file() else ""
     text = _replace_yaml_scalar(text, "latitude_deg", f"{latitude_deg:.6f}")
     text = _replace_yaml_scalar(text, "longitude_deg", f"{longitude_deg:.6f}")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(text, encoding="utf-8")
+    return cfg_path
+
+
+def save_storage_paths(
+    *,
+    local_capture_root: str | None = None,
+    archive_root: str | None = None,
+    work_transfer_root: str | None = None,
+    work_local_root: str | None = None,
+    siril_home_dirname: str | None = None,
+    path: Path | None = None,
+) -> Path:
+    """Schreibt Storage-Pfade nach mele.yaml (Kommentare bleiben). Keine Passwoerter."""
+    cfg_path = mele_yaml_path(path)
+    text = cfg_path.read_text(encoding="utf-8") if cfg_path.is_file() else ""
+    updates: list[tuple[str, str | None]] = [
+        ("local_capture_root", local_capture_root),
+        ("archive_root", archive_root),
+        ("work_transfer_root", work_transfer_root),
+        ("work_local_root", work_local_root),
+        ("siril_home_dirname", siril_home_dirname),
+    ]
+    for key, value in updates:
+        if value is None:
+            continue
+        if key == "siril_home_dirname":
+            name = str(value).strip() or "siril_home"
+            text = _replace_yaml_scalar(text, key, _yaml_scalar_value(name))
+        else:
+            text = _replace_yaml_scalar(text, key, _yaml_scalar_value(value))
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(text, encoding="utf-8")
     return cfg_path

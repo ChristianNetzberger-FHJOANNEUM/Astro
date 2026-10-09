@@ -26,9 +26,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4400
-TELEMETRY_SECONDS = 300.0
+TELEMETRY_SECONDS = 600.0  # 10 min für Guiding-Graph (Phase 1.5)
+EVENT_LOG_MAX = 500
+SNR_DROP_RATIO = 0.45
+SNR_DROP_MIN_INTERVAL_S = 15.0
+CALIBRATION_REFRESH_INTERVAL_S = 2.5
 DEFAULT_FULLFRAME_MIN_INTERVAL_S = 1.0
 DEFAULT_SETTLE = {"pixels": 2.0, "time": 10, "timeout": 60}
+_MOUNT_ALERT_HINTS = (
+    "pulseguide",
+    "pulse guide",
+    "mount not",
+    "mount error",
+    "insufficient correction",
+    "ascom",
+    "guide output",
+)
 
 
 class Phd2Error(RuntimeError):
@@ -36,15 +49,46 @@ class Phd2Error(RuntimeError):
 
 
 @dataclass
+class Phd2LogEvent:
+    """Edge-triggered Guiding-Event (kein Polling-Spam)."""
+
+    utc: float
+    kind: str
+    source: str  # phd2 | derived
+    message: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "utc": self.utc,
+            "kind": self.kind,
+            "source": self.source,
+            "message": self.message,
+            "payload": dict(self.payload),
+        }
+
+
+def is_mount_alert_message(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(hint in lowered for hint in _MOUNT_ALERT_HINTS)
+
+
+@dataclass
 class GuideStepSample:
+    """Ein GuideStep. Distanzen sind immer Sensor-/Mount-Pixel (PHD2 Raw)."""
+
     utc: float
     frame: int | None = None
     dx: float | None = None
     dy: float | None = None
-    ra_distance: float | None = None
-    dec_distance: float | None = None
-    ra_duration: float | None = None
-    dec_duration: float | None = None
+    ra_distance: float | None = None  # px (RADistanceRaw)
+    dec_distance: float | None = None  # px
+    ra_duration: float | None = None  # ms
+    dec_duration: float | None = None  # ms
+    ra_direction: str = ""
+    dec_direction: str = ""
+    guide_time_s: float | None = None  # Sekunden seit Guiding-Start (PHD2 Time)
+    error_code: int | None = None
     star_mass: float | None = None
     snr: float | None = None
     hfd: float | None = None
@@ -76,6 +120,18 @@ class Phd2Status:
     frame_width: int | None = None
     frame_height: int | None = None
     lock_box_px: int = 21  # Anzeige-Quadrat (≈ PHD2 Search-Box)
+    # Guider image scale ["/px] aus get_pixel_scale; None = unbekannt/ungültig
+    pixel_scale_arcsec_px: float | None = None
+    # PHD2 Equipment Profile + Calibration (API-only, kein Review-Parser)
+    phd2_profile_id: int | None = None
+    phd2_profile_name: str = ""
+    calibration_state: str = "NONE"  # AVAILABLE | NONE
+    cal_x_angle: float | None = None
+    cal_y_angle: float | None = None
+    cal_x_rate: float | None = None
+    cal_y_rate: float | None = None
+    cal_x_parity: str = ""
+    cal_y_parity: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,6 +147,50 @@ def _finite(value: Any) -> float | None:
     if math.isnan(number) or math.isinf(number):
         return None
     return number
+
+
+def normalize_pixel_scale(value: Any) -> float | None:
+    """Gültiger PHD2-Maßstab in arcsec/pixel, sonst None."""
+    scale = _finite(value)
+    if scale is None or scale <= 0.0:
+        return None
+    return scale
+
+
+def pixels_to_arcsec(pixels: Any, scale_arcsec_per_px: Any) -> float | None:
+    """Pixel → Bogensekunden; None wenn Scale oder Wert ungültig."""
+    scale = normalize_pixel_scale(scale_arcsec_per_px)
+    px = _finite(pixels)
+    if scale is None or px is None:
+        return None
+    return px * scale
+
+
+def arcsec_to_pixels(arcsec: Any, scale_arcsec_per_px: Any) -> float | None:
+    """Bogensekunden → Pixel; None wenn Scale oder Wert ungültig."""
+    scale = normalize_pixel_scale(scale_arcsec_per_px)
+    value = _finite(arcsec)
+    if scale is None or value is None:
+        return None
+    return value / scale
+
+
+def enrich_guide_step_dict(step: dict[str, Any], scale_arcsec_per_px: Any) -> dict[str, Any]:
+    """Roh-Sample-Dict um *_px / *_arcsec und Anzeige-Einheit ergänzen."""
+    out = dict(step)
+    scale = normalize_pixel_scale(scale_arcsec_per_px)
+    ra_px = _finite(out.get("ra_distance"))
+    dec_px = _finite(out.get("dec_distance"))
+    out["ra_distance_px"] = ra_px
+    out["dec_distance_px"] = dec_px
+    out["ra_distance_arcsec"] = pixels_to_arcsec(ra_px, scale)
+    out["dec_distance_arcsec"] = pixels_to_arcsec(dec_px, scale)
+    avg_px = _finite(out.get("avg_dist"))
+    out["avg_dist_px"] = avg_px
+    out["avg_dist_arcsec"] = pixels_to_arcsec(avg_px, scale)
+    out["display_unit"] = "arcsec" if scale is not None else "px"
+    out["pixel_scale_arcsec_px"] = scale
+    return out
 
 
 def _map_connection_state(
@@ -145,9 +245,16 @@ class Phd2Client:
         self._buf = b""
         self._status = Phd2Status()
         self._steps: deque[GuideStepSample] = deque()
+        self._events: deque[Phd2LogEvent] = deque(maxlen=EVENT_LOG_MAX)
         self._fullframe_cache: tuple[float, bytes] | None = None
         self._fullframe_min_interval_s = DEFAULT_FULLFRAME_MIN_INTERVAL_S
         self._last_fullframe_mono = 0.0
+        self._pixel_scale_stale = True
+        self._last_logged_connection = ""
+        self._star_lost_utc: float | None = None
+        self._last_snr_for_drop: float | None = None
+        self._last_snr_drop_utc: float = 0.0
+        self._last_cal_refresh_mono = 0.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -185,11 +292,15 @@ class Phd2Client:
     def get_status(self) -> Phd2Status:
         with self._lock:
             st = Phd2Status(**asdict(self._status))
+        if st.last_step is not None:
+            st.last_step = enrich_guide_step_dict(st.last_step, st.pixel_scale_arcsec_px)
         return st
 
     def telemetry(self, *, limit: int = 120) -> dict[str, Any]:
+        self._ensure_pixel_scale()
         with self._lock:
             steps = list(self._steps)[-max(1, int(limit)) :]
+            scale = self._status.pixel_scale_arcsec_px
         ra = [s.ra_distance for s in steps if s.ra_distance is not None]
         dec = [s.dec_distance for s in steps if s.dec_distance is not None]
         tot = []
@@ -203,17 +314,43 @@ class Phd2Client:
                 return None
             return math.sqrt(sum(v * v for v in vals) / len(vals))
 
+        ra_rms_px = _rms(ra)
+        dec_rms_px = _rms(dec)
+        total_rms_px = _rms(tot)
+        enriched = [enrich_guide_step_dict(s.to_dict(), scale) for s in steps]
+        last = enriched[-1] if enriched else None
         return {
-            "steps": [s.to_dict() for s in steps],
+            "steps": enriched,
+            "last": last,
             "count": len(steps),
-            "ra_rms": _rms(ra),
-            "dec_rms": _rms(dec),
-            "total_rms": _rms(tot),
+            "pixel_scale_arcsec_px": scale,
+            "display_unit": "arcsec" if scale is not None else "px",
+            "ra_rms_px": ra_rms_px,
+            "dec_rms_px": dec_rms_px,
+            "total_rms_px": total_rms_px,
+            "ra_rms_arcsec": pixels_to_arcsec(ra_rms_px, scale),
+            "dec_rms_arcsec": pixels_to_arcsec(dec_rms_px, scale),
+            "total_rms_arcsec": pixels_to_arcsec(total_rms_px, scale),
+            # Abwärtskompatibel: bisher fälschlich als ″ gelesen — jetzt explizit px
+            "ra_rms": ra_rms_px,
+            "dec_rms": dec_rms_px,
+            "total_rms": total_rms_px,
             "window_s": TELEMETRY_SECONDS,
         }
 
     def set_fullframe_min_interval(self, seconds: float) -> None:
         self._fullframe_min_interval_s = max(0.2, float(seconds))
+
+    def events(self, *, limit: int = 100) -> dict[str, Any]:
+        """Letzte Event-Log-Einträge (neueste zuletzt)."""
+        n = max(1, min(int(limit), EVENT_LOG_MAX))
+        with self._lock:
+            items = list(self._events)[-n:]
+        return {
+            "events": [e.to_dict() for e in items],
+            "count": len(items),
+            "max": EVENT_LOG_MAX,
+        }
 
     # --- RPC commands ------------------------------------------------------
 
@@ -328,6 +465,88 @@ class Phd2Client:
                 return None
         return None
 
+    def get_pixel_scale(self) -> float | None:
+        result = self.call("get_pixel_scale", timeout_s=4.0)
+        return normalize_pixel_scale(result)
+
+    def get_profiles(self) -> list[dict[str, Any]]:
+        result = self.call("get_profiles", timeout_s=4.0)
+        if not isinstance(result, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in result:
+            if isinstance(item, dict) and item.get("name") is not None:
+                out.append({"id": item.get("id"), "name": str(item.get("name") or "")})
+        return out
+
+    def try_set_profile(self, profile_id: int) -> dict[str, Any]:
+        """PHD2 set_profile nur wenn Equipment disconnected (E2).
+
+        Returns:
+            applied: True wenn PHD2-Profil gewechselt wurde.
+            Bei connected Equipment: ok=True, applied=False (MeLE-Zuordnung darf trotzdem bleiben).
+        """
+        try:
+            connected = bool(self.call("get_connected", timeout_s=4.0))
+        except Phd2Error as exc:
+            return {
+                "ok": False,
+                "applied": False,
+                "error": str(exc),
+                "reason": "phd2_unreachable",
+            }
+        if connected:
+            return {
+                "ok": True,
+                "applied": False,
+                "error": "",
+                "reason": "equipment_connected",
+                "message": "PHD2-Equipment verbunden — Profil in PHD2 manuell wechseln",
+            }
+        try:
+            self.call("set_profile", [int(profile_id)], timeout_s=10.0)
+        except Phd2Error as exc:
+            return {
+                "ok": False,
+                "applied": False,
+                "error": str(exc),
+                "reason": "set_profile_failed",
+            }
+        with self._lock:
+            self._last_cal_refresh_mono = 0.0
+            self._pixel_scale_stale = True
+        return {
+            "ok": True,
+            "applied": True,
+            "error": "",
+            "reason": "applied",
+            "message": "PHD2-Profil gesetzt",
+        }
+
+    def refresh_pixel_scale(self) -> float | None:
+        """Aktualisiert den gecachten Maßstab (nicht aus Event-Handler mit Lock aufrufen)."""
+        try:
+            scale = self.get_pixel_scale()
+        except Phd2Error:
+            with self._lock:
+                # Offline: erneut versuchen; bei Connect-Fehler Scale leeren
+                if self._sock is None:
+                    self._pixel_scale_stale = True
+                else:
+                    self._status.pixel_scale_arcsec_px = None
+                    self._pixel_scale_stale = False
+            return None
+        with self._lock:
+            self._status.pixel_scale_arcsec_px = scale
+            self._pixel_scale_stale = False
+        return scale
+
+    def _ensure_pixel_scale(self) -> None:
+        with self._lock:
+            stale = self._pixel_scale_stale
+        if stale:
+            self.refresh_pixel_scale()
+
     def save_image(self) -> str:
         result = self.call("save_image", timeout_s=15.0)
         if isinstance(result, dict) and result.get("filename"):
@@ -381,6 +600,63 @@ class Phd2Client:
                 if not self._status.star_selected:
                     self._status.lock_x = None
                     self._status.lock_y = None
+        self._ensure_pixel_scale()
+        now = time.monotonic()
+        if (now - self._last_cal_refresh_mono) >= CALIBRATION_REFRESH_INTERVAL_S:
+            self._last_cal_refresh_mono = now
+            self.refresh_calibration_and_profile()
+
+    def refresh_calibration_and_profile(self) -> None:
+        """Lädt Profil + Calibration über PHD2-API (kein Log-/GUI-Parser)."""
+        calibrated: bool | None
+        try:
+            calibrated = bool(self.call("get_calibrated", timeout_s=4.0))
+        except Phd2Error:
+            calibrated = None
+
+        data: Any = None
+        try:
+            data = self.call("get_calibration_data", ["Mount"], timeout_s=4.0)
+        except Phd2Error:
+            try:
+                data = self.call("get_calibration_data", timeout_s=4.0)
+            except Phd2Error:
+                data = None
+
+        profile: Any = None
+        try:
+            profile = self.call("get_profile", timeout_s=4.0)
+        except Phd2Error:
+            profile = None
+
+        with self._lock:
+            if isinstance(profile, dict):
+                self._status.phd2_profile_name = str(profile.get("name") or "")
+                try:
+                    self._status.phd2_profile_id = int(profile["id"])
+                except (TypeError, ValueError, KeyError):
+                    self._status.phd2_profile_id = None
+
+            data_calibrated = bool(isinstance(data, dict) and data.get("calibrated"))
+            if calibrated is True or data_calibrated:
+                self._status.calibration_state = "AVAILABLE"
+            else:
+                self._status.calibration_state = "NONE"
+
+            if isinstance(data, dict):
+                self._status.cal_x_angle = _finite(data.get("xAngle"))
+                self._status.cal_y_angle = _finite(data.get("yAngle"))
+                self._status.cal_x_rate = _finite(data.get("xRate"))
+                self._status.cal_y_rate = _finite(data.get("yRate"))
+                self._status.cal_x_parity = str(data.get("xParity") or "").strip()
+                self._status.cal_y_parity = str(data.get("yParity") or "").strip()
+            elif calibrated is False:
+                self._status.cal_x_angle = None
+                self._status.cal_y_angle = None
+                self._status.cal_x_rate = None
+                self._status.cal_y_rate = None
+                self._status.cal_x_parity = ""
+                self._status.cal_y_parity = ""
 
     # --- image provider ----------------------------------------------------
 
@@ -475,10 +751,14 @@ class Phd2Client:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("PHD2 reader: %s", exc)
                 with self._lock:
+                    prev = self._status.connection
                     self._status.connection = "OFFLINE"
                     self._status.last_error = str(exc)
                     sock = self._sock
                     self._sock = None
+                    if prev and prev != "OFFLINE":
+                        self._emit_event("OFFLINE", "derived", f"PHD2 offline: {exc}")
+                        self._last_logged_connection = "OFFLINE"
                 if sock is not None:
                     try:
                         sock.close()
@@ -489,6 +769,7 @@ class Phd2Client:
     def _connect_once(self) -> None:
         with self._lock:
             self._status.connection = "CONNECTING"
+            self._pixel_scale_stale = True
             self._buf = b""
         sock = socket.create_connection((self.host, self.port), timeout=4.0)
         sock.settimeout(1.0)
@@ -566,18 +847,37 @@ class Phd2Client:
             self._status.app_state = "Calibrating"
             self._refresh_connection_label()
             return
+        if event == "CalibrationComplete":
+            mount = str(msg.get("Mount") or "")
+            self._emit_event(
+                "CALIBRATION_COMPLETE",
+                "phd2",
+                "Calibration complete" + (f" ({mount})" if mount else ""),
+                mount=mount or None,
+            )
+            self._last_cal_refresh_mono = 0.0
+            return
+        if event == "CalibrationFailed":
+            reason = str(msg.get("Reason") or msg.get("Msg") or "calibration failed")
+            self._emit_event("CALIBRATION_FAILED", "phd2", reason, reason=reason)
+            self._status.last_error = reason
+            self._last_cal_refresh_mono = 0.0
+            return
         if event == "StartGuiding":
+            self._clear_lost_star(source_hint="StartGuiding")
             self._status.guiding = True
             self._status.looping = True
-            self._status.lost_star = False
+            self._status.star_selected = True
             self._status.app_state = "Guiding"
             self._refresh_connection_label()
             return
         if event == "GuideStep":
+            was_lost = self._status.lost_star
             self._ingest_guide_step(msg)
+            if was_lost:
+                self._clear_lost_star(source_hint="GuideStep")
             self._status.guiding = True
             self._status.looping = True
-            self._status.lost_star = False
             self._status.star_selected = True
             self._status.app_state = "Guiding"
             self._refresh_connection_label()
@@ -592,64 +892,175 @@ class Phd2Client:
             self._refresh_connection_label()
             return
         if event == "StarLost":
+            if not self._status.lost_star:
+                last_snr = None
+                if self._status.last_step:
+                    last_snr = _finite(self._status.last_step.get("snr"))
+                self._star_lost_utc = time.time()
+                self._emit_event(
+                    "STAR_LOST",
+                    "phd2",
+                    "Star lost" + (f" (last SNR {last_snr:.1f})" if last_snr is not None else ""),
+                    last_snr=last_snr,
+                )
             self._status.lost_star = True
             # Beim reinen Looping kein „Guiding“-Lock — AppState beibehalten.
             self._refresh_connection_label()
             return
         if event == "StarSelected":
+            self._clear_lost_star(source_hint="StarSelected")
             self._status.star_selected = True
-            self._status.lost_star = False
             x = _finite(msg.get("X"))
             y = _finite(msg.get("Y"))
             if x is not None and y is not None:
                 self._status.lock_x = x
                 self._status.lock_y = y
+            self._emit_event(
+                "STAR_SELECTED",
+                "phd2",
+                "Star selected" + (f" ({x:.1f},{y:.1f})" if x is not None and y is not None else ""),
+                x=x,
+                y=y,
+            )
+            self._refresh_connection_label()
             return
         if event == "LockPositionSet":
+            self._clear_lost_star(source_hint="LockPositionSet")
             x = _finite(msg.get("X"))
             y = _finite(msg.get("Y"))
             if x is not None and y is not None:
                 self._status.lock_x = x
                 self._status.lock_y = y
                 self._status.star_selected = True
-                self._status.lost_star = False
+            self._refresh_connection_label()
             return
         if event == "GuidingStopped":
             self._status.guiding = False
+            self._emit_event("GUIDING_STOPPED", "phd2", "Guiding stopped")
             self._refresh_connection_label()
             return
+        if event == "ConfigurationChange":
+            # RPC nicht unter Event-Lock — Flag für nächsten refresh/telemetry
+            self._pixel_scale_stale = True
+            self._last_cal_refresh_mono = 0.0
+            return
         if event == "Alert":
-            self._status.last_error = str(msg.get("Msg") or "PHD2 alert")
+            text = str(msg.get("Msg") or "PHD2 alert")
+            self._status.last_error = text
+            if is_mount_alert_message(text):
+                self._emit_event("MOUNT_ERROR", "phd2", text, alert=text)
+            else:
+                self._emit_event("ALERT", "phd2", text, alert=text)
+
+    def _emit_event(
+        self,
+        kind: str,
+        source: str,
+        message: str,
+        **payload: Any,
+    ) -> None:
+        """Muss unter self._lock aufgerufen werden (Event-Handler)."""
+        clean = {k: v for k, v in payload.items() if v is not None}
+        self._events.append(
+            Phd2LogEvent(
+                utc=time.time(),
+                kind=str(kind),
+                source=str(source),
+                message=str(message),
+                payload=clean,
+            )
+        )
+
+    def _clear_lost_star(self, *, source_hint: str) -> bool:
+        """Lost→ok; bei Transition STAR_RECOVERED (derived). True wenn recovered."""
+        if not self._status.lost_star:
+            return False
+        now = time.time()
+        outage = None
+        if self._star_lost_utc is not None:
+            outage = max(0.0, now - self._star_lost_utc)
+        self._status.lost_star = False
+        self._star_lost_utc = None
+        self._emit_event(
+            "STAR_RECOVERED",
+            "derived",
+            f"Star recovered" + (f" (outage {outage:.1f}s)" if outage is not None else ""),
+            outage_s=outage,
+            via=source_hint,
+        )
+        return True
 
     def _apply_app_state(self, state: str) -> None:
         self._status.app_state = state
         self._status.guiding = state == "Guiding"
         self._status.looping = state in ("Looping", "Guiding", "Calibrating")
         self._status.paused = state == "Paused"
-        self._status.lost_star = state == "LostLock"
+        if state == "LostLock":
+            if not self._status.lost_star:
+                last_snr = None
+                if self._status.last_step:
+                    last_snr = _finite(self._status.last_step.get("snr"))
+                self._star_lost_utc = time.time()
+                self._emit_event(
+                    "STAR_LOST",
+                    "phd2",
+                    "Star lost (AppState LostLock)",
+                    last_snr=last_snr,
+                )
+            self._status.lost_star = True
         self._refresh_connection_label()
 
     def _refresh_connection_label(self) -> None:
         online = self._sock is not None
-        self._status.connection = _map_connection_state(
+        prev = self._status.connection
+        new = _map_connection_state(
             online=online,
             app_state=self._status.app_state,
             lost_star=self._status.lost_star,
             paused=self._status.paused,
         )
+        self._status.connection = new
+        if new == prev:
+            return
+        # LOST_STAR: Detail-Event STAR_LOST kommt aus StarLost/AppState — hier kein zweites
+        if new == "LOST_STAR":
+            self._last_logged_connection = new
+            return
+        if new == self._last_logged_connection:
+            return
+        self._last_logged_connection = new
+        self._emit_event(new, "derived", new.replace("_", " "))
 
     def _ingest_guide_step(self, msg: dict[str, Any]) -> None:
+        ra_px = _finite(msg.get("RADistanceRaw"))
+        if ra_px is None:
+            ra_px = _finite(msg.get("RADistanceGuide"))
+        dec_px = _finite(msg.get("DECDistanceRaw"))
+        if dec_px is None:
+            dec_px = _finite(msg.get("DecDistanceRaw"))
+        if dec_px is None:
+            dec_px = _finite(msg.get("DECDistanceGuide"))
+        err_raw = msg.get("ErrorCode")
+        try:
+            error_code = int(err_raw) if err_raw is not None else None
+        except (TypeError, ValueError):
+            error_code = None
+        snr = _finite(msg.get("SNR"))
         sample = GuideStepSample(
             utc=time.time(),
             frame=int(msg["Frame"]) if msg.get("Frame") is not None else None,
             dx=_finite(msg.get("dx") if "dx" in msg else msg.get("DX")),
             dy=_finite(msg.get("dy") if "dy" in msg else msg.get("DY")),
-            ra_distance=_finite(msg.get("RADistanceRaw") or msg.get("RADistanceGuide")),
-            dec_distance=_finite(msg.get("DECDistanceRaw") or msg.get("DecDistanceRaw")),
+            ra_distance=ra_px,
+            dec_distance=dec_px,
             ra_duration=_finite(msg.get("RADuration")),
             dec_duration=_finite(msg.get("DECDuration") or msg.get("DecDuration")),
+            ra_direction=str(msg.get("RADirection") or "").strip(),
+            dec_direction=str(msg.get("DECDirection") or msg.get("DecDirection") or "").strip(),
+            guide_time_s=_finite(msg.get("Time")),
+            error_code=error_code,
             star_mass=_finite(msg.get("StarMass")),
-            snr=_finite(msg.get("SNR")),
+            snr=snr,
             hfd=_finite(msg.get("HFD")),
             avg_dist=_finite(msg.get("AvgDist")),
         )
@@ -658,6 +1069,29 @@ class Phd2Client:
         while self._steps and self._steps[0].utc < cutoff:
             self._steps.popleft()
         self._status.last_step = sample.to_dict()
+        self._maybe_log_snr_drop(snr)
+
+    def _maybe_log_snr_drop(self, snr: float | None) -> None:
+        if snr is None:
+            return
+        prev = self._last_snr_for_drop
+        self._last_snr_for_drop = snr
+        if prev is None or prev <= 0:
+            return
+        now = time.time()
+        if now - self._last_snr_drop_utc < SNR_DROP_MIN_INTERVAL_S:
+            return
+        if snr > prev * SNR_DROP_RATIO:
+            return
+        # Deutlicher Abfall (z. B. 72 → 31)
+        self._last_snr_drop_utc = now
+        self._emit_event(
+            "SNR_DROP",
+            "derived",
+            f"SNR {prev:.1f} → {snr:.1f}",
+            snr_from=prev,
+            snr_to=snr,
+        )
 
 
 _CLIENT: Phd2Client | None = None

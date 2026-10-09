@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from datetime import date, datetime, timezone
@@ -47,7 +48,7 @@ from mele.solar import (
     transit_to_dict,
 )
 from mele.prefs import load_prefs, prefs_path, save_prefs
-from mele.config import load_mele_settings, save_site
+from mele.config import load_mele_settings, mele_yaml_path, save_site, save_storage_paths
 from mele.capture_timing import append_capture_timing, read_capture_timing
 from mele.observe import gps_from_jpeg, list_location_jpegs, resolve_observer
 from mele.shadow_calibration import (
@@ -113,11 +114,26 @@ from mele.astro_manager import (
     object_summary,
     resolve_imaging_params,
     session_dir_slug,
+    path_under_root,
+    resolve_archive_session_dir,
     suggested_archive_session_dir,
     suggested_local_session_dir,
     update_session,
     update_session_paths,
     upsert_profile,
+)
+from mele.session_close import (
+    SessionCloseError,
+    close_imaging_session,
+    export_weather_for_session,
+)
+from mele.session_remove import RemoveError, remove_session_storage
+from mele.session_transfer import (
+    TransferError,
+    push_capture_to_archive,
+    push_capture_to_work,
+    push_work_to_archive,
+    storage_paths_payload,
 )
 from mele.preview_service import (
     PreviewError,
@@ -141,6 +157,12 @@ from mele.synscan import get_synscan_status, start_synscan
 from mele.nina_launch import get_nina_app_status, start_nina_app
 from mele.phd2_launch import get_phd2_app_status, start_phd2_app
 from mele.phd2 import Phd2Error, get_shared_phd2_client
+from mele.equipment_profiles import (
+    delete_equipment_profile,
+    load_equipment_profiles,
+    set_active_equipment_profile,
+    upsert_equipment_profile,
+)
 from mele.nina_mount_move import get_mount_mover
 from mele.weather_server_launch import (
     get_weather_server_app_status,
@@ -254,6 +276,7 @@ def run_app(port: int | None = None) -> None:
     observe_html = (Path(__file__).resolve().parent / "observe.html").read_text(encoding="utf-8")
     tools_html = (Path(__file__).resolve().parent / "tools.html").read_text(encoding="utf-8")
     guiding_html = (Path(__file__).resolve().parent / "guiding.html").read_text(encoding="utf-8")
+    prefs_html = (Path(__file__).resolve().parent / "prefs.html").read_text(encoding="utf-8")
     app.add_static_files("/mele-media", preview_dir)
     app.add_static_files("/mele-export", settings.horizon_dir)
     app.add_static_files("/mele-source", settings.media_dir)
@@ -267,6 +290,23 @@ def run_app(port: int | None = None) -> None:
     phd2.set_fullframe_min_interval(settings.phd2_fullframe_interval_s)
     mount_mover = get_mount_mover(settings.nina_base_url)
     ensure_manager_db(settings.astro_manager_db)
+    # S2 Idle-Guard: laufende MeLE-Captures (Multi-Frame), nicht nur NINA IsExposing
+    _capture_inflight_lock = threading.Lock()
+    _capture_inflight = {"n": 0}
+
+    def _capture_inflight_inc() -> int:
+        with _capture_inflight_lock:
+            _capture_inflight["n"] += 1
+            return int(_capture_inflight["n"])
+
+    def _capture_inflight_dec() -> int:
+        with _capture_inflight_lock:
+            _capture_inflight["n"] = max(0, int(_capture_inflight["n"]) - 1)
+            return int(_capture_inflight["n"])
+
+    def _capture_inflight_get() -> int:
+        with _capture_inflight_lock:
+            return int(_capture_inflight["n"])
 
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
@@ -427,8 +467,203 @@ def run_app(port: int | None = None) -> None:
 
     @app.delete("/astro/sessions/{session_id}")
     def astro_sessions_delete(session_id: int) -> JSONResponse:
+        """Legacy: nur DB-Zeile (Ordner bleiben). Prefer POST …/remove."""
         ok = delete_session(session_id, db_path=settings.astro_manager_db)
         return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+    @app.post("/astro/sessions/{session_id}/remove")
+    async def astro_sessions_remove(session_id: int, request: Request) -> JSONResponse:
+        """S6: CAPTURE/WORK/DB bereinigen — nie NAS/ARCHIVE."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        live = load_mele_settings()
+        try:
+            result = await run.io_bound(
+                lambda: remove_session_storage(
+                    session_id,
+                    delete_capture=bool(body.get("delete_capture")),
+                    delete_work=bool(body.get("delete_work")),
+                    delete_db=bool(body.get("delete_db")),
+                    force_capture=bool(body.get("force_capture")),
+                    db_path=live.astro_manager_db,
+                )
+            )
+        except RemoveError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        code = 200 if result.ok else 409
+        return JSONResponse(result.to_dict(), status_code=code)
+
+    @app.post("/astro/sessions/{session_id}/close")
+    def astro_sessions_close(session_id: int) -> JSONResponse:
+        """Session schliessen: Idle-Check → CLOSED → Wetterexport (best effort)."""
+        try:
+            result = close_imaging_session(
+                session_id,
+                nina_client=nina,
+                me_capture_inflight=_capture_inflight_get(),
+                weather_server_url=settings.local_weather_server_url,
+                poll_interval_s=settings.local_weather_poll_interval_s,
+                db_path=settings.astro_manager_db,
+            )
+        except SessionCloseError as exc:
+            payload: dict = {"ok": False, "error": str(exc)}
+            if exc.idle is not None:
+                payload["idle"] = exc.idle.to_dict()
+            return JSONResponse(payload, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        return JSONResponse({"ok": True, **result.to_dict()})
+
+    @app.post("/astro/sessions/{session_id}/weather/export")
+    def astro_sessions_weather_export(session_id: int) -> JSONResponse:
+        """Wetterzeitreihe erneut exportieren (nur CLOSED, ohne Lifecycle zu aendern)."""
+        try:
+            session, export = export_weather_for_session(
+                session_id,
+                weather_server_url=settings.local_weather_server_url,
+                poll_interval_s=settings.local_weather_poll_interval_s,
+                db_path=settings.astro_manager_db,
+                require_closed=True,
+            )
+        except SessionCloseError as exc:
+            code = 404 if "Unbekannte" in str(exc) else 409
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=code)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "ok": True,
+                "session": session.to_dict(),
+                "weather": export.to_dict(),
+            }
+        )
+
+    @app.get("/astro/storage/paths")
+    def astro_storage_paths() -> JSONResponse:
+        """CAPTURE / WORK / ARCHIVE Pfade aus mele.yaml (frisch geladen)."""
+        live = load_mele_settings()
+        return JSONResponse({"ok": True, **storage_paths_payload(live)})
+
+    @app.get("/astro/prefs/storage")
+    def astro_prefs_storage_get() -> JSONResponse:
+        live = load_mele_settings()
+        payload = storage_paths_payload(live)
+        payload["config_file"] = str(mele_yaml_path())
+        return JSONResponse({"ok": True, **payload})
+
+    @app.post("/astro/prefs/storage")
+    async def astro_prefs_storage_post(request: Request) -> JSONResponse:
+        """Storage-Pfade nach mele.yaml schreiben (keine Secrets)."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        try:
+            save_storage_paths(
+                local_capture_root=None if body.get("local_capture_root") is None else str(body.get("local_capture_root")),
+                archive_root=None if body.get("archive_root") is None else str(body.get("archive_root")),
+                work_transfer_root=None if body.get("work_transfer_root") is None else str(body.get("work_transfer_root")),
+                work_local_root=None if body.get("work_local_root") is None else str(body.get("work_local_root")),
+                siril_home_dirname=None if body.get("siril_home_dirname") is None else str(body.get("siril_home_dirname")),
+            )
+        except OSError as exc:
+            return JSONResponse({"ok": False, "error": f"Schreiben fehlgeschlagen: {exc}"}, status_code=500)
+        live = load_mele_settings()
+        payload = storage_paths_payload(live)
+        payload["config_file"] = str(mele_yaml_path())
+        return JSONResponse({"ok": True, **payload})
+
+    @app.post("/astro/sessions/{session_id}/push/work")
+    async def astro_sessions_push_work(session_id: int) -> JSONResponse:
+        """S3: CAPTURE → WORK (verifizierter Copy, Hintergrundthread)."""
+        live = load_mele_settings()
+        if not live.work_transfer_root:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        "work_transfer_root nicht gesetzt. "
+                        "Zahnrad → Preferences oder configs/mele.yaml."
+                    ),
+                    "storage": storage_paths_payload(live),
+                },
+                status_code=400,
+            )
+        try:
+            result = await run.io_bound(
+                lambda: push_capture_to_work(
+                    session_id,
+                    db_path=live.astro_manager_db,
+                )
+            )
+        except TransferError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        code = 200 if result.ok else 409
+        return JSONResponse(result.to_dict(), status_code=code)
+
+    @app.post("/astro/sessions/{session_id}/push/archive")
+    async def astro_sessions_push_archive(session_id: int) -> JSONResponse:
+        """S4: CAPTURE → ARCHIVE/NAS (verifizierter Copy; results/ geschützt)."""
+        live = load_mele_settings()
+        if not live.archive_root or not str(live.archive_root).strip():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "archive_root nicht gesetzt (Prefs / mele.yaml, UNC).",
+                    "storage": storage_paths_payload(live),
+                },
+                status_code=400,
+            )
+        try:
+            result = await run.io_bound(
+                lambda: push_capture_to_archive(
+                    session_id,
+                    db_path=live.astro_manager_db,
+                )
+            )
+        except TransferError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        code = 200 if result.ok else 409
+        return JSONResponse(result.to_dict(), status_code=code)
+
+    @app.post("/astro/sessions/{session_id}/push/work-archive")
+    async def astro_sessions_push_work_archive(session_id: int) -> JSONResponse:
+        """S5: WORK → ARCHIVE (Doppel-Hop; results/ ja, siril_home/ nie)."""
+        live = load_mele_settings()
+        if not live.archive_root or not str(live.archive_root).strip():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "archive_root nicht gesetzt (Prefs / mele.yaml, UNC).",
+                    "storage": storage_paths_payload(live),
+                },
+                status_code=400,
+            )
+        try:
+            result = await run.io_bound(
+                lambda: push_work_to_archive(
+                    session_id,
+                    db_path=live.astro_manager_db,
+                )
+            )
+        except TransferError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        code = 200 if result.ok else 409
+        return JSONResponse(result.to_dict(), status_code=code)
 
     @app.put("/astro/sessions/{session_id}")
     async def astro_sessions_put(session_id: int, request: Request) -> JSONResponse:
@@ -808,7 +1043,17 @@ def run_app(port: int | None = None) -> None:
         existing_local = (existing.local_path if existing else "") or ""
         existing_archive = (existing.archive_path if existing else "") or ""
         raw_local = body_local or existing_local or canonical_local
-        raw_archive = body_archive or existing_archive or canonical_archive
+        # Veraltete DB-Pfade unter altem Root (\\NAS\…) nicht wiederverwenden
+        if body_archive:
+            raw_archive = body_archive
+        elif existing and path_under_root(existing_archive, settings.archive_root):
+            raw_archive = existing_archive
+        else:
+            raw_archive = (
+                str(resolve_archive_session_dir(existing, archive_root=settings.archive_root))
+                if existing is not None
+                else canonical_archive
+            )
         session_local = str(ensure_session_subdir(raw_local, sid))
         session_archive = str(ensure_session_subdir(raw_archive, sid))
         capture_local = str(ensure_capture_dir(session_local, sid, frame_type=image_type))
@@ -871,219 +1116,224 @@ def run_app(port: int | None = None) -> None:
                 status_code=502,
             )
 
-        snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
-        target_for_nina = f"{target}_{session_dir_slug(sid)}"
-
-        # Vorherige Capture-Dateien merken (FITS und RAW/RW2)
-        files_before = {str(p) for p in find_capture_files(capture_local)}
-        t0 = time.monotonic()
-        t_expose_end: float | None = None
+        _capture_inflight_inc()
         try:
-            # onlyAwait: HTTP kehrt nach Ende IsExposing zurück.
-            # Bei Lumix-Native laeuft der RW2-Download danach noch — wir warten
-            # unten explizit auf die Datei, bevor das naechste Frame startet.
-            result = nina.capture(
-                duration_s=float(exposure_s),
-                gain=gain,
-                image_type=image_type,
-                save=True,
-                target_name=target_for_nina,
-                wait_for_result=False,
-                omit_image=True,
-                only_await_capture_completion=True,
-                skip_auto_stretch=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-        t_expose_end = time.monotonic()
+            snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
+            target_for_nina = f"{target}_{session_dir_slug(sid)}"
 
-        # Immer auf neue Datei warten (auch bei HTTP-ok): Lumix-Download > Belichtung
-        wait_s = min(180.0, max(25.0, float(exposure_s) + 120.0))
-        # Bei Timeout der HTTP-Antwort trotzdem auf Datei hoffen
-        if (not result.ok) and "timeout" not in (result.error or "").lower():
-            # Echter Kamera-/API-Fehler: kurzer Nachlauf, falls Datei trotzdem kommt
-            wait_s = min(40.0, wait_s)
-
-        new_capture = await run.io_bound(
-            lambda: wait_for_new_capture_file(
-                capture_local,
-                before=files_before,
-                timeout_s=wait_s,
-                min_size_bytes=1024,
-                stable_s=0.8,
-            )
-        )
-        t_file = time.monotonic()
-        expose_s = (t_expose_end - t0) if t_expose_end is not None else None
-        post_s = (t_file - t_expose_end) if t_expose_end is not None else None
-        total_s = t_file - t0
-
-        nina_dl_s = None
-        camera_state = None
-        try:
-            cam_after = nina.get_camera_info()
-            if cam_after.camera is not None:
-                nina_dl_s = cam_after.camera.last_download_time_s
-                camera_state = cam_after.camera.camera_state
-        except Exception:  # noqa: BLE001
-            pass
-
-        timing_payload: dict | None = None
-        try:
-            timing_payload = append_capture_timing(
-                session_local,
-                session_id=sid,
-                image_type=image_type,
-                exposure_planned_s=float(exposure_s),
-                expose_s=expose_s,
-                post_s=post_s,
-                total_s=total_s,
-                file_name=new_capture.name if new_capture else None,
-                file_path=str(new_capture) if new_capture else None,
-                nina_last_download_s=nina_dl_s,
-                camera_state=camera_state,
-                ok=bool(new_capture is not None),
-                note=("" if new_capture else "no_file"),
-            )
-        except Exception:  # noqa: BLE001
-            timing_payload = None
-
-        if new_capture is not None:
-            result = NinaCommandResult(
-                ok=True,
-                api_online=True,
-                message=(
-                    result.message
-                    or f"Capture ok ({new_capture.name})"
-                ),
-                error="",
-                status_code=200,
-                request=result.request,
-            )
-        elif result.ok:
-            # Belichtung ok, aber keine Datei — naechstes Frame wuerde Downloads stoeren
-            result = NinaCommandResult(
-                ok=False,
-                api_online=True,
-                message="",
-                error=(
-                    "Belichtung ok, aber keine neue Datei (FITS/RW2) im Zielordner. "
-                    "Bei Lumix-Native: Download dauert oft länger — "
-                    f"Timeout {wait_s:.0f}s, Pfad {capture_local}"
-                ),
-                status_code=504,
-                request=result.request,
-            )
-
-        if result.ok:
+            # Vorherige Capture-Dateien merken (FITS und RAW/RW2)
+            files_before = {str(p) for p in find_capture_files(capture_local)}
+            t0 = time.monotonic()
+            t_expose_end: float | None = None
             try:
-                if existing is not None:
-                    note = str(existing.notes or "")
-                    if image_type == FRAME_TYPE_LIGHT:
-                        n = int(existing.lights_completed or existing.frames_completed or 0) + 1
-                        if "Wiederholung" not in note:
-                            note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
-                    session = bump_session_capture(
-                        sid,
-                        frames_delta=1,
-                        frame_type=image_type,
-                        db_path=settings.astro_manager_db,
-                    )
-                    session = update_session_paths(
-                        sid,
-                        local_path=session_local,
-                        archive_path=session_archive,
-                        notes=note,
-                        db_path=settings.astro_manager_db,
-                    )
-                else:
-                    session = bump_session_capture(
-                        sid,
-                        frames_delta=1,
-                        frame_type=image_type,
-                        db_path=settings.astro_manager_db,
-                    )
+                # onlyAwait: HTTP kehrt nach Ende IsExposing zurück.
+                # Bei Lumix-Native laeuft der RW2-Download danach noch — wir warten
+                # unten explizit auf die Datei, bevor das naechste Frame startet.
+                result = nina.capture(
+                    duration_s=float(exposure_s),
+                    gain=gain,
+                    image_type=image_type,
+                    save=True,
+                    target_name=target_for_nina,
+                    wait_for_result=False,
+                    omit_image=True,
+                    only_await_capture_completion=True,
+                    skip_auto_stretch=True,
+                )
             except Exception as exc:  # noqa: BLE001
-                return JSONResponse(
-                    {
-                        "ok": True,
-                        "capture": result.to_dict(),
-                        "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
-                        "warning": f"Capture ok, Session-Update fehlgeschlagen: {exc}",
-                        "camera": cam.camera.to_dict(),
-                        "local_path": session_local,
-                        "capture_path": capture_local,
-                        "capture_file": str(new_capture) if new_capture else None,
-                        "image_type": image_type,
-                    }
+                return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+            t_expose_end = time.monotonic()
+
+            # Immer auf neue Datei warten (auch bei HTTP-ok): Lumix-Download > Belichtung
+            wait_s = min(180.0, max(25.0, float(exposure_s) + 120.0))
+            # Bei Timeout der HTTP-Antwort trotzdem auf Datei hoffen
+            if (not result.ok) and "timeout" not in (result.error or "").lower():
+                # Echter Kamera-/API-Fehler: kurzer Nachlauf, falls Datei trotzdem kommt
+                wait_s = min(40.0, wait_s)
+
+            new_capture = await run.io_bound(
+                lambda: wait_for_new_capture_file(
+                    capture_local,
+                    before=files_before,
+                    timeout_s=wait_s,
+                    min_size_bytes=1024,
+                    stable_s=0.8,
+                )
+            )
+            t_file = time.monotonic()
+            expose_s = (t_expose_end - t0) if t_expose_end is not None else None
+            post_s = (t_file - t_expose_end) if t_expose_end is not None else None
+            total_s = t_file - t0
+
+            nina_dl_s = None
+            camera_state = None
+            try:
+                cam_after = nina.get_camera_info()
+                if cam_after.camera is not None:
+                    nina_dl_s = cam_after.camera.last_download_time_s
+                    camera_state = cam_after.camera.camera_state
+            except Exception:  # noqa: BLE001
+                pass
+
+            timing_payload: dict | None = None
+            try:
+                timing_payload = append_capture_timing(
+                    session_local,
+                    session_id=sid,
+                    image_type=image_type,
+                    exposure_planned_s=float(exposure_s),
+                    expose_s=expose_s,
+                    post_s=post_s,
+                    total_s=total_s,
+                    file_name=new_capture.name if new_capture else None,
+                    file_path=str(new_capture) if new_capture else None,
+                    nina_last_download_s=nina_dl_s,
+                    camera_state=camera_state,
+                    ok=bool(new_capture is not None),
+                    note=("" if new_capture else "no_file"),
+                )
+            except Exception:  # noqa: BLE001
+                timing_payload = None
+
+            if new_capture is not None:
+                result = NinaCommandResult(
+                    ok=True,
+                    api_online=True,
+                    message=(
+                        result.message
+                        or f"Capture ok ({new_capture.name})"
+                    ),
+                    error="",
+                    status_code=200,
+                    request=result.request,
+                )
+            elif result.ok:
+                # Belichtung ok, aber keine Datei — naechstes Frame wuerde Downloads stoeren
+                result = NinaCommandResult(
+                    ok=False,
+                    api_online=True,
+                    message="",
+                    error=(
+                        "Belichtung ok, aber keine neue Datei (FITS/RW2) im Zielordner. "
+                        "Bei Lumix-Native: Download dauert oft länger — "
+                        f"Timeout {wait_s:.0f}s, Pfad {capture_local}"
+                    ),
+                    status_code=504,
+                    request=result.request,
                 )
 
-        preview_payload: dict | None = None
-        preview_error: str | None = None
-        if result.ok and make_preview:
-            try:
-                from mele.preview_service import generate_preview
-
-                def _preview_from_capture():
-                    src = new_capture
-                    if src is None or not Path(src).is_file():
-                        raise PreviewError("Keine Capture-Datei für Preview")
-                    return generate_preview(
-                        src,
-                        session_dir=session_local,
-                        force=True,
+            if result.ok:
+                try:
+                    if existing is not None:
+                        note = str(existing.notes or "")
+                        if image_type == FRAME_TYPE_LIGHT:
+                            n = int(existing.lights_completed or existing.frames_completed or 0) + 1
+                            if "Wiederholung" not in note:
+                                note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
+                        session = bump_session_capture(
+                            sid,
+                            frames_delta=1,
+                            frame_type=image_type,
+                            db_path=settings.astro_manager_db,
+                        )
+                        session = update_session_paths(
+                            sid,
+                            local_path=session_local,
+                            archive_path=session_archive,
+                            notes=note,
+                            db_path=settings.astro_manager_db,
+                        )
+                    else:
+                        session = bump_session_capture(
+                            sid,
+                            frames_delta=1,
+                            frame_type=image_type,
+                            db_path=settings.astro_manager_db,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    return JSONResponse(
+                        {
+                            "ok": True,
+                            "capture": result.to_dict(),
+                            "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
+                            "warning": f"Capture ok, Session-Update fehlgeschlagen: {exc}",
+                            "camera": cam.camera.to_dict(),
+                            "local_path": session_local,
+                            "capture_path": capture_local,
+                            "capture_file": str(new_capture) if new_capture else None,
+                            "image_type": image_type,
+                        }
                     )
 
-                prev = await run.io_bound(_preview_from_capture)
-                preview_payload = _session_preview_payload(sid, prev)
-            except PreviewError as exc:
-                preview_error = str(exc)
-            except Exception as exc:  # noqa: BLE001
-                preview_error = f"Preview fehlgeschlagen: {exc}"
+            preview_payload: dict | None = None
+            preview_error: str | None = None
+            if result.ok and make_preview:
+                try:
+                    from mele.preview_service import generate_preview
 
-        status = 200 if result.ok else 502
-        return JSONResponse(
-            {
-                "ok": result.ok,
-                "capture": result.to_dict(),
-                "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
-                "camera": cam.camera.to_dict(),
-                "image_file_path": capture_local,
-                "local_path": session_local,
-                "capture_path": capture_local,
-                "capture_file": str(new_capture) if new_capture else None,
-                "archive_capture_path": capture_archive,
-                "image_type": image_type,
-                "session_folder": session_dir_slug(sid),
-                "resolved_params": params,
-                "destination": {k: v.to_dict() for k, v in dest.items()},
-                "snap_sync": {k: v.to_dict() for k, v in snap_sync.items()},
-                "reused_session": existing is not None,
-                "make_preview": make_preview,
-                "preview": preview_payload,
-                "preview_error": preview_error,
-                "timing": None if timing_payload is None else {
-                    "expose_s": expose_s,
-                    "post_s": post_s,
-                    "total_s": total_s,
-                    "summary": timing_payload.get("summary"),
-                    "path": str(Path(session_local) / "capture-timing.json"),
+                    def _preview_from_capture():
+                        src = new_capture
+                        if src is None or not Path(src).is_file():
+                            raise PreviewError("Keine Capture-Datei für Preview")
+                        return generate_preview(
+                            src,
+                            session_dir=session_local,
+                            force=True,
+                        )
+
+                    prev = await run.io_bound(_preview_from_capture)
+                    preview_payload = _session_preview_payload(sid, prev)
+                except PreviewError as exc:
+                    preview_error = str(exc)
+                except Exception as exc:  # noqa: BLE001
+                    preview_error = f"Preview fehlgeschlagen: {exc}"
+
+            status = 200 if result.ok else 502
+            return JSONResponse(
+                {
+                    "ok": result.ok,
+                    "capture": result.to_dict(),
+                    "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
+                    "camera": cam.camera.to_dict(),
+                    "image_file_path": capture_local,
+                    "local_path": session_local,
+                    "capture_path": capture_local,
+                    "capture_file": str(new_capture) if new_capture else None,
+                    "archive_capture_path": capture_archive,
+                    "image_type": image_type,
+                    "session_folder": session_dir_slug(sid),
+                    "resolved_params": params,
+                    "destination": {k: v.to_dict() for k, v in dest.items()},
+                    "snap_sync": {k: v.to_dict() for k, v in snap_sync.items()},
+                    "reused_session": existing is not None,
+                    "make_preview": make_preview,
+                    "preview": preview_payload,
+                    "preview_error": preview_error,
+                    "timing": None if timing_payload is None else {
+                        "expose_s": expose_s,
+                        "post_s": post_s,
+                        "total_s": total_s,
+                        "summary": timing_payload.get("summary"),
+                        "path": str(Path(session_local) / "capture-timing.json"),
+                    },
+                    "error": result.error,
+                    "note": (
+                        f"NINA speichert unter {capture_local}; "
+                        f"Session-Root …/{session_dir_slug(sid)}/; "
+                        f"Typ {image_type}; "
+                        + (
+                            f"Datei {new_capture.name}; "
+                            if new_capture
+                            else "keine neue Datei; "
+                        )
+                        + "naechstes Frame erst nach stabilem Download."
+                    ),
                 },
-                "error": result.error,
-                "note": (
-                    f"NINA speichert unter {capture_local}; "
-                    f"Session-Root …/{session_dir_slug(sid)}/; "
-                    f"Typ {image_type}; "
-                    + (
-                        f"Datei {new_capture.name}; "
-                        if new_capture
-                        else "keine neue Datei; "
-                    )
-                    + "naechstes Frame erst nach stabilem Download."
-                ),
-            },
-            status_code=status,
-        )
+                status_code=status,
+            )
+
+        finally:
+            _capture_inflight_dec()
 
     @app.get("/nina/mount")
     def nina_mount() -> JSONResponse:
@@ -1241,6 +1491,63 @@ def run_app(port: int | None = None) -> None:
     @app.get("/phd2/telemetry")
     def phd2_telemetry(limit: int = Query(120)) -> JSONResponse:
         return JSONResponse({"ok": True, **phd2.telemetry(limit=limit)})
+
+    @app.get("/phd2/events")
+    def phd2_events(limit: int = Query(80)) -> JSONResponse:
+        """Edge-triggered Guiding-Event-Log (kein Polling-Spam)."""
+        return JSONResponse({"ok": True, **phd2.events(limit=limit)})
+
+    @app.get("/phd2/equipment-profiles")
+    def phd2_equipment_profiles_list() -> JSONResponse:
+        data = load_equipment_profiles(settings.horizon_dir)
+        phd2_profiles: list[dict] = []
+        try:
+            phd2_profiles = phd2.get_profiles()
+        except Phd2Error:
+            phd2_profiles = []
+        return JSONResponse({"ok": True, **data, "phd2_profiles": phd2_profiles})
+
+    @app.post("/phd2/equipment-profiles")
+    async def phd2_equipment_profiles_upsert(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        result = upsert_equipment_profile(settings.horizon_dir, body)
+        status = 200 if result.get("ok") else 400
+        return JSONResponse(result, status_code=status)
+
+    @app.delete("/phd2/equipment-profiles/{profile_id}")
+    def phd2_equipment_profiles_delete(profile_id: str) -> JSONResponse:
+        result = delete_equipment_profile(settings.horizon_dir, profile_id)
+        return JSONResponse(result)
+
+    @app.post("/phd2/equipment-profiles/{profile_id}/activate")
+    def phd2_equipment_profiles_activate(profile_id: str) -> JSONResponse:
+        """Aktiv in MeLE setzen; PHD2 set_profile nur wenn Equipment disconnected."""
+        result = set_active_equipment_profile(settings.horizon_dir, profile_id)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=404)
+        active = result.get("active") or {}
+        phd2_result: dict = {
+            "applied": False,
+            "reason": "no_phd2_profile_id",
+            "message": "MeLE-Zuordnung gespeichert (kein phd2_profile_id)",
+        }
+        phd2_id = active.get("phd2_profile_id")
+        if phd2_id is not None:
+            try:
+                phd2_result = phd2.try_set_profile(int(phd2_id))
+            except Exception as exc:  # noqa: BLE001
+                phd2_result = {
+                    "ok": False,
+                    "applied": False,
+                    "error": str(exc),
+                    "reason": "exception",
+                }
+        return JSONResponse({**result, "phd2": phd2_result})
 
     @app.post("/phd2/fullframe-interval")
     async def phd2_fullframe_interval(request: Request) -> JSONResponse:
@@ -1482,6 +1789,11 @@ def run_app(port: int | None = None) -> None:
     @app.get("/help-view")
     def help_view() -> HTMLResponse:
         return HTMLResponse(help_html)
+
+    @app.get("/prefs-view")
+    def prefs_view() -> HTMLResponse:
+        """Zahnrad-Preferences: Storage-Pfade → mele.yaml."""
+        return HTMLResponse(prefs_html)
 
     @app.get("/wiki-view")
     def wiki_view() -> HTMLResponse:
@@ -3344,6 +3656,9 @@ def run_app(port: int | None = None) -> None:
         def on_open_help() -> None:
             ui.run_javascript("window.open('/help-view', '_blank')")
 
+        def on_open_prefs() -> None:
+            ui.run_javascript("window.open('/prefs-view', '_blank')")
+
         def on_open_wiki() -> None:
             ui.run_javascript("window.open('/wiki-view', '_blank')")
 
@@ -3704,6 +4019,7 @@ def run_app(port: int | None = None) -> None:
             on_open_pano=on_open_pano,
             on_open_weather=on_open_weather,
             on_open_help=on_open_help,
+            on_open_prefs=on_open_prefs,
             on_open_wiki=on_open_wiki,
             on_open_observe=on_open_observe,
             on_open_tools=on_open_tools,

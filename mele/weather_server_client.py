@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -32,14 +33,24 @@ def fetch_history(
     base_url: str,
     *,
     limit: int = 120,
+    since: str | None = None,
     timeout_s: float = 8.0,
 ) -> list[dict[str, Any]]:
-    """GET {base}/api/history → Sample-Liste (neueste zuerst)."""
+    """GET {base}/api/history → Sample-Liste (neueste zuerst).
+
+    ``since``: optionales ISO-UTC; Server filtert ``recorded_at >= since``.
+    Hinweis: max. 5000 Treffer — wiederholtes since paginiert aeltere Daten
+    nicht zuverlaessig (siehe Session-Storage Spec S0.3 / S2).
+    """
     root = (base_url or "").strip().rstrip("/")
     if not root:
         raise WeatherServerError("weather_server URL fehlt")
     lim = max(1, min(int(limit), 5000))
-    url = f"{root}/api/history?limit={lim}"
+    params: dict[str, str] = {"limit": str(lim)}
+    since_s = str(since or "").strip()
+    if since_s:
+        params["since"] = since_s
+    url = f"{root}/api/history?{urlencode(params)}"
     data = _get_json(url, timeout_s=timeout_s)
     samples = data.get("samples")
     if not isinstance(samples, list):

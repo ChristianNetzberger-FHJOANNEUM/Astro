@@ -6,22 +6,43 @@ weil `python -m mele.catalog import` sky.sqlite neu aufbaut und loescht.
 
 Verknuepfung: catalog_key Soft-Link zur Objekt-Identitaet
 (z.B. \"M31\", \"NGC224\", \"HIP21421\", \"planet:Jupiter\") — kein FK auf sky.sqlite.
-Speicherpfade: local_path / archive_path / archive_status vorbereitet,
-aber noch ohne NAS-Copy (spaetere Phase).
+Speicherpfade: local_path / archive_path / archive_status vorbereitet.
+S1 (Session Storage): Lifecycle, WORK-Pfade, Transfer-Jobs, Manifest-Revision —
+noch ohne produktive Copy/Delete/Archiv-Aktionen (S3–S6).
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from mele.config import REPO_ROOT, load_mele_settings
+from mele.session_storage import (
+    ARCHIVE_COMPLETENESS,
+    ARCHIVE_COMPLETENESS_NONE,
+    JOB_COMPLETENESS,
+    JOB_COMPLETENESS_PARTIAL,
+    LIFECYCLE_CAPTURING,
+    LIFECYCLE_CLOSED,
+    LIFECYCLE_OPEN,
+    LIFECYCLE_STATUSES,
+    TRANSFER_KINDS,
+    TRANSFER_QUEUED,
+    TRANSFER_STATUSES,
+    WEATHER_EXPORT_NONE,
+    WEATHER_EXPORT_STATUSES,
+    assert_lifecycle_transition,
+    normalize_archive_completeness,
+    normalize_lifecycle,
+    normalize_weather_export_status,
+)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MANAGER_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -72,6 +93,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     notes TEXT NOT NULL DEFAULT '',
     created_utc TEXT NOT NULL,
     updated_utc TEXT NOT NULL,
+    lifecycle_status TEXT NOT NULL DEFAULT 'open',
+    session_start_utc TEXT NOT NULL DEFAULT '',
+    session_end_utc TEXT,
+    work_transfer_path TEXT NOT NULL DEFAULT '',
+    work_local_path TEXT NOT NULL DEFAULT '',
+    archive_completeness TEXT NOT NULL DEFAULT 'none',
+    manifest_revision INTEGER NOT NULL DEFAULT 0,
+    weather_export_status TEXT NOT NULL DEFAULT 'none',
+    object_id TEXT NOT NULL DEFAULT '',
+    equipment_profile_id TEXT NOT NULL DEFAULT '',
     FOREIGN KEY(profile_id) REFERENCES imaging_profiles(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_key ON sessions(catalog_key);
@@ -93,6 +124,30 @@ CREATE TABLE IF NOT EXISTS images (
 );
 CREATE INDEX IF NOT EXISTS idx_images_session ON images(session_id);
 CREATE INDEX IF NOT EXISTS idx_images_key ON images(catalog_key);
+
+CREATE TABLE IF NOT EXISTS transfer_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL UNIQUE,
+    session_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    source_root TEXT NOT NULL DEFAULT '',
+    dest_root TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    completeness TEXT NOT NULL DEFAULT 'partial',
+    manifest_revision INTEGER NOT NULL DEFAULT 0,
+    progress_files INTEGER NOT NULL DEFAULT 0,
+    progress_bytes INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    manifest_path TEXT NOT NULL DEFAULT '',
+    log_path TEXT NOT NULL DEFAULT '',
+    started_utc TEXT,
+    finished_utc TEXT,
+    created_utc TEXT NOT NULL,
+    updated_utc TEXT NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_transfer_jobs_session ON transfer_jobs(session_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_jobs_status ON transfer_jobs(status);
 """
 
 ARCHIVE_STATUSES = frozenset({"local", "pending", "archived", "missing"})
@@ -148,6 +203,42 @@ class ImagingSession:
     notes: str = ""
     created_utc: str = ""
     updated_utc: str = ""
+    # S1 Session Storage
+    lifecycle_status: str = LIFECYCLE_OPEN
+    session_start_utc: str = ""
+    session_end_utc: str | None = None
+    work_transfer_path: str = ""
+    work_local_path: str = ""
+    archive_completeness: str = ARCHIVE_COMPLETENESS_NONE
+    manifest_revision: int = 0
+    weather_export_status: str = WEATHER_EXPORT_NONE
+    object_id: str = ""
+    equipment_profile_id: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class TransferJob:
+    id: int
+    job_id: str
+    session_id: int
+    kind: str
+    source_root: str = ""
+    dest_root: str = ""
+    status: str = TRANSFER_QUEUED
+    completeness: str = JOB_COMPLETENESS_PARTIAL
+    manifest_revision: int = 0
+    progress_files: int = 0
+    progress_bytes: int = 0
+    error: str = ""
+    manifest_path: str = ""
+    log_path: str = ""
+    started_utc: str | None = None
+    finished_utc: str | None = None
+    created_utc: str = ""
+    updated_utc: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -187,6 +278,7 @@ def ensure_manager_db(db_path: Path | None = None) -> Path:
             )
         _migrate_sessions_snapshot_columns(conn)
         _migrate_sessions_light_dark_columns(conn)
+        _migrate_sessions_storage_v3(conn)
         conn.commit()
     return path
 
@@ -244,6 +336,101 @@ def _migrate_sessions_light_dark_columns(conn: sqlite3.Connection) -> None:
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
+
+
+def _migrate_sessions_storage_v3(conn: sqlite3.Connection) -> None:
+    """S1: Lifecycle, WORK-Pfade, Archiv-Vollstaendigkeit, Transfer-Jobs."""
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    alterations = [
+        ("lifecycle_status", "ALTER TABLE sessions ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'open'"),
+        ("session_start_utc", "ALTER TABLE sessions ADD COLUMN session_start_utc TEXT NOT NULL DEFAULT ''"),
+        ("session_end_utc", "ALTER TABLE sessions ADD COLUMN session_end_utc TEXT"),
+        ("work_transfer_path", "ALTER TABLE sessions ADD COLUMN work_transfer_path TEXT NOT NULL DEFAULT ''"),
+        ("work_local_path", "ALTER TABLE sessions ADD COLUMN work_local_path TEXT NOT NULL DEFAULT ''"),
+        ("archive_completeness", "ALTER TABLE sessions ADD COLUMN archive_completeness TEXT NOT NULL DEFAULT 'none'"),
+        ("manifest_revision", "ALTER TABLE sessions ADD COLUMN manifest_revision INTEGER NOT NULL DEFAULT 0"),
+        ("weather_export_status", "ALTER TABLE sessions ADD COLUMN weather_export_status TEXT NOT NULL DEFAULT 'none'"),
+        ("object_id", "ALTER TABLE sessions ADD COLUMN object_id TEXT NOT NULL DEFAULT ''"),
+        ("equipment_profile_id", "ALTER TABLE sessions ADD COLUMN equipment_profile_id TEXT NOT NULL DEFAULT ''"),
+    ]
+    for name, sql in alterations:
+        if name not in cols:
+            conn.execute(sql)
+
+    # transfer_jobs via MANAGER_SCHEMA CREATE IF NOT EXISTS
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS transfer_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL UNIQUE,
+            session_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            source_root TEXT NOT NULL DEFAULT '',
+            dest_root TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'queued',
+            completeness TEXT NOT NULL DEFAULT 'partial',
+            manifest_revision INTEGER NOT NULL DEFAULT 0,
+            progress_files INTEGER NOT NULL DEFAULT 0,
+            progress_bytes INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            manifest_path TEXT NOT NULL DEFAULT '',
+            log_path TEXT NOT NULL DEFAULT '',
+            started_utc TEXT,
+            finished_utc TEXT,
+            created_utc TEXT NOT NULL,
+            updated_utc TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_transfer_jobs_session ON transfer_jobs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_transfer_jobs_status ON transfer_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_sessions_lifecycle ON sessions(lifecycle_status);
+        """
+    )
+
+    backfill = conn.execute(
+        "SELECT value FROM meta WHERE key='storage_v3_backfill'"
+    ).fetchone()
+    if backfill is None:
+        # sqlite3.Row ohne row_factory: Tupel-Indizes — explizit benannte SELECT-Aliase
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, catalog_key, started_utc, ended_utc,
+                   frames_completed, lights_completed
+            FROM sessions
+            """
+        ).fetchall()
+        for row in rows:
+            ended = row["ended_utc"]
+            lights_c = int(row["lights_completed"] or 0) if row["lights_completed"] is not None else int(
+                row["frames_completed"] or 0
+            )
+            if ended:
+                life = LIFECYCLE_CLOSED
+            elif lights_c > 0:
+                life = LIFECYCLE_CAPTURING
+            else:
+                life = LIFECYCLE_OPEN
+            start = str(row["started_utc"] or "")
+            end = str(ended) if ended else None
+            conn.execute(
+                """
+                UPDATE sessions SET
+                  lifecycle_status=?,
+                  session_start_utc=CASE WHEN COALESCE(session_start_utc,'')='' THEN ? ELSE session_start_utc END,
+                  session_end_utc=COALESCE(session_end_utc, ?),
+                  object_id=CASE WHEN COALESCE(object_id,'')='' THEN catalog_key ELSE object_id END
+                WHERE id=?
+                """,
+                (life, start, end, int(row["id"])),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('storage_v3_backfill', '1')"
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -325,6 +512,46 @@ def _session_from_row(row: sqlite3.Row) -> ImagingSession:
         notes=str(row["notes"] or ""),
         created_utc=str(row["created_utc"] or ""),
         updated_utc=str(row["updated_utc"] or ""),
+        lifecycle_status=normalize_lifecycle(
+            str(row["lifecycle_status"]) if "lifecycle_status" in keys and row["lifecycle_status"] else LIFECYCLE_OPEN
+        ),
+        session_start_utc=str(
+            row["session_start_utc"]
+            if "session_start_utc" in keys and row["session_start_utc"]
+            else (row["started_utc"] or "")
+        ),
+        session_end_utc=(
+            None
+            if "session_end_utc" not in keys or row["session_end_utc"] is None
+            else str(row["session_end_utc"])
+        ),
+        work_transfer_path=str(
+            row["work_transfer_path"] if "work_transfer_path" in keys and row["work_transfer_path"] else ""
+        ),
+        work_local_path=str(
+            row["work_local_path"] if "work_local_path" in keys and row["work_local_path"] else ""
+        ),
+        archive_completeness=normalize_archive_completeness(
+            str(row["archive_completeness"])
+            if "archive_completeness" in keys and row["archive_completeness"]
+            else ARCHIVE_COMPLETENESS_NONE
+        ),
+        manifest_revision=int(row["manifest_revision"] or 0) if "manifest_revision" in keys else 0,
+        weather_export_status=normalize_weather_export_status(
+            str(row["weather_export_status"])
+            if "weather_export_status" in keys and row["weather_export_status"]
+            else WEATHER_EXPORT_NONE
+        ),
+        object_id=str(
+            row["object_id"]
+            if "object_id" in keys and row["object_id"]
+            else row["catalog_key"]
+        ),
+        equipment_profile_id=str(
+            row["equipment_profile_id"]
+            if "equipment_profile_id" in keys and row["equipment_profile_id"]
+            else ""
+        ),
     )
 
 
@@ -531,6 +758,7 @@ def create_session(
             ).fetchone()
             if exists is None:
                 raise ValueError(f"Unbekanntes Profil: {profile_id}")
+        life = LIFECYCLE_CAPTURING if lights_c > 0 else LIFECYCLE_OPEN
         cur = conn.execute(
             """
             INSERT INTO sessions (
@@ -539,8 +767,11 @@ def create_session(
               lights_planned, lights_completed, darks_planned, darks_completed,
               exposure_s, gain, iso, offset_adu, binning,
               filter_name, equipment, integration_s, local_path, archive_path,
-              archive_status, notes, created_utc, updated_utc
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              archive_status, notes, created_utc, updated_utc,
+              lifecycle_status, session_start_utc, session_end_utc,
+              work_transfer_path, work_local_path, archive_completeness,
+              manifest_revision, weather_export_status, object_id, equipment_profile_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 key,
@@ -567,6 +798,16 @@ def create_session(
                 str(notes or ""),
                 now,
                 now,
+                life,
+                started,
+                None,
+                "",
+                "",
+                ARCHIVE_COMPLETENESS_NONE,
+                0,
+                WEATHER_EXPORT_NONE,
+                key,
+                "",
             ),
         )
         sid = int(cur.lastrowid)
@@ -752,13 +993,20 @@ def bump_session_capture(
 
         exposure = None if row["exposure_s"] is None else float(row["exposure_s"])
         integration = None if exposure is None else exposure * lights_c
+        life = (
+            str(row["lifecycle_status"])
+            if "lifecycle_status" in keys and row["lifecycle_status"]
+            else LIFECYCLE_OPEN
+        )
+        if normalize_lifecycle(life) == LIFECYCLE_OPEN:
+            life = LIFECYCLE_CAPTURING
         conn.execute(
             """
             UPDATE sessions SET
               frames_completed=?, frames_planned=?,
               lights_completed=?, lights_planned=?,
               darks_completed=?, darks_planned=?,
-              integration_s=?, updated_utc=?
+              integration_s=?, lifecycle_status=?, updated_utc=?
             WHERE id=?
             """,
             (
@@ -769,6 +1017,7 @@ def bump_session_capture(
                 darks_c,
                 darks_p,
                 integration,
+                normalize_lifecycle(life),
                 now,
                 int(session_id),
             ),
@@ -971,6 +1220,56 @@ def suggested_archive_session_dir(
     return path
 
 
+def _norm_fs_path(path: Path | str) -> str:
+    """Vergleichbare UNC/Pfad-Form (ohne trailing separator)."""
+    text = str(path or "").replace("/", "\\").strip()
+    while text.endswith("\\") and text not in ("\\", "\\\\"):
+        text = text[:-1]
+    return text.lower()
+
+
+def path_under_root(path: Path | str, root: Path | str) -> bool:
+    """True wenn path gleich root oder darunter liegt (UNC-tauglich)."""
+    a = _norm_fs_path(path)
+    b = _norm_fs_path(root)
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b + "\\")
+
+
+def resolve_archive_session_dir(
+    session: ImagingSession,
+    *,
+    archive_root: Path | None = None,
+    when: datetime | None = None,
+    display_name: str | None = None,
+) -> Path:
+    """Kanonischer ARCHIVE-Pfad unter aktuellem archive_root.
+
+    Alte DB-Werte unter veraltetem Root (z.B. \\\\NAS\\\\…) werden ignoriert.
+    """
+    settings = load_mele_settings()
+    root = Path(archive_root if archive_root is not None else settings.archive_root)
+    stamp = when
+    if stamp is None:
+        try:
+            if session.started_utc:
+                stamp = datetime.fromisoformat(str(session.started_utc).replace("Z", "+00:00"))
+        except ValueError:
+            stamp = None
+    canonical = suggested_archive_session_dir(
+        session.catalog_key,
+        when=stamp,
+        archive_root=root,
+        display_name=display_name,
+        session_id=session.id,
+    )
+    existing = str(getattr(session, "archive_path", "") or "").strip()
+    if existing and path_under_root(existing, root):
+        return ensure_session_subdir(existing, session.id)
+    return canonical
+
+
 def update_session_paths(
     session_id: int,
     *,
@@ -996,3 +1295,288 @@ def update_session_paths(
         updated = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
     assert updated is not None
     return _session_from_row(updated)
+
+
+def set_session_lifecycle(
+    session_id: int,
+    target: str,
+    *,
+    session_end_utc: str | None = None,
+    db_path: Path | None = None,
+) -> ImagingSession:
+    """Lifecycle setzen (S1). NINA-Idle-Check gehoert zur spaeteren Close-UI — hier nur State-Machine."""
+    tgt = normalize_lifecycle(target)
+    if tgt not in LIFECYCLE_STATUSES:
+        raise ValueError(f"Ungueltiger lifecycle_status: {target}")
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+        if row is None:
+            raise ValueError(f"Unbekannte Session: {session_id}")
+        keys = set(row.keys())
+        current = normalize_lifecycle(
+            str(row["lifecycle_status"]) if "lifecycle_status" in keys and row["lifecycle_status"] else LIFECYCLE_OPEN
+        )
+        assert_lifecycle_transition(current, tgt)
+        end_val = row["session_end_utc"] if "session_end_utc" in keys else None
+        if tgt == LIFECYCLE_CLOSED:
+            end_val = session_end_utc or end_val or row["ended_utc"] or now
+            conn.execute(
+                """
+                UPDATE sessions SET
+                  lifecycle_status=?, session_end_utc=?, ended_utc=COALESCE(ended_utc, ?),
+                  updated_utc=?
+                WHERE id=?
+                """,
+                (tgt, end_val, end_val, now, int(session_id)),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE sessions SET lifecycle_status=?, updated_utc=?
+                WHERE id=?
+                """,
+                (tgt, now, int(session_id)),
+            )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+    assert updated is not None
+    return _session_from_row(updated)
+
+
+def update_session_storage_fields(
+    session_id: int,
+    *,
+    work_transfer_path: str | None = None,
+    work_local_path: str | None = None,
+    archive_completeness: str | None = None,
+    manifest_revision: int | None = None,
+    weather_export_status: str | None = None,
+    object_id: str | None = None,
+    equipment_profile_id: str | None = None,
+    db_path: Path | None = None,
+) -> ImagingSession:
+    """S1-Metadaten ohne Copy/Delete. None = Feld unveraendert."""
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+        if row is None:
+            raise ValueError(f"Unbekannte Session: {session_id}")
+        keys = set(row.keys())
+
+        def _keep(name: str, default: str = "") -> str:
+            return str(row[name] if name in keys and row[name] is not None else default)
+
+        w_xfer = _keep("work_transfer_path") if work_transfer_path is None else str(work_transfer_path)
+        w_local = _keep("work_local_path") if work_local_path is None else str(work_local_path)
+        a_comp = (
+            normalize_archive_completeness(_keep("archive_completeness", ARCHIVE_COMPLETENESS_NONE))
+            if archive_completeness is None
+            else normalize_archive_completeness(archive_completeness)
+        )
+        if a_comp not in ARCHIVE_COMPLETENESS:
+            a_comp = ARCHIVE_COMPLETENESS_NONE
+        rev = (
+            int(row["manifest_revision"] or 0)
+            if manifest_revision is None and "manifest_revision" in keys
+            else (0 if manifest_revision is None else max(0, int(manifest_revision)))
+        )
+        w_exp = (
+            normalize_weather_export_status(_keep("weather_export_status", WEATHER_EXPORT_NONE))
+            if weather_export_status is None
+            else normalize_weather_export_status(weather_export_status)
+        )
+        if w_exp not in WEATHER_EXPORT_STATUSES:
+            w_exp = WEATHER_EXPORT_NONE
+        obj = _keep("object_id", str(row["catalog_key"])) if object_id is None else str(object_id)
+        equip = _keep("equipment_profile_id") if equipment_profile_id is None else str(equipment_profile_id)
+        conn.execute(
+            """
+            UPDATE sessions SET
+              work_transfer_path=?, work_local_path=?,
+              archive_completeness=?, manifest_revision=?,
+              weather_export_status=?, object_id=?, equipment_profile_id=?,
+              updated_utc=?
+            WHERE id=?
+            """,
+            (w_xfer, w_local, a_comp, rev, w_exp, obj, equip, now, int(session_id)),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+    assert updated is not None
+    return _session_from_row(updated)
+
+
+def _transfer_job_from_row(row: sqlite3.Row) -> TransferJob:
+    return TransferJob(
+        id=int(row["id"]),
+        job_id=str(row["job_id"]),
+        session_id=int(row["session_id"]),
+        kind=str(row["kind"]),
+        source_root=str(row["source_root"] or ""),
+        dest_root=str(row["dest_root"] or ""),
+        status=str(row["status"] or TRANSFER_QUEUED),
+        completeness=str(row["completeness"] or JOB_COMPLETENESS_PARTIAL),
+        manifest_revision=int(row["manifest_revision"] or 0),
+        progress_files=int(row["progress_files"] or 0),
+        progress_bytes=int(row["progress_bytes"] or 0),
+        error=str(row["error"] or ""),
+        manifest_path=str(row["manifest_path"] or ""),
+        log_path=str(row["log_path"] or ""),
+        started_utc=None if row["started_utc"] is None else str(row["started_utc"]),
+        finished_utc=None if row["finished_utc"] is None else str(row["finished_utc"]),
+        created_utc=str(row["created_utc"] or ""),
+        updated_utc=str(row["updated_utc"] or ""),
+    )
+
+
+def create_transfer_job(
+    *,
+    session_id: int,
+    kind: str,
+    source_root: str = "",
+    dest_root: str = "",
+    completeness: str = JOB_COMPLETENESS_PARTIAL,
+    manifest_revision: int = 0,
+    job_id: str | None = None,
+    db_path: Path | None = None,
+) -> TransferJob:
+    """Persistenter Transfer-Job anlegen — ohne Dateien zu kopieren (S1)."""
+    kind_n = str(kind or "").strip()
+    if kind_n not in TRANSFER_KINDS:
+        raise ValueError(f"Ungueltiger Transfer-Kind: {kind}")
+    comp = completeness if completeness in JOB_COMPLETENESS else JOB_COMPLETENESS_PARTIAL
+    jid = (job_id or "").strip() or str(uuid.uuid4())
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        session = conn.execute("SELECT id FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+        if session is None:
+            raise ValueError(f"Unbekannte Session: {session_id}")
+        active = conn.execute(
+            """
+            SELECT id FROM transfer_jobs
+            WHERE session_id=? AND kind=? AND status IN ('queued','copying','verifying')
+            LIMIT 1
+            """,
+            (int(session_id), kind_n),
+        ).fetchone()
+        if active is not None:
+            raise ValueError(
+                f"Aktiver Transfer-Job existiert bereits fuer Session {session_id} / {kind_n}"
+            )
+        cur = conn.execute(
+            """
+            INSERT INTO transfer_jobs (
+              job_id, session_id, kind, source_root, dest_root, status, completeness,
+              manifest_revision, progress_files, progress_bytes, error,
+              manifest_path, log_path, started_utc, finished_utc, created_utc, updated_utc
+            ) VALUES (?,?,?,?,?,?,?,?,0,0,'','','',NULL,NULL,?,?)
+            """,
+            (
+                jid,
+                int(session_id),
+                kind_n,
+                str(source_root or ""),
+                str(dest_root or ""),
+                TRANSFER_QUEUED,
+                comp,
+                max(0, int(manifest_revision)),
+                now,
+                now,
+            ),
+        )
+        rid = int(cur.lastrowid)
+        conn.commit()
+        row = conn.execute("SELECT * FROM transfer_jobs WHERE id=?", (rid,)).fetchone()
+    assert row is not None
+    return _transfer_job_from_row(row)
+
+
+def get_transfer_job(job_id: str, *, db_path: Path | None = None) -> TransferJob | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM transfer_jobs WHERE job_id=?",
+            (str(job_id),),
+        ).fetchone()
+    return None if row is None else _transfer_job_from_row(row)
+
+
+def list_transfer_jobs(
+    session_id: int,
+    *,
+    db_path: Path | None = None,
+) -> list[TransferJob]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM transfer_jobs
+            WHERE session_id=?
+            ORDER BY id DESC
+            """,
+            (int(session_id),),
+        ).fetchall()
+    return [_transfer_job_from_row(r) for r in rows]
+
+
+def update_transfer_job_status(
+    job_id: str,
+    *,
+    status: str,
+    error: str | None = None,
+    progress_files: int | None = None,
+    progress_bytes: int | None = None,
+    manifest_path: str | None = None,
+    log_path: str | None = None,
+    db_path: Path | None = None,
+) -> TransferJob:
+    status_n = str(status or "").strip().lower()
+    if status_n not in TRANSFER_STATUSES:
+        raise ValueError(f"Ungueltiger Transfer-Status: {status}")
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM transfer_jobs WHERE job_id=?",
+            (str(job_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Unbekannter Transfer-Job: {job_id}")
+        started = row["started_utc"]
+        finished = row["finished_utc"]
+        if status_n in ("copying", "verifying") and not started:
+            started = now
+        if status_n in ("completed", "failed"):
+            finished = now
+        conn.execute(
+            """
+            UPDATE transfer_jobs SET
+              status=?,
+              error=?,
+              progress_files=?,
+              progress_bytes=?,
+              manifest_path=?,
+              log_path=?,
+              started_utc=?,
+              finished_utc=?,
+              updated_utc=?
+            WHERE job_id=?
+            """,
+            (
+                status_n,
+                str(row["error"] or "") if error is None else str(error),
+                int(row["progress_files"] or 0) if progress_files is None else max(0, int(progress_files)),
+                int(row["progress_bytes"] or 0) if progress_bytes is None else max(0, int(progress_bytes)),
+                str(row["manifest_path"] or "") if manifest_path is None else str(manifest_path),
+                str(row["log_path"] or "") if log_path is None else str(log_path),
+                started,
+                finished,
+                now,
+                str(job_id),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM transfer_jobs WHERE job_id=?",
+            (str(job_id),),
+        ).fetchone()
+    assert updated is not None
+    return _transfer_job_from_row(updated)

@@ -17,7 +17,14 @@ catalog_dir: data/catalogs
 astro_manager_db: data/catalogs/astro_manager.sqlite
 # Aufnahme lokal: C:\Astro\Capture\Mele\… (neben anderen Capture-Ordnern); Archiv spaeter NAS
 local_capture_root: C:/Astro/Capture/Mele
-archive_root: //NAS/Astro/Capture/Mele
+# ARCHIVE (S4): NAS Share Media — UNC bevorzugen (nicht M:-Laufwerk)
+archive_root: //192.168.0.100/Media/Astro/Mele
+# WORK (S3): MeLE → Notebook per SMB (Tailscale verifiziert, ohne Passwort hier)
+# Transfer: \\100.97.226.18\Astro\Work\Mele  |  Siril lokal: C:\Astro\Work\Mele
+# Anmeldung: Windows Credential Manager (TECHNIKUM\net), nicht in YAML.
+work_transfer_root: //100.97.226.18/Astro/Work/Mele
+work_local_root: C:/Astro/Work/Mele
+siril_home_dirname: siril_home
 # NINA Advanced API (REST). Default lokal auf dem MeLE-PC.
 nina_base_url: http://localhost:1888/v2/api
 # NINA Desktop-App (normal installiert).

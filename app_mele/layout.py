@@ -125,6 +125,7 @@ def build_ui(
     on_open_pano: Callable[[], None],
     on_open_weather: Callable[[], None],
     on_open_help: Callable[[], None],
+    on_open_prefs: Callable[[], None],
     on_open_wiki: Callable[[], None],
     on_open_observe: Callable[[], None],
     on_open_tools: Callable[[], None],
@@ -237,6 +238,9 @@ def build_ui(
                 )
                 ui.button("Hilfe", icon="help", on_click=on_open_help).props("flat dense").tooltip(
                     "App-Bedienung: Horizont, Einnorden, Hybrid, Wetter-Journal"
+                )
+                ui.button(icon="settings", on_click=on_open_prefs).props("flat dense round").tooltip(
+                    "Preferences: CAPTURE / WORK / ARCHIVE Pfade (mele.yaml)"
                 )
                 ui.button("Wiki", icon="menu_book", on_click=on_open_wiki).props("flat dense").tooltip(
                     "Wissen, Inventar, Galerie — Markdown unter wiki/"

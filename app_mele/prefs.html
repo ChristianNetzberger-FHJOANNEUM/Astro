@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>MeLE Preferences</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #0b1220; color: #e2e8f0;
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center;
+           flex-wrap: wrap; padding: 10px 14px; background: rgba(15,23,42,.94);
+           border-bottom: 1px solid #1e293b; }
+    #bar a, #bar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+           padding: 7px 10px; cursor: pointer; text-decoration: none; font-size: 13px; }
+    #bar button.ok { background: #0f766e; }
+    main { padding: 16px 18px 48px; max-width: 720px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 15px; margin: 22px 0 8px; color: #7dd3fc; }
+    .meta, .hint { font-size: 13px; opacity: .85; line-height: 1.45; }
+    .card { margin: 12px 0; padding: 14px 16px; background: #132033; border-radius: 8px;
+            border: 1px solid #334155; }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; opacity: .9;
+            margin-bottom: 12px; }
+    input { background: #111827; color: #e2e8f0; border: 1px solid #334155;
+            border-radius: 4px; padding: 8px 10px; font-size: 14px; font-family: ui-monospace, Consolas, monospace; }
+    #status { font-size: 13px; min-height: 1.3em; margin-top: 8px; }
+    #status.ok { color: #5eead4; }
+    #status.err { color: #fca5a5; }
+    code { font-size: 12px; background: #0f172a; padding: 1px 5px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <a href="/">Zurück</a>
+    <button type="button" id="btn-reload">Neu laden</button>
+    <button type="button" class="ok" id="btn-save">Speichern → mele.yaml</button>
+    <span class="meta">Preferences · Storage-Pfade</span>
+  </div>
+  <main>
+    <h1>Preferences</h1>
+    <p class="hint">
+      Schreibt ausgewählte Felder nach <code>configs/mele.yaml</code> (Kommentare bleiben).
+      <strong>Keine Passwörter</strong> — SMB-Anmeldung über Windows-Anmeldeinformationsverwaltung.
+      Nach Speichern sofort für Push Work wirksam (frisch geladen).
+    </p>
+
+    <div class="card">
+      <h2>Session Storage</h2>
+      <label>CAPTURE lokal (MeLE)
+        <input id="local_capture_root" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>ARCHIVE (NAS UNC)
+        <input id="archive_root" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>WORK Transfer (vom MeLE, UNC / Tailscale)
+        <input id="work_transfer_root" autocomplete="off" spellcheck="false"
+               placeholder="//100.97.226.18/Astro/Work/Mele" />
+      </label>
+      <label>WORK lokal auf Notebook (Siril-Anzeige)
+        <input id="work_local_root" autocomplete="off" spellcheck="false"
+               placeholder="C:/Astro/Work/Mele" />
+      </label>
+      <label>Siril-Home-Ordnername (Konvention)
+        <input id="siril_home_dirname" autocomplete="off" spellcheck="false" />
+      </label>
+      <p class="meta" id="cfg-path"></p>
+      <div id="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Hinweise</h2>
+      <p class="hint">
+        Setup-Profile (Omegon-Tracker ohne SynScan, Inventar-Auswahl) kommen später auf diese Seite —
+        getrennt von den 360°-Anzeige-Prefs (<code>ui-prefs.json</code>).
+      </p>
+    </div>
+  </main>
+  <script>
+    const fields = [
+      "local_capture_root",
+      "archive_root",
+      "work_transfer_root",
+      "work_local_root",
+      "siril_home_dirname",
+    ];
+
+    function setStatus(msg, cls) {
+      const el = document.getElementById("status");
+      el.textContent = msg || "";
+      el.className = cls || "";
+    }
+
+    function fillForm(data) {
+      for (const key of fields) {
+        const el = document.getElementById(key);
+        if (el) el.value = data[key] != null ? String(data[key]) : "";
+      }
+      const p = document.getElementById("cfg-path");
+      if (p) p.textContent = data.config_file ? `Datei: ${data.config_file}` : "";
+    }
+
+    async function loadPrefs() {
+      setStatus("Lade…");
+      try {
+        const response = await fetch("/astro/prefs/storage", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Laden fehlgeschlagen", "err");
+          return;
+        }
+        fillForm(data);
+        setStatus(data.work_configured ? "WORK konfiguriert" : "WORK noch leer — Push disabled", "ok");
+      } catch (err) {
+        setStatus(String(err.message || err), "err");
+      }
+    }
+
+    async function savePrefs() {
+      setStatus("Speichern…");
+      const body = {};
+      for (const key of fields) {
+        body[key] = document.getElementById(key).value;
+      }
+      try {
+        const response = await fetch("/astro/prefs/storage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Speichern fehlgeschlagen", "err");
+          return;
+        }
+        fillForm(data);
+        setStatus("Gespeichert in mele.yaml", "ok");
+      } catch (err) {
+        setStatus(String(err.message || err), "err");
+      }
+    }
+
+    document.getElementById("btn-reload").addEventListener("click", loadPrefs);
+    document.getElementById("btn-save").addEventListener("click", savePrefs);
+    loadPrefs();
+  </script>
+</body>
+</html>

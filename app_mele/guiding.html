@@ -114,6 +114,38 @@
     select { background: #020617; border: 1px solid var(--border); }
     #zoom-label { min-width: 4em; color: var(--muted); font-size: 13px; align-self: center; }
     .side-stack { display: flex; flex-direction: column; gap: 12px; }
+    details.fold {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 0;
+    }
+    details.fold > summary {
+      list-style: none; cursor: pointer;
+      padding: 12px; font-size: 14px; color: #7dd3fc;
+      letter-spacing: .04em; text-transform: uppercase; font-weight: 650;
+      user-select: none;
+    }
+    details.fold > summary::-webkit-details-marker { display: none; }
+    details.fold > summary::before {
+      content: "▸ "; color: var(--muted); font-weight: 400;
+    }
+    details.fold[open] > summary::before { content: "▾ "; }
+    details.fold .fold-body { padding: 0 12px 12px; }
+    #guide-graph-wrap {
+      position: relative; width: 100%; height: 200px;
+      background: #020617; border: 1px solid var(--border); border-radius: 8px;
+      margin-top: 10px; overflow: hidden;
+    }
+    #guide-graph { display: block; width: 100%; height: 100%; }
+    .graph-legend {
+      display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px;
+      font-size: 12px; color: var(--muted);
+    }
+    .graph-legend .swatch {
+      display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+      margin-right: 4px; vertical-align: -1px;
+    }
+    .graph-legend .ra { background: #38bdf8; }
+    .graph-legend .dec { background: #fbbf24; }
   </style>
 </head>
 <body>
@@ -193,8 +225,67 @@
       <section>
         <h2>Telemetry</h2>
         <div class="telemetry" id="telemetry">—</div>
-        <div class="muted" style="margin-top:10px;">Graph-Platzhalter (RA/DEC vs Zeit) — Datenpuffer aktiv, Plot Phase 1 optional.</div>
+        <h2 style="margin-top:14px;">Guide Graph</h2>
+        <div id="guide-graph-wrap">
+          <canvas id="guide-graph" aria-label="RA/DEC guiding error vs time"></canvas>
+        </div>
+        <div class="graph-legend">
+          <span><span class="swatch ra"></span>RA</span>
+          <span><span class="swatch dec"></span>DEC</span>
+          <span id="graph-unit-label">Y: —</span>
+          <span id="graph-meta"></span>
+        </div>
+        <div class="muted" style="margin-top:4px;">Nur Anzeige · keine Schwellen · Daten aus Telemetrie-Puffer (~10 min).</div>
       </section>
+      <section>
+        <h2>Events</h2>
+        <div class="telemetry" id="event-log" style="max-height:220px; overflow:auto; font-size:13px;">—</div>
+        <div class="muted" style="margin-top:6px;">Nur Zustandswechsel (PHD2 / derived) — kein Polling-Spam.</div>
+      </section>
+      <details class="fold">
+        <summary>PHD2 Calibration</summary>
+        <div class="fold-body">
+          <div class="telemetry" id="cal-panel">—</div>
+          <div class="muted" style="margin-top:6px;">API-only · AVAILABLE/NONE · fehlende Werte = —</div>
+        </div>
+      </details>
+      <details class="fold">
+        <summary>Equipment Config</summary>
+        <div class="fold-body">
+          <div class="muted" id="eq-active">Aktiv: —</div>
+          <label class="field" style="margin-top:8px;">Gespeicherte Configs
+            <select id="eq-select"></select>
+          </label>
+          <div class="row" style="margin-top:8px;">
+            <button class="btn" type="button" id="eq-activate">Aktivieren</button>
+            <button class="btn danger" type="button" id="eq-delete">Löschen</button>
+          </div>
+          <div class="muted" id="eq-activate-hint" style="margin-top:6px;">
+            set_profile nur wenn PHD2-Equipment getrennt — sonst nur MeLE-Zuordnung.
+          </div>
+          <hr style="border:0;border-top:1px solid var(--border);margin:12px 0;" />
+          <label class="field">Name
+            <input id="eq-name" type="text" placeholder="NEQ6 + Guide250 + ASI120" style="min-height:var(--touch);background:#020617;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;" />
+          </label>
+          <div class="row" style="margin-top:8px;">
+            <label class="field">FL Guide (mm)
+              <input id="eq-fl" type="number" step="1" min="1" value="250" style="width:6em;min-height:var(--touch);background:#020617;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px;" />
+            </label>
+            <label class="field">Pixel (µm)
+              <input id="eq-pix" type="number" step="0.01" min="0.1" value="3.75" style="width:6em;min-height:var(--touch);background:#020617;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px;" />
+            </label>
+          </div>
+          <label class="field" style="margin-top:8px;">PHD2-Profil
+            <select id="eq-phd2-profile"></select>
+          </label>
+          <div class="row" style="margin-top:8px;">
+            <button class="btn ok" type="button" id="eq-save">Speichern</button>
+            <button class="btn" type="button" id="eq-new">Neu</button>
+          </div>
+          <div class="muted" id="eq-scale-hint" style="margin-top:6px;">MeLE-Scale: —</div>
+          <div class="muted" id="eq-status" style="margin-top:4px;"></div>
+        </div>
+      </details>
     </div>
   </main>
   <script>
@@ -213,6 +304,8 @@
     let lastStarOk = false;
     let lockX = null;
     let lockY = null;
+    let lastGraphSteps = [];
+    let lastGraphUnit = "px";
 
     function setStatus(msg) { $("action-status").textContent = msg || ""; }
 
@@ -340,6 +433,33 @@
       return Number(v).toFixed(digits);
     }
 
+    function fmtSigned(v, digits) {
+      if (v == null || !Number.isFinite(Number(v))) return "—";
+      const n = Number(v);
+      const body = Math.abs(n).toFixed(digits);
+      return (n >= 0 ? "+" : "−") + body;
+    }
+
+    function formatPulse(durationMs, direction) {
+      if (durationMs == null || !Number.isFinite(Number(durationMs))) return "";
+      const ms = Math.round(Number(durationMs));
+      if (ms <= 0) return "";
+      const dir = (direction || "").trim();
+      const short =
+        dir === "East" ? "E" : dir === "West" ? "W" :
+        dir === "North" ? "N" : dir === "South" ? "S" : dir;
+      return short ? `${ms} ms ${short}` : `${ms} ms`;
+    }
+
+    function formatGuideDuration(seconds) {
+      if (seconds == null || !Number.isFinite(Number(seconds)) || Number(seconds) < 0) return "—";
+      const total = Math.floor(Number(seconds));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
     function syncIntervalSelect(seconds) {
       const sel = $("ff-interval");
       const val = String(seconds);
@@ -372,12 +492,14 @@
       if (pollBusy) return;
       pollBusy = true;
       try {
-        const [stRes, telRes] = await Promise.all([
+        const [stRes, telRes, evRes] = await Promise.all([
           fetch("/phd2/status"),
-          fetch("/phd2/telemetry?limit=60"),
+          fetch("/phd2/telemetry?limit=400"),
+          fetch("/phd2/events?limit=60"),
         ]);
         const st = await stRes.json();
         const tel = await telRes.json();
+        const ev = await evRes.json().catch(() => ({ events: [] }));
         const s = (st.status || {});
         const conn = s.connection || "OFFLINE";
         $("led").className = "led " + ledClass(conn);
@@ -404,25 +526,191 @@
           btn.disabled = !padAllowed;
         });
 
-        const step = s.last_step || {};
+        const step = tel.last || s.last_step || {};
+        const unit = (tel.display_unit === "arcsec" || step.display_unit === "arcsec") ? "arcsec" : "px";
+        const unitLabel = unit === "arcsec" ? "″" : " px";
+        const raErr = unit === "arcsec" ? step.ra_distance_arcsec : (step.ra_distance_px ?? step.ra_distance);
+        const decErr = unit === "arcsec" ? step.dec_distance_arcsec : (step.dec_distance_px ?? step.dec_distance);
+        const raRms = unit === "arcsec" ? tel.ra_rms_arcsec : tel.ra_rms_px;
+        const decRms = unit === "arcsec" ? tel.dec_rms_arcsec : tel.dec_rms_px;
+        const totRms = unit === "arcsec" ? tel.total_rms_arcsec : tel.total_rms_px;
+        const scale = tel.pixel_scale_arcsec_px ?? s.pixel_scale_arcsec_px;
         $("star-metrics").textContent =
           `SNR: ${fmt(step.snr, 1)} · HFD: ${fmt(step.hfd, 2)}`;
+        const raPulse = formatPulse(step.ra_duration, step.ra_direction);
+        const decPulse = formatPulse(step.dec_duration, step.dec_direction);
         const lines = [
           `State: ${conn}`,
           s.star_selected ? "Star: selected" : "Star: —",
           s.lost_star ? "Star: LOST" : "",
-          `RA err: ${fmt(step.ra_distance, 2)}″   DEC err: ${fmt(step.dec_distance, 2)}″`,
-          `RA RMS: ${fmt(tel.ra_rms, 2)}″   DEC RMS: ${fmt(tel.dec_rms, 2)}″   Tot: ${fmt(tel.total_rms, 2)}″`,
+          `Scale: ${scale != null && Number(scale) > 0 ? Number(scale).toFixed(3) + " ″/px" : "— (errors in px)"}`,
+          `RA error: ${fmtSigned(raErr, 2)}${unitLabel}`,
+          `DEC error: ${fmtSigned(decErr, 2)}${unitLabel}`,
+          `RA RMS: ${fmt(raRms, 2)}${unitLabel}   DEC RMS: ${fmt(decRms, 2)}${unitLabel}   Tot: ${fmt(totRms, 2)}${unitLabel}`,
+          raPulse ? `RA pulse: ${raPulse}` : "",
+          decPulse ? `DEC pulse: ${decPulse}` : "",
+          step.guide_time_s != null ? `Guide duration: ${formatGuideDuration(step.guide_time_s)}` : "",
           `Steps: ${tel.count || 0}`,
           s.last_error ? `Last error: ${s.last_error}` : "",
         ].filter(Boolean);
         $("telemetry").textContent = lines.join("\n");
+        renderCalPanel(s, scale);
+        drawGuideGraph(tel.steps || [], unit);
+        renderEventLog(ev.events || []);
       } catch (err) {
         $("pill-text").textContent = "PHD2 · offline";
         $("led").className = "led err";
       } finally {
         pollBusy = false;
       }
+    }
+
+    function drawGuideGraph(steps, unit) {
+      const canvas = $("guide-graph");
+      const wrap = $("guide-graph-wrap");
+      if (!canvas || !wrap) return;
+      lastGraphSteps = steps || [];
+      lastGraphUnit = unit === "arcsec" ? "arcsec" : "px";
+      const unitLabel = lastGraphUnit === "arcsec" ? "″" : "px";
+      $("graph-unit-label").textContent = `Y: error (${unitLabel})`;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const cssW = Math.max(120, wrap.clientWidth || 280);
+      const cssH = Math.max(120, wrap.clientHeight || 200);
+      if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      const points = [];
+      for (const s of lastGraphSteps) {
+        const t = Number(s.utc);
+        const ra = lastGraphUnit === "arcsec" ? Number(s.ra_distance_arcsec) : Number(s.ra_distance_px ?? s.ra_distance);
+        const dec = lastGraphUnit === "arcsec" ? Number(s.dec_distance_arcsec) : Number(s.dec_distance_px ?? s.dec_distance);
+        if (!Number.isFinite(t) || !Number.isFinite(ra) || !Number.isFinite(dec)) continue;
+        points.push({ t, ra, dec });
+      }
+      $("graph-meta").textContent = points.length ? `${points.length} samples` : "keine Samples";
+      if (points.length < 2) {
+        ctx.fillStyle = "#64748b";
+        ctx.font = "12px Segoe UI, system-ui, sans-serif";
+        ctx.fillText("Warte auf GuideSteps…", 12, cssH / 2);
+        return;
+      }
+
+      const padL = 36, padR = 8, padT = 8, padB = 22;
+      const plotW = cssW - padL - padR;
+      const plotH = cssH - padT - padB;
+      const t0 = points[0].t;
+      const t1 = points[points.length - 1].t;
+      const span = Math.max(1e-3, t1 - t0);
+      let yMax = 0.1;
+      for (const p of points) {
+        yMax = Math.max(yMax, Math.abs(p.ra), Math.abs(p.dec));
+      }
+      // etwas Kopfraum, keine „guten“ Schwellen
+      yMax *= 1.15;
+
+      const xOf = (t) => padL + ((t - t0) / span) * plotW;
+      const yOf = (v) => padT + (1 - (v + yMax) / (2 * yMax)) * plotH;
+
+      // grid
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padL, padT);
+      ctx.lineTo(padL, padT + plotH);
+      ctx.lineTo(padL + plotW, padT + plotH);
+      ctx.stroke();
+      // zero line
+      ctx.strokeStyle = "#334155";
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(padL, yOf(0));
+      ctx.lineTo(padL + plotW, yOf(0));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const drawSeries = (key, color) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        let started = false;
+        for (const p of points) {
+          const x = xOf(p.t);
+          const y = yOf(p[key]);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      };
+      drawSeries("ra", "#38bdf8");
+      drawSeries("dec", "#fbbf24");
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "10px Segoe UI, system-ui, sans-serif";
+      ctx.fillText(`+${yMax.toFixed(yMax >= 10 ? 0 : 1)}`, 4, padT + 10);
+      ctx.fillText("0", 4, yOf(0) + 3);
+      ctx.fillText(`−${yMax.toFixed(yMax >= 10 ? 0 : 1)}`, 4, padT + plotH);
+      const mins = span / 60;
+      ctx.fillText(mins >= 1.5 ? `${mins.toFixed(1)} min` : `${span.toFixed(0)} s`, padL, cssH - 6);
+      ctx.fillText("jetzt", padL + plotW - 28, cssH - 6);
+    }
+
+    function dash(v, digits) {
+      if (v == null || v === "") return "—";
+      if (typeof v === "number" || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)))) {
+        if (digits != null) return Number(v).toFixed(digits);
+      }
+      return String(v);
+    }
+
+    function renderCalPanel(s, scale) {
+      const el = $("cal-panel");
+      if (!el) return;
+      const state = s.calibration_state || "NONE";
+      const lines = [
+        `Profile:      ${s.phd2_profile_name || "—"}` +
+          (s.phd2_profile_id != null ? ` (id ${s.phd2_profile_id})` : ""),
+        `Camera:       ${s.camera_name || "—"}`,
+        `Mount:        ${s.mount_name || "—"}`,
+        `Image scale:  ${scale != null && Number(scale) > 0 ? Number(scale).toFixed(3) + " ″/px" : "—"}`,
+        `Calibration:  ${state}`,
+        `RA angle:     ${dash(s.cal_x_angle, 1)}°`,
+        `DEC angle:    ${dash(s.cal_y_angle, 1)}°`,
+        `RA rate:      ${dash(s.cal_x_rate, 3)}`,
+        `DEC rate:     ${dash(s.cal_y_rate, 3)}`,
+        `RA parity:    ${s.cal_x_parity || "—"}`,
+        `DEC parity:   ${s.cal_y_parity || "—"}`,
+        `Orthogonality:—`,
+        `Pier side:    —`,
+        `Cal age:      —`,
+      ];
+      el.textContent = lines.join("\n");
+    }
+
+    function renderEventLog(events) {
+      const el = $("event-log");
+      if (!el) return;
+      if (!events.length) {
+        el.textContent = "—";
+        return;
+      }
+      // neueste oben
+      const rows = [...events].reverse().map((e) => {
+        const t = new Date((e.utc || 0) * 1000);
+        const hh = String(t.getHours()).padStart(2, "0");
+        const mm = String(t.getMinutes()).padStart(2, "0");
+        const ss = String(t.getSeconds()).padStart(2, "0");
+        const src = e.source === "derived" ? "·" : " ";
+        return `${hh}:${mm}:${ss}${src} ${e.kind}${e.message && e.message !== e.kind ? " — " + e.message : ""}`;
+      });
+      el.textContent = rows.join("\n");
     }
 
     async function setStarImage(blob) {
@@ -540,6 +828,203 @@
       }
     }
 
+    let eqProfiles = [];
+    let eqPhd2Profiles = [];
+    let eqActiveId = null;
+    let eqEditingId = null;
+
+    function updateEqScaleHint() {
+      const fl = Number($("eq-fl").value);
+      const pix = Number($("eq-pix").value);
+      const el = $("eq-scale-hint");
+      if (!Number.isFinite(fl) || fl <= 0 || !Number.isFinite(pix) || pix <= 0) {
+        el.textContent = "MeLE-Scale: — (FL und Pixel setzen)";
+        return;
+      }
+      const scale = 206.265 * pix / fl;
+      el.textContent = `MeLE-Scale: ${scale.toFixed(3)} ″/px (206.265×µm/mm)`;
+    }
+
+    function fillEqSelect() {
+      const sel = $("eq-select");
+      const cur = sel.value;
+      sel.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = eqProfiles.length ? "— wählen —" : "keine Configs";
+      sel.appendChild(empty);
+      for (const p of eqProfiles) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.name + (p.id === eqActiveId ? " ★" : "");
+        sel.appendChild(opt);
+      }
+      if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+      else if (eqActiveId) sel.value = eqActiveId;
+    }
+
+    function fillPhd2ProfileSelect() {
+      const sel = $("eq-phd2-profile");
+      const cur = sel.value;
+      sel.innerHTML = "";
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "— PHD2-Profil —";
+      sel.appendChild(none);
+      for (const p of eqPhd2Profiles) {
+        const opt = document.createElement("option");
+        opt.value = String(p.id);
+        opt.textContent = `${p.name} (id ${p.id})`;
+        opt.dataset.name = p.name || "";
+        sel.appendChild(opt);
+      }
+      if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+    }
+
+    function renderEqActive() {
+      const active = eqProfiles.find((p) => p.id === eqActiveId);
+      if (!active) {
+        $("eq-active").textContent = "Aktiv: —";
+        return;
+      }
+      const scale = active.mele_image_scale_arcsec_px != null
+        ? Number(active.mele_image_scale_arcsec_px).toFixed(3) + " ″/px"
+        : "—";
+      $("eq-active").textContent =
+        `Aktiv: ${active.name} → PHD2 „${active.phd2_profile_name || "—"}“` +
+        (active.phd2_profile_id != null ? ` (id ${active.phd2_profile_id})` : "") +
+        ` · MeLE-Scale ${scale}`;
+    }
+
+    function loadEqIntoForm(p) {
+      if (!p) {
+        eqEditingId = null;
+        $("eq-name").value = "";
+        $("eq-fl").value = "250";
+        $("eq-pix").value = "3.75";
+        $("eq-phd2-profile").value = "";
+        updateEqScaleHint();
+        return;
+      }
+      eqEditingId = p.id;
+      $("eq-name").value = p.name || "";
+      $("eq-fl").value = p.guiding_focal_length_mm != null ? p.guiding_focal_length_mm : "";
+      $("eq-pix").value = p.guiding_pixel_size_um != null ? p.guiding_pixel_size_um : "";
+      if (p.phd2_profile_id != null) $("eq-phd2-profile").value = String(p.phd2_profile_id);
+      else $("eq-phd2-profile").value = "";
+      updateEqScaleHint();
+    }
+
+    async function refreshEquipmentProfiles() {
+      try {
+        const res = await fetch("/phd2/equipment-profiles");
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "load failed");
+        eqProfiles = data.profiles || [];
+        eqPhd2Profiles = data.phd2_profiles || [];
+        eqActiveId = data.active_id || null;
+        fillEqSelect();
+        fillPhd2ProfileSelect();
+        renderEqActive();
+        const sel = $("eq-select").value;
+        if (sel) {
+          const p = eqProfiles.find((x) => x.id === sel);
+          if (p) loadEqIntoForm(p);
+        }
+      } catch (err) {
+        $("eq-status").textContent = String(err.message || err);
+      }
+    }
+
+    function bindEquipmentProfiles() {
+      $("eq-fl").addEventListener("input", updateEqScaleHint);
+      $("eq-pix").addEventListener("input", updateEqScaleHint);
+      $("eq-select").addEventListener("change", () => {
+        const p = eqProfiles.find((x) => x.id === $("eq-select").value);
+        loadEqIntoForm(p || null);
+      });
+      $("eq-new").addEventListener("click", () => {
+        $("eq-select").value = "";
+        loadEqIntoForm(null);
+        $("eq-status").textContent = "Neue Config — Speichern.";
+      });
+      $("eq-save").addEventListener("click", async () => {
+        const phdSel = $("eq-phd2-profile");
+        const phdOpt = phdSel.selectedOptions[0];
+        const body = {
+          id: eqEditingId || undefined,
+          name: $("eq-name").value.trim(),
+          guiding_focal_length_mm: $("eq-fl").value ? Number($("eq-fl").value) : null,
+          guiding_pixel_size_um: $("eq-pix").value ? Number($("eq-pix").value) : null,
+          phd2_profile_id: phdSel.value ? Number(phdSel.value) : null,
+          phd2_profile_name: phdOpt && phdOpt.dataset.name ? phdOpt.dataset.name : "",
+          mount_id: "",
+          guiding_camera_id: "asi120mc",
+          guiding_scope_id: "",
+        };
+        if (!body.name) {
+          $("eq-status").textContent = "Name fehlt.";
+          return;
+        }
+        try {
+          const data = await postJson("/phd2/equipment-profiles", body);
+          eqProfiles = data.profiles || [];
+          eqActiveId = data.active_id || null;
+          eqEditingId = (data.profile && data.profile.id) || eqEditingId;
+          fillEqSelect();
+          if (eqEditingId) $("eq-select").value = eqEditingId;
+          renderEqActive();
+          $("eq-status").textContent = "Gespeichert.";
+        } catch (err) {
+          $("eq-status").textContent = String(err.message || err);
+        }
+      });
+      $("eq-delete").addEventListener("click", async () => {
+        const id = $("eq-select").value || eqEditingId;
+        if (!id) { $("eq-status").textContent = "Nichts gewählt."; return; }
+        try {
+          const res = await fetch(`/phd2/equipment-profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || "delete failed");
+          eqProfiles = data.profiles || [];
+          eqActiveId = data.active_id || null;
+          fillEqSelect();
+          loadEqIntoForm(null);
+          renderEqActive();
+          $("eq-status").textContent = "Gelöscht.";
+        } catch (err) {
+          $("eq-status").textContent = String(err.message || err);
+        }
+      });
+      $("eq-activate").addEventListener("click", async () => {
+        const id = $("eq-select").value || eqEditingId;
+        if (!id) { $("eq-status").textContent = "Nichts gewählt."; return; }
+        try {
+          const data = await postJson(`/phd2/equipment-profiles/${encodeURIComponent(id)}/activate`, {});
+          eqProfiles = data.profiles || [];
+          eqActiveId = data.active_id || null;
+          fillEqSelect();
+          renderEqActive();
+          const phd = data.phd2 || {};
+          if (phd.applied) {
+            $("eq-status").textContent = "Aktiv · PHD2-Profil gesetzt.";
+            $("eq-activate-hint").textContent = phd.message || "PHD2-Profil angewendet.";
+          } else if (phd.reason === "equipment_connected") {
+            $("eq-status").textContent = "Aktiv in MeLE · PHD2 unverändert (Equipment verbunden).";
+            $("eq-activate-hint").textContent =
+              "Equipment verbunden — Profilwechsel nur manuell in PHD2 (E2).";
+          } else {
+            $("eq-status").textContent = "Aktiv in MeLE · " + (phd.message || phd.reason || "kein PHD2-Wechsel");
+            $("eq-activate-hint").textContent = phd.message || phd.error || "";
+          }
+          pollStatus();
+        } catch (err) {
+          $("eq-status").textContent = String(err.message || err);
+        }
+      });
+      updateEqScaleHint();
+    }
+
     function bindPad() {
       document.querySelectorAll(".pad button[data-dir]").forEach((btn) => {
         const dir = btn.getAttribute("data-dir");
@@ -628,14 +1113,20 @@
     });
 
     bindPad();
+    bindEquipmentProfiles();
+    refreshEquipmentProfiles();
     refreshExposures();
     pollStatus();
     refreshFull();
     refreshStar();
     setInterval(pollStatus, 1000);
     setInterval(refreshExposures, 15000);
+    setInterval(refreshEquipmentProfiles, 20000);
     restartFullTimer();
     restartStarTimer();
+    window.addEventListener("resize", () => {
+      if (lastGraphSteps.length) drawGuideGraph(lastGraphSteps, lastGraphUnit);
+    });
   </script>
 </body>
 </html>

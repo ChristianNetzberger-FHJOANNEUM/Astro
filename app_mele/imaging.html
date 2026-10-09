@@ -299,6 +299,25 @@
     </div>
   </div>
 
+  <div id="img-remove-modal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-labelledby="img-remove-title">
+      <div class="row" style="justify-content:space-between;margin-bottom:4px;">
+        <h3 id="img-remove-title">Session entfernen</h3>
+        <button type="button" class="btn" id="img-remove-close">Abbrechen</button>
+      </div>
+      <p class="path" id="img-remove-hint">NAS/ARCHIVE wird nie gelöscht.</p>
+      <label class="field"><span><input type="checkbox" id="img-remove-capture" /> CAPTURE (lokal MeLE)</span></label>
+      <label class="field"><span><input type="checkbox" id="img-remove-work" /> WORK (Notebook-UNC)</span></label>
+      <label class="field"><span><input type="checkbox" id="img-remove-db" checked /> DB-Eintrag</span></label>
+      <label class="field" id="img-remove-force-wrap" hidden>
+        <span><input type="checkbox" id="img-remove-force" /> CAPTURE trotz Archiv ≠ complete erzwingen</span>
+      </label>
+      <div class="row" style="margin-top:12px;">
+        <button type="button" class="btn danger" id="img-remove-go">Entfernen</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const params = new URLSearchParams(location.search);
     let imagingCatalogKey = (params.get("key") || "").trim();
@@ -308,6 +327,13 @@
     let imagingLoadToken = 0;
     let imagingProfilesCache = [];
     let imagingSessionsCache = [];
+    let imagingStoragePaths = {
+      work_configured: false,
+      archive_configured: false,
+      work_transfer_root: "",
+      work_local_root: "",
+      archive_root: "",
+    };
     let imagingSelectedSessionId = null;
     let imagingCapturingSessionId = null;
     let imagingCaptureAbort = false;
@@ -782,8 +808,11 @@
         ? formatIntegration(s.integration_s)
         : formatIntegration((s.exposure_s || 0) * L.done);
       const arch = s.archive_status || "local";
+      const life = String(s.lifecycle_status || "open").toLowerCase();
+      const wx = String(s.weather_export_status || "none").toLowerCase();
       const code = `s${String(s.id).padStart(5, "0")}`;
       const capturing = String(imagingCapturingSessionId) === String(s.id);
+      const isClosed = life === "closed";
       let capClass = "btn capture";
       if (capturing) capClass += " run";
       else if (L.done > 0 || D.done > 0) capClass += " done";
@@ -793,12 +822,21 @@
       const darksLine = (D.planned != null && D.planned > 0) || D.done > 0
         ? ` · Darks ${D.done}/${D.planned != null ? D.planned : "?"}`
         : "";
+      const lifeLabel = ({ open: "offen", capturing: "Aufnahme", closed: "geschlossen" })[life] || life;
+      const wxLabel = ({
+        none: "Wetter: —",
+        ok: "Wetter: ok",
+        partial: "Wetter: partial",
+        unavailable: "Wetter: fehlt",
+      })[wx] || `Wetter: ${wx}`;
 
       box.className = "session-detail";
       box.innerHTML =
         `<div><strong>${formatSessionDate(s.started_utc)}</strong> <code>${code}</code> ` +
         `${lightsLine}${darksLine} · ${integ} ` +
-        `<span class="arch-${arch}">✓ ${archiveLabel(arch)}</span></div>` +
+        `<span class="arch-${arch}">✓ ${archiveLabel(arch)}</span>` +
+        ` · <span title="lifecycle">${lifeLabel}</span>` +
+        ` · <span title="weather_export_status">${wxLabel}</span></div>` +
         `<div class="meta" style="margin-top:6px;font-size:13px;opacity:.8;word-break:break-word;">` +
         `${s.local_path || "(kein Lokalpfad)"}` +
         (s.equipment ? `<br>${s.equipment}` : "") +
@@ -825,7 +863,10 @@
         capBtn.addEventListener("click", () => { imagingCaptureAbort = true; });
       } else {
         capBtn.textContent = "▶ Capture" + remainHint;
-        if (lightsRemain > 0) {
+        if (isClosed) {
+          capBtn.disabled = true;
+          capBtn.title = "Session geschlossen — Capture beendet";
+        } else if (lightsRemain > 0) {
           capBtn.title = `Restliche Lights: ${lightsRemain}` +
             (darksRemain > 0 ? `, danach Darks: ${darksRemain}` : "");
         } else if (darksRemain > 0) {
@@ -833,7 +874,7 @@
         } else {
           capBtn.title = "NINA Capture-Lauf";
         }
-        capBtn.addEventListener("click", () => captureImagingSession(s));
+        if (!isClosed) capBtn.addEventListener("click", () => captureImagingSession(s));
       }
       actions.appendChild(editBtn);
       const timingBtn = document.createElement("button");
@@ -844,6 +885,70 @@
       timingBtn.addEventListener("click", () => showSessionTimingLog(s.id));
       actions.appendChild(timingBtn);
       actions.appendChild(capBtn);
+
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "btn ok";
+      closeBtn.textContent = isClosed ? "Geschlossen" : "Session schließen";
+      closeBtn.disabled = capturing || isClosed;
+      closeBtn.title = isClosed
+        ? "Bereits CLOSED — Wetter ggf. erneut exportieren"
+        : "Aufnahme beenden → weather/ im Session-Ordner schreiben";
+      closeBtn.addEventListener("click", () => closeImagingSessionUi(s.id));
+      actions.appendChild(closeBtn);
+
+      const wxBtn = document.createElement("button");
+      wxBtn.type = "button";
+      wxBtn.className = "btn";
+      wxBtn.textContent = "Wetter export";
+      wxBtn.disabled = capturing || !isClosed;
+      wxBtn.title = isClosed
+        ? "weather.csv erneut aus weather_server schreiben"
+        : "Erst Session schließen, dann Wetter exportieren";
+      wxBtn.addEventListener("click", () => exportSessionWeatherUi(s.id));
+      actions.appendChild(wxBtn);
+
+      const workBtn = document.createElement("button");
+      workBtn.type = "button";
+      workBtn.className = "btn ok";
+      workBtn.textContent = "→ Work";
+      const workOk = !!imagingStoragePaths.work_configured;
+      workBtn.disabled = capturing || !workOk || !s.local_path;
+      workBtn.title = !workOk
+        ? "work_transfer_root in configs/mele.yaml setzen (UNC zum Notebook)"
+        : (imagingStoragePaths.work_local_root
+          ? `Push nach WORK · Siril-Home: ${imagingStoragePaths.work_local_root}\\…\\siril_home`
+          : "Verifizierter Copy CAPTURE → WORK (UNC)");
+      workBtn.addEventListener("click", () => pushSessionToWorkUi(s.id));
+      actions.appendChild(workBtn);
+
+      const archBtn = document.createElement("button");
+      archBtn.type = "button";
+      archBtn.className = "btn ok";
+      archBtn.textContent = "→ Archiv";
+      const archOk = imagingStoragePaths.archive_configured !== false
+        && !!(imagingStoragePaths.archive_root || "").trim();
+      archBtn.disabled = capturing || !archOk || !s.local_path;
+      archBtn.title = !archOk
+        ? "archive_root in Prefs / mele.yaml setzen (NAS-UNC)"
+        : `Push CAPTURE → ARCHIVE · ${imagingStoragePaths.archive_root}`;
+      archBtn.addEventListener("click", () => pushSessionToArchiveUi(s.id));
+      actions.appendChild(archBtn);
+
+      const w2aBtn = document.createElement("button");
+      w2aBtn.type = "button";
+      w2aBtn.className = "btn ok";
+      w2aBtn.textContent = "Work→Archiv";
+      const hasWork = !!(s.work_transfer_path || "").trim();
+      w2aBtn.disabled = capturing || !archOk || !hasWork;
+      w2aBtn.title = !hasWork
+        ? "Zuerst → Work, dann Results von WORK auf die NAS"
+        : !archOk
+          ? "archive_root in Prefs / mele.yaml setzen (NAS-UNC)"
+          : `WORK → ARCHIVE · results/ + fehlende Master · ${imagingStoragePaths.archive_root}`;
+      w2aBtn.addEventListener("click", () => pushSessionWorkToArchiveUi(s.id));
+      actions.appendChild(w2aBtn);
+
       if (capturing) {
         const glass = document.createElement("span");
         glass.className = "busy";
@@ -853,9 +958,10 @@
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "btn danger";
-      delBtn.textContent = "Löschen";
+      delBtn.textContent = "Entfernen…";
       delBtn.disabled = capturing;
-      delBtn.addEventListener("click", () => deleteImagingSession(s.id));
+      delBtn.title = "CAPTURE / WORK / DB — NAS bleibt";
+      delBtn.addEventListener("click", () => openRemoveSessionModal(s.id));
       actions.appendChild(delBtn);
       box.appendChild(actions);
       // Während Capture kein Preview-Reload (sonst flackert der Timer-Bereich)
@@ -1096,6 +1202,8 @@
           setStatus(data.error || `Fehler ${response.status}`);
           return;
         }
+        await loadStoragePaths();
+        if (token !== imagingLoadToken) return;
         renderImaging(data);
         setStatus("");
         try {
@@ -1123,16 +1231,198 @@
         await refreshImaging();
       } catch (err) { setStatus(String(err.message || err)); }
     }
-    async function deleteImagingSession(sessionId) {
-      if (!window.confirm("Session löschen?")) return;
-      setStatus("Lösche Session…");
+    let imagingRemoveSessionId = null;
+
+    function closeRemoveSessionModal() {
+      const el = $("img-remove-modal");
+      if (el) el.hidden = true;
+      imagingRemoveSessionId = null;
+    }
+
+    function openRemoveSessionModal(sessionId) {
+      imagingRemoveSessionId = sessionId;
+      const s = imagingSessionsCache.find((x) => String(x.id) === String(sessionId));
+      const complete = String(s?.archive_completeness || "") === "complete";
+      const hint = $("img-remove-hint");
+      if (hint) {
+        hint.textContent =
+          `Session s${String(sessionId).padStart(5, "0")} · ` +
+          `Archiv: ${s?.archive_completeness || "none"} · NAS wird nie gelöscht.`;
+      }
+      const cap = $("img-remove-capture");
+      const work = $("img-remove-work");
+      const db = $("img-remove-db");
+      const forceWrap = $("img-remove-force-wrap");
+      const force = $("img-remove-force");
+      if (cap) cap.checked = !!(s?.local_path);
+      if (work) work.checked = !!(s?.work_transfer_path);
+      if (db) db.checked = true;
+      if (force) force.checked = false;
+      if (forceWrap) forceWrap.hidden = complete || !(s?.local_path);
+      const modal = $("img-remove-modal");
+      if (modal) modal.hidden = false;
+    }
+
+    async function confirmRemoveSession() {
+      const sessionId = imagingRemoveSessionId;
+      if (sessionId == null) return;
+      const delete_capture = !!$("img-remove-capture")?.checked;
+      const delete_work = !!$("img-remove-work")?.checked;
+      const delete_db = !!$("img-remove-db")?.checked;
+      const force_capture = !!$("img-remove-force")?.checked;
+      if (!delete_capture && !delete_work && !delete_db) {
+        setStatus("Nichts ausgewählt");
+        return;
+      }
+      setStatus("Entferne…");
       try {
-        const response = await fetch(`/astro/sessions/${sessionId}`, { method: "DELETE" });
-        const data = await response.json();
-        if (!response.ok || !data.ok) { setStatus(data.error || "Löschen fehlgeschlagen"); return; }
-        if (String(imagingSelectedSessionId) === String(sessionId)) imagingSelectedSessionId = null;
+        const response = await fetch(`/astro/sessions/${sessionId}/remove`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ delete_capture, delete_work, delete_db, force_capture }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Entfernen fehlgeschlagen");
+          return;
+        }
+        closeRemoveSessionModal();
+        const bits = [];
+        if (data.deleted_capture) bits.push("CAPTURE");
+        if (data.deleted_work) bits.push("WORK");
+        if (data.deleted_db) bits.push("DB");
+        setStatus(
+          `Entfernt: ${bits.join("+") || "—"}` +
+          (data.warnings?.length ? ` · ${data.warnings.join("; ")}` : "")
+        );
+        if (data.deleted_db && String(imagingSelectedSessionId) === String(sessionId)) {
+          imagingSelectedSessionId = null;
+        }
         await refreshImaging();
-      } catch (err) { setStatus(String(err.message || err)); }
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
+    }
+
+    function _patchSessionInCache(session) {
+      if (!session || session.id == null) return;
+      const idx = imagingSessionsCache.findIndex((x) => String(x.id) === String(session.id));
+      if (idx >= 0) imagingSessionsCache[idx] = session;
+      else imagingSessionsCache.unshift(session);
+    }
+
+    async function closeImagingSessionUi(sessionId) {
+      setStatus("Session schließen…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/close`, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          const idle = data.idle ? ` (${data.idle.reason || "nicht idle"})` : "";
+          setStatus((data.error || "Close fehlgeschlagen") + idle);
+          return;
+        }
+        _patchSessionInCache(data.session);
+        const wx = (data.weather && data.weather.export_status) || "?";
+        const n = (data.weather && data.weather.sample_count) != null ? data.weather.sample_count : "?";
+        setStatus(`Session geschlossen · Wetter ${wx} (${n} Samples) → Ordner weather/`);
+        await refreshImaging();
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
+    }
+
+    async function exportSessionWeatherUi(sessionId) {
+      setStatus("Wetter exportieren…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/weather/export`, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Wetterexport fehlgeschlagen");
+          return;
+        }
+        _patchSessionInCache(data.session);
+        const wx = (data.weather && data.weather.export_status) || "?";
+        const n = (data.weather && data.weather.sample_count) != null ? data.weather.sample_count : "?";
+        setStatus(`Wetter ${wx} (${n} Samples) geschrieben`);
+        renderSelectedSessionDetail();
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
+    }
+
+    async function loadStoragePaths() {
+      try {
+        const response = await fetch("/astro/storage/paths", { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.ok) {
+          imagingStoragePaths = data;
+        }
+      } catch (_err) {
+        /* optional */
+      }
+    }
+
+    async function pushSessionToWorkUi(sessionId) {
+      setStatus("Push → Work…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/push/work`, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Work-Push fehlgeschlagen");
+          return;
+        }
+        if (data.session) _patchSessionInCache(data.session);
+        const siril = data.siril_home_local || "(work_local_root setzen für Siril-Pfad)";
+        setStatus(
+          `Work ok · ${data.files_copied || 0} neu, ${data.files_skipped || 0} unverändert · ` +
+          `Siril-Home: ${siril}`
+        );
+        renderSelectedSessionDetail();
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
+    }
+
+    async function pushSessionToArchiveUi(sessionId) {
+      setStatus("Push → Archiv (NAS)…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/push/archive`, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Archiv-Push fehlgeschlagen");
+          return;
+        }
+        if (data.session) _patchSessionInCache(data.session);
+        setStatus(
+          `Archiv ok · ${data.files_copied || 0} neu, ${data.files_skipped || 0} unverändert · ` +
+          `${data.archive_completeness || "?"} · ${data.archive_path || ""}`
+        );
+        renderSelectedSessionDetail();
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
+    }
+
+    async function pushSessionWorkToArchiveUi(sessionId) {
+      setStatus("Push Work→Archiv (NAS)…");
+      try {
+        const response = await fetch(`/astro/sessions/${sessionId}/push/work-archive`, {
+          method: "POST",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || "Work→Archiv fehlgeschlagen");
+          return;
+        }
+        if (data.session) _patchSessionInCache(data.session);
+        setStatus(
+          `Work→Archiv ok · ${data.files_copied || 0} neu, ${data.files_skipped || 0} unverändert · ` +
+          `${data.archive_completeness || "?"} · ${data.archive_path || ""}`
+        );
+        renderSelectedSessionDetail();
+      } catch (err) {
+        setStatus(String(err.message || err));
+      }
     }
 
     function imagingFramesRemaining(session, imageType) {
@@ -1470,8 +1760,15 @@
     $("img-timing-modal").addEventListener("click", (ev) => {
       if (ev.target === $("img-timing-modal")) closeSessionTimingLog();
     });
+    $("img-remove-close").addEventListener("click", closeRemoveSessionModal);
+    $("img-remove-go").addEventListener("click", () => confirmRemoveSession());
+    $("img-remove-modal").addEventListener("click", (ev) => {
+      if (ev.target === $("img-remove-modal")) closeRemoveSessionModal();
+    });
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") closeSessionTimingLog();
+      if (ev.key !== "Escape") return;
+      closeSessionTimingLog();
+      closeRemoveSessionModal();
     });
     $("btn-restretch").addEventListener("click", async () => {
       if (!imagingSelectedSessionId) return;
