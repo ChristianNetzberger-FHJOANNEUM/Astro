@@ -1,8 +1,9 @@
 # MeLE-PC Autostart (Windows)
 
 > Quelle: Chat mit Cursor, 2026-10-05 · Thema: weather_server Autostart, NINA/SynScan/MeLE nach Stromausfall
+> Beschluss 2026-10-09, noch nicht implementiert: [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md)
 
-Dieses Kapitel beschreibt, **welche Prozesse** auf dem MeLE-PC automatisch starten können, was bei einem **12‑V-/Netzausfall** passiert, und wie man beim **Weiterentwickeln mit Cursor** laufende Instanzen sauber stoppt.
+Dieses Kapitel beschreibt, **welche Prozesse heute** auf dem MeLE-PC automatisch starten, was bei einem **12‑V-/Netzausfall** passiert, und wie man beim **Weiterentwickeln mit Cursor** laufende Instanzen sauber stoppt. Die beschlossene Soll-Architektur (Bootstrap, DEV/PROD) steht in der verlinkten Spec.
 
 App-Bedienung (Buttons NINA/SynScan in der UI) bleibt unter **Hilfe**. Hier geht es um den PC-Betrieb.
 
@@ -88,7 +89,7 @@ Dann wäre die UI nach Login unter http://127.0.0.1:8082/ erreichbar (Port aus `
 - Autostart nur auf dem **Beobachtungs-/Produktions-Login**, oder
 - Task vor dem Entwickeln deaktivieren/stoppen (siehe unten).
 
-Aktuell gibt es **kein** `install-mele-autostart.ps1` — bewusst, damit die Dev-Session nicht mit einem Dauerprozess kollidiert. Bei Bedarf nach dem gleichen Muster wie weather_server nachziehbar.
+Ein Install-Skript für die App gibt es noch nicht. Der Beschluss dafür (Task `Astro-mele_app`, Marker `--no-show`, Umschaltung DEV/PROD) steht in [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md). Diesen Task erst nach Freigabe anlegen.
 
 ## 12‑V-Ausfall — starten alle Tools wieder von selbst?
 

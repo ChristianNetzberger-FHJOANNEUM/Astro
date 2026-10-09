@@ -22,6 +22,12 @@ sections:
       - id: mele-pc-autostart
         title: MeLE-PC Autostart (Windows)
         file: knowledge/mele-pc-autostart.md
+      - id: mele-autostart-dev-prod-spec
+        title: MeLE Autostart und DEV/PROD (Spec)
+        file: knowledge/mele-autostart-dev-prod-spec.md
+      - id: mele-feldnetz-quest-spec
+        title: MeLE Feldnetz, Reiserouter und Quest 3 (Spec)
+        file: knowledge/mele-feldnetz-quest-spec.md
       - id: phd2-guiding-phase1-spec
         title: PHD2 Guiding Phase 1 (Agent-Spec)
         file: knowledge/phd2-guiding-phase1-spec.md

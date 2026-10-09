@@ -1,6 +1,7 @@
 # weather_server (Port, Start/Stop, DB, Clients)
 
 > Quelle: Chat mit Cursor, 2026-10-05 · Stand: nur `weather_server` hat Autostart
+> Geplanter App-Autostart (noch nicht gebaut, startet diesen Dienst nicht): [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md)
 
 ## Was startet automatisch?
 
