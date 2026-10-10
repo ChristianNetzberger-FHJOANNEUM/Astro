@@ -123,6 +123,7 @@ def build_ui(
     on_export_fullres: Callable[[], None],
     on_toggle_sky_view: Callable[[], None],
     on_open_pano: Callable[[], None],
+    on_open_vr: Callable[[], None],
     on_open_weather: Callable[[], None],
     on_open_help: Callable[[], None],
     on_open_prefs: Callable[[], None],
@@ -232,6 +233,9 @@ def build_ui(
                 state.refs["tools_toggle"] = tools_toggle
                 ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
                     "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
+                )
+                ui.button("VR", icon="view_in_ar", on_click=on_open_vr).props("flat dense").tooltip(
+                    "Dasselbe Panorama immersiv. Enter VR auf der Quest braucht später HTTPS."
                 )
                 ui.button("Wetter", icon="cloud", on_click=on_open_weather).props("flat dense").tooltip(
                     "Neues Fenster: GeoSphere-Prognose + lokale Station (weather_server)."

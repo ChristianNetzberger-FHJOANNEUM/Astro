@@ -56,8 +56,8 @@ Weitere Korrekturen gegenüber dem Planungstext:
 | Feld-WLAN, DHCP, SSIDs | `GEPLANT` | diese Seite |
 | S22 als Internet-Gateway | `OPTIONAL` / `GEPLANT` | diese Seite |
 | Quest-Browser auf Port 8082, 2D-Panorama | praktisch bestätigt | diese Seite |
-| Immersives WebXR, nur Panorama | `GEPLANT`, noch nicht gebaut | diese Seite, ADR-VR-003 |
-| HTTPS für WebXR, Port 8443 | `GEPLANT`, noch nicht eingerichtet | ADR-VR-002 |
+| Immersives WebXR, nur Panorama | auf der Quest gesehen: `https://vr.netzberger.at:8443/vr-view` | `app_mele/vr.html`, ADR-VR-003 |
+| HTTPS für WebXR, Port 8443 | eingerichtet im Hausnetz. Start nach Reboot noch manuell | [Dauerbetrieb](astro-vr-dauerbetrieb.md), ADR-VR-002 |
 | VR-Galerie, Planetarium, Steuerpanels | `GEPLANT`, nach dem Panorama | ADR-VR-003 |
 | Mehrclient: Lesen gemeinsam, kritische Befehle später koordiniert | `OFFEN` | diese Seite |
 
@@ -140,19 +140,19 @@ GeoSphere NWP ----> Cache data/weather/ ----> mele_app
 
 ## ADR-VR-001 — Quest bleibt ein Client derselben App
 
-Praktisch bestätigt: Der Quest-Browser öffnet `http://<mele-ip>:8082/` und den bestehenden 360°-Viewer. Der Viewer ist dort eine flache Browserfläche. Eine immersive Session gibt es noch nicht.
+Praktisch bestätigt: Der Quest-Browser öffnet `http://<mele-ip>:8082/` und den bestehenden 360°-Viewer. Der Viewer ist dort eine flache Browserfläche. Die immersive Session läuft über die HTTPS-Adresse aus ADR-VR-002, nicht über Port 8082.
 
 Keine eigene NINA-, SynScan-, PHD2- oder Stellarium-Instanz. Alle späteren Befehle laufen über die MeLE-App. Die App muss ohne Quest und ohne Internet unverändert laufen.
 
 ## ADR-VR-002 — HTTPS nur für die immersive Session
 
-`GEPLANT`, noch nicht eingerichtet. Port 8082 bleibt HTTP. WebXR auf einem anderen Gerät braucht einen vertrauenswürdigen Ursprung. Vorgeschlagene Zusatzadresse, nicht vorhanden: `https://<fester-name>:8443/`, Reverse-Proxy auf `127.0.0.1:8082`.
+Im Hausnetz eingerichtet und auf der Quest verwendet: `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Caddy auf dem MeLE leitet nur die VR-Pfade nach `127.0.0.1:8082` weiter. Technitium löst den Namen lokal auf `192.168.0.176` auf. Das Zertifikat ist ein Let's-Encrypt-Zertifikat über DNS-01 (deSEC). Dieselbe Datei `configs/mele.yaml` gilt weiter.
 
-Ein selbstsigniertes Zertifikat oder eine lokale Zertifizierungsstelle reicht auf der Quest nicht als Nachweis. Bevorzugt ein öffentlich ausgestelltes Zertifikat (DNS-01) und derselbe Name im Haus- und im Feldnetz, jeweils auf die lokale MeLE-Adresse aufgelöst. `configs/mele.yaml` wird dafür nicht umgeschrieben. Systemdienst und Zertifikat erst nach eigener Freigabe. Vor dem ersten immersiven Test auf der Quest: `window.isSecureContext === true` und `immersive-vr` verfügbar. Der 2D-Betrieb bleibt auf HTTP.
+Ein selbstsigniertes Zertifikat oder eine lokale Zertifizierungsstelle reicht auf der Quest nicht. Der Name soll im Feldnetz später auf die dortige MeLE-Adresse zeigen, ohne die Zone öffentlich umzubiegen. Caddy und die App starten nach einem Reboot noch nicht von selbst. Der Dauerbetrieb steht in [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md) und ist noch nicht freigegeben. Der 2D-Betrieb bleibt auf HTTP.
 
 ## ADR-VR-003 — Eine VR-Seite, mehrere spätere Szenen
 
-`GEPLANT`. Noch keine Datei `vr.html`. Die erste Implementierung, wenn sie freigegeben wird, bleibt ein minimaler Panorama-Viewer. Die Struktur muss spätere Szenen aufnehmen können, ohne WebXR neu zu bauen und ohne eine zweite `pano.html` mit Tausenden Zeilen.
+Prototyp: `app_mele/vr.html`, Route `/vr-view`. Nur Panorama, Kopfpose und Enter VR. Keine Gerätebefehle. Die Struktur muss spätere Szenen aufnehmen können, ohne WebXR neu zu bauen und ohne eine zweite `pano.html` mit Tausenden Zeilen. Die Quest hat die immersive Ansicht über die HTTPS-Adresse aus ADR-VR-002 bereits gezeigt.
 
 Der heutige Viewer (`/pano-view`, `app_mele/pano.html`, Three.js r170 lokal) bleibt die 2D-Ansicht. Er enthält Himmel, Kalibrierung, NINA-Polling und GoTo in einer Schleife. WebXR kommt nicht in diese Schleife. Eine eigene Route `/vr-view` in derselben App liest dieselben Panorama-URLs und dieselbe Nordkonvention (`north` / `srcw`). Die Kugel übernimmt `geometry.scale(-1, 1, 1)` ohne zusätzliches `BackSide`. Textur ist die vorhandene Vorschau, nicht das Original und nicht RAW/FITS.
 
@@ -200,7 +200,7 @@ Kurz: Bootstrap bei interaktiver Anmeldung von `Chris`, App zuerst auf 8082, dan
 1. Autostart Phase A, einschließlich DEV/PROD-Umschaltung.
 2. Phase B: SynScan, NINA, PHD2 über die vorhandenen Starter.
 3. Feldnetz, sobald der Beryl AX da ist. Unabhängig von Phase A und B. Kein Umschreiben von `configs/mele.yaml`.
-4. Quest-Browser auf Port 8082 ist praktisch bestätigt. Als Nächstes nur das immersive Panorama, und erst nach freigegebenem HTTPS. Galerie, Himmel und Steuerpanels danach, in der Stufenliste von ADR-VR-003.
+4. Quest-Browser auf Port 8082 ist praktisch bestätigt. Das immersive Panorama läuft im Hausnetz über HTTPS. Als Nächstes der Dauerbetrieb nach Reboot, siehe [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Galerie, Himmel und Steuerpanels danach, in der Stufenliste von ADR-VR-003.
 5. Mehrclient-Koordination für GoTo, Guiding-Start und Capture, bevor eine Quest diese Aktionen auslöst.
 
 GeoSphere bleibt wie implementiert. Kein weiterer Entwicklungsauftrag dafür.
@@ -211,13 +211,14 @@ GeoSphere bleibt wie implementiert. Kein weiterer Entwicklungsauftrag dafür.
 - AZ-GTi im Station-Modus, auch nach Stromverlust. SynScan-Pro über die Grenze Ethernet zu 2,4 GHz.
 - NEQ5/NEQ6 je nach Adapter.
 - S22: Hotspot-Uplink, USB-Tethering, Verhalten bei Mobilfunkverlust, keine IP-Änderung.
-- HTTPS und Zertifikat für die Quest erst nach Freigabe. Dann Panorama-VR testen: sicherer Kontext, `immersive-vr`, keine Spiegelung, Horizont waagrecht.
+- Dauerbetrieb von DNS, Caddy und App nach Reboot. Bestand und Vorschlag: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Noch nicht freigegeben.
 - Headset-Nordkalibrierung erst vor der astronomischen Bildverortung, nicht vor dem ersten Panorama.
 - Mehrclient-Befehle absichern, bevor VR GoTo, Guiding oder Capture auslöst.
 - Autostart und DEV/PROD nach der Autostart-Spec. Kaltstarts ohne Internet.
 
 ## Verwandte Dateien
 
+- [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md) — Caddy, Technitium, Zertifikat, Quest-URL
 - [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md)
 - [MeLE-PC Autostart](mele-pc-autostart.md)
 - [weather_server](weather-server.md)

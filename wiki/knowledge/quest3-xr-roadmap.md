@@ -22,10 +22,10 @@ Beide dürfen dieselben astronomischen Daten und später dieselben HTTP-Schnitts
 |---|---|
 | App auf `0.0.0.0:8082` | `IMPLEMENTIERT` |
 | 2D-Viewer `/pano-view`, `app_mele/pano.html` | `IMPLEMENTIERT` |
-| Three.js r170 lokal, WebXR-Klassen in derselben Datei | `IMPLEMENTIERT` als Bibliothek, **nicht** als Feature |
+| Three.js r170 lokal | Bibliothek, von `/vr-view` für WebXR benutzt. Kein CDN |
 | Kugel `scale(-1, 1, 1)`, equirektangulares JPEG, Nord aus `north` / `srcw` | `IMPLEMENTIERT` im 2D-Viewer |
 | Quest-Browser zeigt App und 2D-Panorama | praktisch bestätigt |
-| `/vr-view`, `vr.html`, HTTPS Port 8443 | `GEPLANT`, Dateien fehlen |
+| `/vr-view`, `app_mele/vr.html` | Prototyp in der App. 2D am PC geprüft. Enter VR auf der Quest wartet auf HTTPS |
 | WCS / Plate-Solving im Repo | nicht vorhanden, für XR-5 `GEPLANT` |
 | Stellarium-Anbindung | `OPTIONAL`, nicht eingebaut |
 | Native Quest-App, Unity, Godot, Unreal | nicht Teil dieses Repos |
@@ -38,7 +38,7 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 
 | Stufe | Inhalt | Priorität | Status |
 |---|---|---|---|
-| XR-1 | Gartenpanorama, `immersive-vr`, Kopfbewegung, Start und Ende | hoch | `GEPLANT` |
+| XR-1 | Gartenpanorama, `immersive-vr`, Kopfbewegung, Start und Ende | hoch | Auf der Quest gesehen. Dauerbetrieb nach Reboot noch offen |
 | XR-2 | Ein eigenes Foto als schwebende Fläche, Vorschau aus einer Session | hoch | `GEPLANT` |
 | XR-3 | Controller: zeigen, wählen, verschieben, skalieren. Noch kein GoTo | hoch | `GEPLANT` |
 | XR-4 | Galerie mehrerer Aufnahmen, Metadaten, offline wenn die Vorschau lokal liegt | mittel | `GEPLANT` |
@@ -49,7 +49,7 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 | XR-9 | Eigenes Raumschiff oder eine Brücke | experimentell | `EXPERIMENTELL` |
 | XR-10 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
 
-XR-1 ist die einzige Stufe, die als Nächstes überhaupt gebaut werden darf, und auch die erst nach freigegebenem HTTPS. RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
+XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
 
 XR-8 wartet auf die Mehrclient-Koordination in der Feldnetz-Spec. Eine Controllerbewegung löst keinen Befehl aus. Bestätigung bleibt Pflicht. Befehle gehen nur durch die bestehenden Backend-Routen.
 
@@ -86,7 +86,7 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 
 ## Offene Prüfungen, erst wenn die Stufe dran ist
 
-- HTTPS und Zertifikat, siehe ADR-VR-002, vor XR-1 auf der Quest.
+- Dauerbetrieb nach Reboot, siehe [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Die Quest-URL selbst ist im Hausnetz schon in Betrieb.
 - Headset-Nordkalibrierung vor XR-5 und XR-6, nicht vorher.
 - Ob Session-Previews für XR-2 schon die richtige Größe und Deckung haben.
 - WCS-Quelle, sobald XR-5 konkret wird. Im Repo gibt es sie noch nicht.
@@ -96,5 +96,6 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 ## Verwandte Seiten
 
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md)
+- [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)
 - [Session Storage](mele-session-storage-weather-archive-spec.md) — Sessions und Vorschauen, keine zweite Bilddatenbank
 - [astro.netzberger.at](astro-netzberger-roadmap.md) — spätere öffentliche Plattform, kein Teil dieser Quest-Stufen

@@ -28,6 +28,9 @@ sections:
       - id: mele-feldnetz-quest-spec
         title: MeLE Feldnetz, Reiserouter und Quest 3 (Spec)
         file: knowledge/mele-feldnetz-quest-spec.md
+      - id: astro-vr-dauerbetrieb
+        title: Astro-VR Dauerbetrieb (Windows)
+        file: knowledge/astro-vr-dauerbetrieb.md
       - id: quest3-xr-roadmap
         title: Quest 3 — XR-Roadmap
         file: knowledge/quest3-xr-roadmap.md

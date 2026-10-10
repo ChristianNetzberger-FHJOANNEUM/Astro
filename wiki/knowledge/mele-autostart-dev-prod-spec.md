@@ -3,7 +3,7 @@
 > Quelle: Chat mit Cursor, 2026-10-09 · Thema: schlanker Bootstrap, DEV/PROD auf Port 8082
 > Stand: **beschlossen, noch nicht implementiert.** Den Windows-Task erst nach ausdrücklicher Freigabe registrieren. Zuerst Phase A, danach Phase B. Feldnetz und Quest hängen nicht daran.
 
-Ist-Betrieb (nur `weather_server` startet automatisch): [MeLE-PC Autostart](mele-pc-autostart.md), [weather_server](weather-server.md).
+Ist-Betrieb (nur `weather_server` startet als Astro-Aufgabe): [MeLE-PC Autostart](mele-pc-autostart.md), [weather_server](weather-server.md). DNS, Caddy und das Quest-Zertifikat: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Die Skripte für `Astro-mele_app` liegen unter `deployment/windows/`, die Aufgabe ist nicht registriert. Die App wird dort nicht zum Windows-Dienst gemacht.
 
 ## Ziel
 

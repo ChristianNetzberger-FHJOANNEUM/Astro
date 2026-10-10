@@ -12,7 +12,7 @@ Namen sind Vorschläge. Sie werden nicht jetzt bei Lupinum angelegt.
 | Adresse | Aufgabe | Zugang | Status |
 |---|---|---|---|
 | `astro.netzberger.at` | Öffentliche interaktive Plattform: Ausrüstung, Berichte, Fotos, später 360° | öffentlich, auch wenn der MeLE aus ist | `GEPLANT` |
-| `vr.netzberger.at` | Lokaler immersiver Viewer für die Quest | nur Astro-LAN, siehe ADR-VR-002 | `GEPLANT`, nicht diese Website |
+| `vr.netzberger.at` | Lokaler immersiver Viewer für die Quest | nur Astro-LAN, Port 8443 | im Hausnetz eingerichtet, nicht diese Website |
 | `control.netzberger.at` | Fernzugriff auf ausgewählte MeLE-Funktionen | privat, authentifiziert | `OPTIONAL`, später |
 
 Die öffentliche Seite bekommt **veröffentlichte Kopien**: Bilder, Panoramen, Metadaten. Sie fragt den MeLE nicht live ab. Ein ausgewählter Session-Bericht kann später aus dem Archiv hinüberkopiert werden. Capture, NINA und die Montierung bleiben auf dem MeLE.

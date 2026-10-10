@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MeLE VR</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #020617; color: #e2e8f0;
+                 font-family: sans-serif; }
+    #bar { position: absolute; z-index: 2; left: 0; right: 0; top: 0; display: flex; gap: 8px;
+           align-items: center; flex-wrap: wrap; padding: 8px 12px; background: rgba(15,23,42,.88); }
+    #bar button { color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
+                  padding: 7px 10px; cursor: pointer; font-size: 13px; }
+    #bar button:disabled { opacity: .45; cursor: not-allowed; }
+    #status, #diag { flex: 1 1 220px; font-size: 12px; line-height: 1.35; }
+    #diag { flex-basis: 100%; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <button id="enter" type="button" disabled>Enter VR</button>
+    <div id="status">Lade …</div>
+    <div id="diag">protocol: … · isSecureContext: … · immersive-vr: …</div>
+  </div>
+  <!-- Three.js 0.170.0 lokal unter /mele-static — kein CDN. -->
+  <script type="module">
+    import * as THREE from "/mele-static/three/three.module.js";
+
+    const params = new URLSearchParams(location.search);
+    let urls = {
+      preview: params.get("preview") || "",
+      png: params.get("png") || "",
+      original: params.get("original") || "",
+    };
+    let tex = params.get("tex") || "preview";
+    let imageUrl = urls[tex] || urls.preview || urls.png || "";
+    const northParam = Number(params.get("north") || 0);
+    const srcwParam = Number(params.get("srcw") || 0);
+    let northOffset = srcwParam > 0 ? (360 * northParam / srcwParam) : 0;
+
+    const statusEl = document.getElementById("status");
+    const diagEl = document.getElementById("diag");
+    const enterBtn = document.getElementById("enter");
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+    camera.position.set(0, 0, 0);
+    camera.rotation.order = "YXZ";
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType("local");
+    renderer.xr.setFramebufferScaleFactor(1);
+    document.body.appendChild(renderer.domElement);
+
+    const sphere = new THREE.Group();
+    // Dieselbe Innenansicht wie pano.html: scale(-1,1,1), kein zusätzliches BackSide.
+    // Y-Drehung legt Azimut 0 (Nord) auf die Blickrichtung −Z, passend zu applyLook.
+    function applyNorth(offset) {
+      northOffset = offset;
+      sphere.rotation.y = THREE.MathUtils.degToRad(northOffset + 90);
+    }
+    applyNorth(northOffset);
+    const geometry = new THREE.SphereGeometry(500, 96, 48);
+    geometry.scale(-1, 1, 1);
+    const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
+    sphere.add(new THREE.Mesh(geometry, material));
+    scene.add(sphere);
+
+    let lon = 0;
+    let lat = 18;
+    let fov = 75;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let textureReady = false;
+
+    function applyLook() {
+      lat = Math.max(-85, Math.min(85, lat));
+      camera.rotation.y = THREE.MathUtils.degToRad(lon);
+      camera.rotation.x = THREE.MathUtils.degToRad(lat);
+      camera.rotation.z = 0;
+    }
+
+    function northLabel() {
+      const offset = srcwParam > 0 || northOffset
+        ? `Nord-Offset ${northOffset.toFixed(1)}°`
+        : "Kein srcw — Nord-Offset 0°";
+      const kind = tex === "png" ? "Transparentes PNG" : (tex === "original" ? "Original" : "Vorschau");
+      const stars = tex === "png" ? " · Sterne nur in der 360-Ansicht" : "";
+      return `${kind}${stars} · ${offset}`;
+    }
+
+    function showDiag(xrText) {
+      diagEl.textContent =
+        `protocol: ${location.protocol} (${location.origin})`
+        + ` · isSecureContext: ${window.isSecureContext}`
+        + ` · immersive-vr: ${xrText}`;
+    }
+
+    function refreshEnterButton() {
+      const secure = window.isSecureContext;
+      const xr = navigator.xr;
+      if (!xr) {
+        showDiag("nein (navigator.xr fehlt)");
+        enterBtn.disabled = true;
+        if (textureReady) {
+          setStatus(`${northLabel()} · Ziehen: umsehen. Dieser Browser hat kein WebXR.`);
+        }
+        return;
+      }
+      xr.isSessionSupported("immersive-vr").then((ok) => {
+        showDiag(ok ? "ja" : "nein");
+        enterBtn.disabled = !(textureReady && secure && ok);
+        if (!textureReady) return;
+        if (!secure) {
+          setStatus(
+            `${northLabel()} · Ziehen: umsehen. isSecureContext ist false. `
+            + "Das Chrome-Flag hat diesen Origin nicht als sicher gewertet. "
+            + `Eingetragen sein muss exakt ${location.origin}`
+          );
+          return;
+        }
+        setStatus(ok
+          ? `${northLabel()} · Ziehen: umsehen, oder Enter VR. Ein Foto hat keine Tiefenparallaxe.`
+          : `${northLabel()} · Ziehen: umsehen. immersive-vr wird hier nicht unterstützt.`);
+      }).catch((err) => {
+        const message = err && err.message ? err.message : String(err);
+        showDiag(`Fehler: ${message}`);
+        enterBtn.disabled = true;
+        if (textureReady) {
+          setStatus(`${northLabel()} · WebXR-Abfrage fehlgeschlagen: ${message}`);
+        }
+      });
+    }
+
+    const canvas = renderer.domElement;
+    canvas.addEventListener("pointerdown", (event) => {
+      if (renderer.xr.isPresenting) return;
+      dragging = true;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* bereits beendet */ }
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!dragging || renderer.xr.isPresenting) return;
+      const dx = event.clientX - lastX;
+      const dy = event.clientY - lastY;
+      lon += dx * 0.12 * (fov / 75);
+      lat -= dy * 0.12 * (fov / 75);
+      lastX = event.clientX;
+      lastY = event.clientY;
+      applyLook();
+    });
+    canvas.addEventListener("pointerup", () => { dragging = false; });
+    canvas.addEventListener("pointercancel", () => { dragging = false; });
+    canvas.addEventListener("wheel", (event) => {
+      if (renderer.xr.isPresenting) return;
+      event.preventDefault();
+      fov = THREE.MathUtils.clamp(fov + Math.sign(event.deltaY) * 4, 18, 100);
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }, { passive: false });
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    enterBtn.addEventListener("click", async () => {
+      if (!navigator.xr || !window.isSecureContext) return;
+      if (renderer.xr.isPresenting) {
+        const session = renderer.xr.getSession();
+        if (session) await session.end();
+        return;
+      }
+      try {
+        const session = await navigator.xr.requestSession("immersive-vr", {
+          optionalFeatures: ["local"],
+        });
+        await renderer.xr.setSession(session);
+        enterBtn.textContent = "VR beenden";
+        session.addEventListener("end", () => {
+          enterBtn.textContent = "Enter VR";
+          applyLook();
+          refreshEnterButton();
+        });
+      } catch (err) {
+        setStatus(`VR-Start abgelehnt: ${err && err.message ? err.message : err}`);
+      }
+    });
+
+    async function useAppPanorama() {
+      if (imageUrl) return true;
+      setStatus("Lade das in der MeLE-App gewählte Panorama …");
+      try {
+        const response = await fetch("/vr/current", { cache: "no-store" });
+        if (!response.ok) {
+          setStatus("In der MeLE-App ist kein Panorama gewählt.");
+          return false;
+        }
+        const data = await response.json();
+        urls = {
+          preview: data.preview || "",
+          png: data.png || "",
+          original: data.original || "",
+        };
+        tex = data.tex || "preview";
+        imageUrl = urls[tex] || urls.preview || urls.png || "";
+        const srcw = Number(data.srcw || 0);
+        const north = Number(data.north || 0);
+        applyNorth(srcw > 0 ? (360 * north / srcw) : 0);
+      } catch {
+        setStatus("Panorama der MeLE-App nicht erreichbar.");
+        return false;
+      }
+      if (!imageUrl) {
+        setStatus("In der MeLE-App ist kein Panorama gewählt.");
+        return false;
+      }
+      return true;
+    }
+
+    function loadTexture() {
+      if (!imageUrl) {
+        setStatus("In der MeLE-App ist kein Panorama gewählt.");
+        return;
+      }
+      setStatus("Lade Panorama …");
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        imageUrl,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.minFilter = THREE.LinearFilter;
+          texture.generateMipmaps = false;
+          material.map = texture;
+          material.needsUpdate = true;
+          textureReady = true;
+          const kind = tex === "png" ? "Transparentes PNG, ohne Sterne" : (tex === "original" ? "Original" : "Vorschau");
+          setStatus(`${kind} · ${northLabel()} · lade Ansicht …`);
+          refreshEnterButton();
+        },
+        undefined,
+        () => {
+          textureReady = false;
+          enterBtn.disabled = true;
+          setStatus(`Panorama konnte nicht geladen werden: ${imageUrl}`);
+        },
+      );
+    }
+
+    applyLook();
+    refreshEnterButton();
+    useAppPanorama().then((ok) => { if (ok) loadTexture(); });
+    renderer.setAnimationLoop(() => {
+      if (!renderer.xr.isPresenting) applyLook();
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

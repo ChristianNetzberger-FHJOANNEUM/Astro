@@ -285,6 +285,7 @@ def run_app(port: int | None = None) -> None:
     wiki_media_dir.mkdir(parents=True, exist_ok=True)
     app.add_static_files("/wiki-media", wiki_media_dir)
     pano_html = (Path(__file__).resolve().parent / "pano.html").read_text(encoding="utf-8")
+    vr_html = (Path(__file__).resolve().parent / "vr.html").read_text(encoding="utf-8")
     nina = NinaClient(settings.nina_base_url)
     phd2 = get_shared_phd2_client(host=settings.phd2_host, port=settings.phd2_port)
     phd2.set_fullframe_min_interval(settings.phd2_fullframe_interval_s)
@@ -311,6 +312,18 @@ def run_app(port: int | None = None) -> None:
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
         return HTMLResponse(pano_html)
+
+    vr_current: dict[str, str] = {}
+
+    @app.get("/vr-view")
+    def vr_view() -> HTMLResponse:
+        return HTMLResponse(vr_html)
+
+    @app.get("/vr/current")
+    def vr_current_api() -> JSONResponse:
+        if not (vr_current.get("preview") or vr_current.get("png")):
+            return JSONResponse({"ok": False, "error": "Kein Panorama geladen."}, status_code=404)
+        return JSONResponse(vr_current)
 
     @app.get("/guiding-view")
     def guiding_view() -> HTMLResponse:
@@ -3282,6 +3295,7 @@ def run_app(port: int | None = None) -> None:
             refresh_image()
             refresh_meta()
             _call(state.refs.get("refresh_files"))
+            _publish_vr_panorama()
 
         def _queue_select_image(name: str, *, keep_site: bool = False) -> None:
             # Timer-Callback direkt awaiten (nicht create_task), sonst fehlt der NiceGUI-Slot.
@@ -3440,6 +3454,7 @@ def run_app(port: int | None = None) -> None:
             state.status = f"{state.image_path.name}: Norden x = {state.north_x:.0f}"
             ui.notify(state.status, type="positive")
             refresh_meta()
+            _publish_vr_panorama()
 
         def on_pointer(
             preview_x: float,
@@ -3604,10 +3619,9 @@ def run_app(port: int | None = None) -> None:
             refresh_image()
             refresh_meta()
 
-        def on_open_pano() -> None:
+        def _panorama_payload() -> dict[str, str] | None:
             if state.image_path is None:
-                ui.notify("Zuerst ein Panorama waehlen.", type="warning")
-                return
+                return None
             stem = state.image_path.stem
             preview = f"/mele-media/{stem}.preview.jpg"
             full = settings.horizon_dir / f"{stem}.horizon.full.png"
@@ -3616,18 +3630,12 @@ def run_app(port: int | None = None) -> None:
             chosen = full if full.is_file() else small
             if chosen.is_file():
                 png = f"/mele-export/{chosen.name}?v={int(chosen.stat().st_mtime)}"
-            original = f"/mele-source/{state.image_path.name}"
-            stored = load_photo_site(sites_path(settings.horizon_dir), stem)
-            if stored is not None:
-                state.latitude_deg = stored.latitude_deg
-                state.longitude_deg = stored.longitude_deg
-                state.site_src = stored.source or "saved"
             payload = {
                 "stem": stem,
                 "tex": "png" if png else "preview",
                 "preview": preview,
                 "png": png,
-                "original": original,
+                "original": f"/mele-source/{state.image_path.name}",
                 "north": f"{state.north_x:.3f}",
                 "srcw": str(state.source_width),
                 "srch": str(state.source_height),
@@ -3638,8 +3646,30 @@ def run_app(port: int | None = None) -> None:
                 payload["lon"] = f"{state.longitude_deg:.6f}"
             if state.photo_when is not None:
                 payload["photo"] = state.photo_when.astimezone(timezone.utc).isoformat()
-            query = urlencode(payload)
-            ui.run_javascript(f"window.open('/pano-view?{query}', '_blank')")
+            return payload
+
+        def _publish_vr_panorama() -> None:
+            payload = _panorama_payload()
+            if payload is None:
+                return
+            vr_current.clear()
+            vr_current.update(payload)
+
+        def on_open_pano() -> None:
+            payload = _panorama_payload()
+            if payload is None:
+                ui.notify("Zuerst ein Panorama waehlen.", type="warning")
+                return
+            _publish_vr_panorama()
+            ui.run_javascript(f"window.open('/pano-view?{urlencode(payload)}', '_blank')")
+
+        def on_open_vr() -> None:
+            payload = _panorama_payload()
+            if payload is None:
+                ui.notify("Zuerst ein Panorama waehlen.", type="warning")
+                return
+            _publish_vr_panorama()
+            ui.run_javascript(f"window.open('/vr-view?{urlencode(payload)}', '_blank')")
 
         def on_open_weather() -> None:
             if state.latitude_deg is None or state.longitude_deg is None:
@@ -4017,6 +4047,7 @@ def run_app(port: int | None = None) -> None:
             on_export_fullres=on_export_fullres,
             on_toggle_sky_view=on_toggle_sky_view,
             on_open_pano=on_open_pano,
+            on_open_vr=on_open_vr,
             on_open_weather=on_open_weather,
             on_open_help=on_open_help,
             on_open_prefs=on_open_prefs,

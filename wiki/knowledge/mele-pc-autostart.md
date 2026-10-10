@@ -11,8 +11,10 @@ App-Bedienung (Buttons NINA/SynScan in der UI) bleibt unter **Hilfe**. Hier geht
 
 | Komponente | Autostart sinnvoll? | Stand |
 |---|---|---|
-| `weather_server` | Ja — Logger soll dauerhaft laufen | **eingebaut** (Task Scheduler) — **einziger Autostart derzeit** |
-| MeLE-App (`app_mele`) | Optional — UI nach Login | Muster wie weather_server, noch kein Install-Script |
+| `weather_server` | Ja — Logger soll dauerhaft laufen | **eingebaut** (Task Scheduler) — einziger Astro-Task |
+| Technitium DNS | Ja — Namensauflösung für die Quest | Windows-Dienst, automatisch. Details: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md) |
+| Caddy (HTTPS 8443) | Ja — Quest-URL nach Reboot | Skript `AstroVR-Caddy`, noch nicht registriert. [Dauerbetrieb](astro-vr-dauerbetrieb.md) |
+| MeLE-App (`app_mele`) | Optional — UI nach Login | Skript `Astro-mele_app` bei Anmeldung, noch nicht registriert |
 | NINA / SynScan Pro | Vorsichtig — brauchen USB/ASCOM/Montierung | Nicht empfohlen als blinder Boot-Start; besser manuell oder verzögert |
 
 Details zu Port **8765**, manuellem Start/Stop, SQLite-Pfad und Client-Zugriff: [weather_server](weather-server.md).
