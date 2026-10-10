@@ -1,7 +1,7 @@
 # MeLE Feldnetz, Reiserouter und Quest 3 (Spec)
 
 > Quelle: Chat mit Cursor, 2026-10-09 · Thema: mobiles Astro-Netz ohne Standort-WLAN
-> Stand: Architekturentscheidung. Router noch nicht beschafft, Quest noch nicht angebunden, App-Autostart noch nicht gebaut.
+> Stand: Architekturentscheidung. Router noch nicht beschafft, App-Autostart noch nicht gebaut. Quest-Browser erreicht die App und den 2D-Viewer. Immersives WebXR ist beschlossen, aber noch nicht implementiert.
 > Kein Implementierungsauftrag. Keine Router- oder Windows-Änderung ohne gesonderte Freigabe.
 
 Statusworte: `IMPLEMENTIERT` (im Code), `GEPLANT` (beschlossen, nicht gebaut), `OPTIONAL`, `OFFEN` (noch zu prüfen).
@@ -55,8 +55,10 @@ Weitere Korrekturen gegenüber dem Planungstext:
 | GL.iNet GL-MT3000 Beryl AX | `AUSGEWÄHLT`, Kauf und Inbetriebnahme `OFFEN` | diese Seite |
 | Feld-WLAN, DHCP, SSIDs | `GEPLANT` | diese Seite |
 | S22 als Internet-Gateway | `OPTIONAL` / `GEPLANT` | diese Seite |
-| Quest 3 | `GEPLANT` | diese Seite |
-| HTTPS / WebXR Port 8443 | `GEPLANT`, nicht vorhanden | diese Seite |
+| Quest-Browser auf Port 8082, 2D-Panorama | praktisch bestätigt | diese Seite |
+| Immersives WebXR, nur Panorama | `GEPLANT`, noch nicht gebaut | diese Seite, ADR-VR-003 |
+| HTTPS für WebXR, Port 8443 | `GEPLANT`, noch nicht eingerichtet | ADR-VR-002 |
+| VR-Galerie, Planetarium, Steuerpanels | `GEPLANT`, nach dem Panorama | ADR-VR-003 |
 | Mehrclient: Lesen gemeinsam, kritische Befehle später koordiniert | `OFFEN` | diese Seite |
 
 Gerätenamen aus der Planung (MeLE Quieter 4C, AZ-GTi, NEQ5/NEQ6, Quest 3, Galaxy S22) sind hier Architekturrollen, keine Inventar-Einträge. Das Inventar bleibt `wiki/inventar/hardware.md`.
@@ -136,25 +138,56 @@ GeoSphere NWP ----> Cache data/weather/ ----> mele_app
                     nur bei Netz: S22 --> Beryl --> MeLE
 ```
 
-## ADR-VR-001 — Quest als weiterer Browser-Client
+## ADR-VR-001 — Quest bleibt ein Client derselben App
 
-`GEPLANT`. Keine eigene NINA-, SynScan- oder PHD2-Instanz. Alle Befehle laufen über die MeLE-App.
+Praktisch bestätigt: Der Quest-Browser öffnet `http://<mele-ip>:8082/` und den bestehenden 360°-Viewer. Der Viewer ist dort eine flache Browserfläche. Eine immersive Session gibt es noch nicht.
 
-Phase Q1: Quest-Browser öffnet `http://<mele-ip>:8082/`. Bestehende Oberfläche, nur Anzeige und Bedienprobe. Kein Umbau der Steuerung.
+Keine eigene NINA-, SynScan-, PHD2- oder Stellarium-Instanz. Alle späteren Befehle laufen über die MeLE-App. Die App muss ohne Quest und ohne Internet unverändert laufen.
 
-Phase Q2, immersiver 360°-Viewer: WebXR über vorhandene Panorama-/Horizontdaten, Katalog, RA/Dec, Azimut/Höhe und Sichtfeld. GoTo-Schnittstellen zunächst nur lesend. In `app_mele/layout.py` steht dazu nur der Hinweis auf eine spätere Quest-Skybox; eine WebXR-Ansicht gibt es nicht.
+## ADR-VR-002 — HTTPS nur für die immersive Session
 
-Die Quest liefert die Kopfpose relativ zu ihrem XR-Raum, nicht als astronomisches Azimut. Eine Nordkalibrierung ist `OFFEN` und vor Q2 zu definieren.
+`GEPLANT`, noch nicht eingerichtet. Port 8082 bleibt HTTP. WebXR auf einem anderen Gerät braucht einen vertrauenswürdigen Ursprung. Vorgeschlagene Zusatzadresse, nicht vorhanden: `https://<fester-name>:8443/`, Reverse-Proxy auf `127.0.0.1:8082`.
 
-Phase Q3, `OPTIONAL`: Objekt wählen, Infos, GoTo nur nach ausdrücklicher Bestätigung, Gesichtsfeld, Kameravorschau, Aufnahmestatus und Wetter im Raum. Weiterhin keine Geräteclients in der Quest.
+Ein selbstsigniertes Zertifikat oder eine lokale Zertifizierungsstelle reicht auf der Quest nicht als Nachweis. Bevorzugt ein öffentlich ausgestelltes Zertifikat (DNS-01) und derselbe Name im Haus- und im Feldnetz, jeweils auf die lokale MeLE-Adresse aufgelöst. `configs/mele.yaml` wird dafür nicht umgeschrieben. Systemdienst und Zertifikat erst nach eigener Freigabe. Vor dem ersten immersiven Test auf der Quest: `window.isSecureContext === true` und `immersive-vr` verfügbar. Der 2D-Betrieb bleibt auf HTTP.
 
-## ADR-VR-002 — WebXR getrennt von der heutigen App
+## ADR-VR-003 — Eine VR-Seite, mehrere spätere Szenen
 
-`GEPLANT`. Die normale Oberfläche bleibt HTTP auf Port 8082. Immersives WebXR braucht in der Regel einen sicheren Ursprung. Vorgeschlagene spätere Adresse, nicht implementiert: `https://<mele-host>:8443/vr/`.
+`GEPLANT`. Noch keine Datei `vr.html`. Die erste Implementierung, wenn sie freigegeben wird, bleibt ein minimaler Panorama-Viewer. Die Struktur muss spätere Szenen aufnehmen können, ohne WebXR neu zu bauen und ohne eine zweite `pano.html` mit Tausenden Zeilen.
 
-Ein selbstsigniertes Zertifikat ohne Vertrauen auf der Quest reicht nicht. Ein lokaler Reverse-Proxy ist eine mögliche Lösung. Die NiceGUI-App wird nicht wegen WebXR umgebaut. Zertifikatsweg ist `OFFEN`.
+Der heutige Viewer (`/pano-view`, `app_mele/pano.html`, Three.js r170 lokal) bleibt die 2D-Ansicht. Er enthält Himmel, Kalibrierung, NINA-Polling und GoTo in einer Schleife. WebXR kommt nicht in diese Schleife. Eine eigene Route `/vr-view` in derselben App liest dieselben Panorama-URLs und dieselbe Nordkonvention (`north` / `srcw`). Die Kugel übernimmt `geometry.scale(-1, 1, 1)` ohne zusätzliches `BackSide`. Textur ist die vorhandene Vorschau, nicht das Original und nicht RAW/FITS.
 
-Mehrere Bediengeräte (iPad, PC, später Quest) dürfen gleichzeitig lesen: Wetter, Kamerabilder, Objektinfos. Kritische Aktionen — GoTo, Guiding-Start, Capture-Steuerung — bekommen später eine zentrale Koordination im bestehenden Backend (`OFFEN`). Nicht jede Funktion wird gesperrt. Q1 bleibt die bestehende Oberfläche im Quest-Browser, ohne diese Koordination.
+Gedankliche Trennung, in Version 1 nur das, was die Panoramaszene braucht:
+
+| Teil | Aufgabe | Version 1 |
+|---|---|---|
+| XR-Lifecycle | Session starten und beenden, Kamera, später Controller | ja, nur Kopfpose |
+| Panorama-Szene | equirektangulare Kugel | ja |
+| Galerie-, Himmels-, Panel-Szenen | spätere Räume | nicht anlegen |
+| Datenzugriff | vorhandene Panorama-, Session-, Katalog- und Bild-APIs | nur die Panorama-URL |
+| Steuerbefehle | bestehende Backend-Routen, später mit Mehrclient-Koordination | keine |
+
+Keine leeren Szenen, kein Plugin-System, keine zweite Three.js-Kopie. Kleine lokale Module nur, wenn sonst Lifecycle und Szene in einer Datei verschmelzen. Der 2D-Viewer erhält höchstens einen Link auf `/vr-view`.
+
+Ein einzelnes Panorama ist monoskopisch. Die Quest zeichnet es für beide Augen. Daraus entsteht keine Tiefeninformation. Die Headset-Nordkalibrierung ist nicht Teil von Version 1. Die vorhandene Nordausrichtung des Fotos bleibt die einzige Konvention.
+
+### Ausbaustufen nach bestandener Panorama-Abnahme
+
+Nicht vorziehen. Reihenfolge nach dem ersten erfolgreichen Quest-Test:
+
+1. Panorama in VR. Kopfbewegung, Start, Ende, erneuter Start. Keine Overlays, keine Controller-Befehle.
+2. Eine eigene Aufnahme als schwebende Bildfläche. Vorschau aus einer vorhandenen Session, keine kopierte Datenbank, keine FITS-Textur.
+3. Controller als Zeiger: auswählen, verschieben, vergrößern. Noch kein GoTo.
+4. Session-Galerie über die bestehenden Session- und Preview-Schnittstellen.
+5. Bild an der Himmelsposition. Dafür RA/Dec, Bildfeld, Drehung und möglichst eine astrometrische Lösung (WCS). Ein positioniertes Foto ist kein 3D-Modell des Objekts.
+6. Räumliche Bedienpanels und erst dann GoTo, Guiding oder Capture. Nur über bestehende APIs, nur nach ausdrücklicher Bestätigung, erst wenn die Mehrclient-Koordination steht. Eine Controllerbewegung allein löst keinen Befehl aus.
+
+Sternkatalog, RA/Dec nach Azimut/Höhe und Ephemeriden bleiben die vorhandenen MeLE-Funktionen. Stellarium darf später optional Objekte und Texte liefern. Es wird nicht ins WebXR eingebettet, ist keine Laufzeitvoraussetzung und steuert die Montierung nicht.
+
+Galerie, Planetarium, Steuerzentrale und ein separates Raumschiff stehen in der [Quest-3-XR-Roadmap](quest3-xr-roadmap.md). Das ist eine Roadmap, kein Auftrag. Version 1 bleibt das Panorama. Die Roadmap-Stufen heißen XR-1 bis XR-10, damit sie nicht mit Q1 auf dieser Seite verwechselt werden.
+
+Mond- und Planetenmodelle sowie eine freie Weltraumsicht sind eine eigene spätere Stufe. Ein Foto liefert die dafür nötige Oberflächenzuordnung nicht mit.
+
+Mehrere Bediengeräte dürfen gleichzeitig lesen: Wetter, Kamerabilder, Objektinfos. Kritische Aktionen — GoTo, Guiding-Start, Capture-Steuerung — bekommen die zentrale Koordination im Backend (`OFFEN`), bevor eine Quest sie auslösen darf.
 
 ## ADR-BOOT-001 und ADR-DEV-001
 
@@ -167,7 +200,7 @@ Kurz: Bootstrap bei interaktiver Anmeldung von `Chris`, App zuerst auf 8082, dan
 1. Autostart Phase A, einschließlich DEV/PROD-Umschaltung.
 2. Phase B: SynScan, NINA, PHD2 über die vorhandenen Starter.
 3. Feldnetz, sobald der Beryl AX da ist. Unabhängig von Phase A und B. Kein Umschreiben von `configs/mele.yaml`.
-4. Quest 3 zuerst als normaler Browser auf Port 8082. WebXR erst danach.
+4. Quest-Browser auf Port 8082 ist praktisch bestätigt. Als Nächstes nur das immersive Panorama, und erst nach freigegebenem HTTPS. Galerie, Himmel und Steuerpanels danach, in der Stufenliste von ADR-VR-003.
 5. Mehrclient-Koordination für GoTo, Guiding-Start und Capture, bevor eine Quest diese Aktionen auslöst.
 
 GeoSphere bleibt wie implementiert. Kein weiterer Entwicklungsauftrag dafür.
@@ -178,8 +211,9 @@ GeoSphere bleibt wie implementiert. Kein weiterer Entwicklungsauftrag dafür.
 - AZ-GTi im Station-Modus, auch nach Stromverlust. SynScan-Pro über die Grenze Ethernet zu 2,4 GHz.
 - NEQ5/NEQ6 je nach Adapter.
 - S22: Hotspot-Uplink, USB-Tethering, Verhalten bei Mobilfunkverlust, keine IP-Änderung.
-- Quest-Browser gegen Port 8082. Danach erst HTTPS/WebXR und Nordkalibrierung.
-- Mehrclient-Befehle absichern, bevor Q3 etwas auslöst.
+- HTTPS und Zertifikat für die Quest erst nach Freigabe. Dann Panorama-VR testen: sicherer Kontext, `immersive-vr`, keine Spiegelung, Horizont waagrecht.
+- Headset-Nordkalibrierung erst vor der astronomischen Bildverortung, nicht vor dem ersten Panorama.
+- Mehrclient-Befehle absichern, bevor VR GoTo, Guiding oder Capture auslöst.
 - Autostart und DEV/PROD nach der Autostart-Spec. Kaltstarts ohne Internet.
 
 ## Verwandte Dateien
@@ -187,6 +221,8 @@ GeoSphere bleibt wie implementiert. Kein weiterer Entwicklungsauftrag dafür.
 - [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md)
 - [MeLE-PC Autostart](mele-pc-autostart.md)
 - [weather_server](weather-server.md)
+- [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)
+- [astro.netzberger.at](astro-netzberger-roadmap.md) — öffentliche Website, nicht auf dem MeLE
 - [Session Storage](mele-session-storage-weather-archive-spec.md)
 - `configs/mele.yaml` — Port 8082, Capture, WORK, ARCHIVE
 - `mele/weather.py` — GeoSphere-Cache

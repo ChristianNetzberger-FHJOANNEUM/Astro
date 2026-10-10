@@ -28,6 +28,12 @@ sections:
       - id: mele-feldnetz-quest-spec
         title: MeLE Feldnetz, Reiserouter und Quest 3 (Spec)
         file: knowledge/mele-feldnetz-quest-spec.md
+      - id: quest3-xr-roadmap
+        title: Quest 3 — XR-Roadmap
+        file: knowledge/quest3-xr-roadmap.md
+      - id: astro-netzberger-roadmap
+        title: astro.netzberger.at — öffentliche Plattform (Roadmap)
+        file: knowledge/astro-netzberger-roadmap.md
       - id: phd2-guiding-phase1-spec
         title: PHD2 Guiding Phase 1 (Agent-Spec)
         file: knowledge/phd2-guiding-phase1-spec.md
