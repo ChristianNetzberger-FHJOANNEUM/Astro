@@ -37,9 +37,10 @@ Nach Neustart von `mele_app` die Seite neu öffnen. Die Statuszeile nennt die Za
 
 ## Danach
 
-Das lesende Dashboard ist XR-7 und beginnt hier nicht.
+Das lesende Dashboard und der Abzug-Schalter stehen in [v0.5](astro-vr-architektur-v0.5.md). Die Controllerarchitektur beginnt dort nicht.
 
 ## Verwandte Seiten
 
 - [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md)
+- [Astro-VR Architektur v0.5](astro-vr-architektur-v0.5.md) — XR-7a auf der Quest gesehen
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)

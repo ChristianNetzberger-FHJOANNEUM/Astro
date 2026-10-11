@@ -45,15 +45,17 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 | XR-5 | Foto an der Himmelsposition: RA/Dec, Maßstab, Drehung, Gesichtsfeld, optional WCS | mittel | `GEPLANT` |
 | XR-6 | Planetarium über dem echten Horizont, Katalog und Ephemeriden der App, Headset-Nordkalibrierung | mittel | `GEPLANT` |
 | XR-7 | Schwebende Statuspanels: Wetter, Montierung, Guiding, Vorschau. Nur lesen | mittel | `GEPLANT` |
-| XR-8 | GoTo, Guiding, Capture aus VR | später | `OPTIONAL` |
+| XR-8 | Zuerst Konzept: Inventar der Desktop-Werkzeuge und Panelgruppen. Keine Gerätebefehle vor der Abstimmung | später | `KONZEPT` |
 | XR-9 | Eigenes Raumschiff oder eine Brücke | experimentell | `EXPERIMENTELL` |
 | XR-10 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
 
 XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
 
-XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im bestehenden Gartenpanorama, gleiche Positionen wie der Desktop, 15-Sekunden-Takt. XR-6b, Sternbildlinien und deutsche Namen, ist auf der Quest gesehen: lesbar, nicht zu dominant, [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md). XR-6c, Sonne, Mond und Planeten, ist auf der Quest abgenommen: [Astro-VR Architektur v0.4](astro-vr-architektur-v0.4.md). Die Zeile XR-6 bleibt `GEPLANT`, weil das Dashboard und die Headset-Nordkalibrierung nicht dazugehören. Details zu den Sternen in [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md).
+XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im bestehenden Gartenpanorama, gleiche Positionen wie der Desktop, 15-Sekunden-Takt. XR-6b, Sternbildlinien und deutsche Namen, ist auf der Quest gesehen: lesbar, nicht zu dominant, [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md). XR-6c, Sonne, Mond und Planeten, ist auf der Quest abgenommen: [Astro-VR Architektur v0.4](astro-vr-architektur-v0.4.md). Die Zeile XR-6 bleibt `GEPLANT`, weil die Headset-Nordkalibrierung nicht dazugehört. XR-7a, das lesende schwebende Panel, ist auf der Quest gesehen: in Nordrichtung gut sichtbar, der Sternenhimmel bleibt, [Astro-VR Architektur v0.5](astro-vr-architektur-v0.5.md). XR-7b ist auf der Quest abgenommen: Zeigefingerabzug blendet aus, Einblenden nach Kopfdrehung setzt neu. Der Controllerstrahl mit der Testfläche `TEST` ist auf der Quest abgenommen: [Astro-VR Architektur v0.6](astro-vr-architektur-v0.6.md). Details zu den Sternen in [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md).
 
-XR-8 wartet auf die Mehrclient-Koordination in der Feldnetz-Spec. Eine Controllerbewegung löst keinen Befehl aus. Bestätigung bleibt Pflicht. Befehle gehen nur durch die bestehenden Backend-Routen.
+XR-3b, Telrad und Himmelsauswahl, ist auf der Quest abgenommen: [Astro-VR Architektur v0.8](astro-vr-architektur-v0.8.md). XR-3c, die Einstellungen im Dashboard, ist auf der Quest abgenommen: [Astro-VR Architektur v0.9](astro-vr-architektur-v0.9.md).
+
+XR-8a liegt in [Astro-VR Desktop-Inventar v0.1](astro-vr-desktop-inventar-v0.1.md). XR-8b ist freigegeben: [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md). XR-8c, die Übersicht mit OBJEKTE, HIMMEL und EINSTELLUNGEN, ist auf der Quest abgenommen: [Astro-VR Architektur v1.0](astro-vr-architektur-v1.0.md). XR-8d, Sterne, Sternbilder, Messier, Grenzhelligkeit und die Zeit im Himmel-Panel, ist gebaut, die Quest-Abnahme ist offen: [Astro-VR Architektur v1.1](astro-vr-architektur-v1.1.md). Die Quest bleibt der Viewer. Guiding, SynScan und die Session-Verwaltung bleiben in der App. Gerätebefehle bleiben aus. GoTo bleibt zweistufig. Die Mehrclient-Sperre fehlt in `POST /nina/mount/slew`.
 
 XR-9 hat zwei denkbare Modi, beide außerhalb der App: Simulation ohne Teleskop, oder eine Brücke, die MeLE-Daten nur anzeigt. Die Sonnensystemsimulation ist nicht Teil des Cockpits, sondern XR-10.
 
@@ -101,6 +103,15 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 - [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md) — XR-6a abgenommen am 2026-10-11
 - [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md) — XR-6b auf der Quest gesehen
 - [Astro-VR Architektur v0.4](astro-vr-architektur-v0.4.md) — XR-6c auf der Quest abgenommen
+- [Astro-VR Architektur v0.5](astro-vr-architektur-v0.5.md) — XR-7a und XR-7b auf der Quest abgenommen
+- [Astro-VR Architektur v0.6](astro-vr-architektur-v0.6.md) — XR-3 Strahl auf der Quest abgenommen
+- [Astro-VR Architektur v0.7](astro-vr-architektur-v0.7.md) — Objektinfo auf der Quest abgenommen
+- [Astro-VR Architektur v0.8](astro-vr-architektur-v0.8.md) — XR-3b Telrad, auf der Quest abgenommen
+- [Astro-VR Architektur v0.9](astro-vr-architektur-v0.9.md) — XR-3c Preferences, auf der Quest abgenommen
+- [Astro-VR Desktop-Inventar v0.1](astro-vr-desktop-inventar-v0.1.md) — XR-8a
+- [Astro-VR Architektur v1.0](astro-vr-architektur-v1.0.md) — XR-8c Navigation, auf der Quest abgenommen
+- [Astro-VR Architektur v1.1](astro-vr-architektur-v1.1.md) — XR-8d Himmel, Abnahme offen
+- [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md) — XR-8b, für XR-8c freigegeben
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md)
 - [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)
 - [Session Storage](mele-session-storage-weather-archive-spec.md) — Sessions und Vorschauen, keine zweite Bilddatenbank
