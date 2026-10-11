@@ -42,10 +42,16 @@
     let siteLon = params.get("lon") || "";
     let siteStem = params.get("stem") || "";
     const starLimit = "5.5";
-    let starPoints = null;
+    const labelTextures = new Map();
+    let skyObjects = [];
     let skyTimer = 0;
     let skyLoading = false;
     let skyNote = "";
+    let skyStars = 0;
+    let skyNames = 0;
+    let skyWhen = "";
+    let skyLink = "warte";
+    let skyFault = "";
 
     const statusEl = document.getElementById("status");
     const diagEl = document.getElementById("diag");
@@ -70,6 +76,7 @@
     document.body.appendChild(renderer.domElement);
 
     const sphere = new THREE.Group();
+    const sky = new THREE.Group();
     // Dieselbe Innenansicht wie pano.html: scale(-1,1,1), kein zusätzliches BackSide.
     // Y-Drehung legt Azimut 0 (Nord) auf die Blickrichtung −Z, passend zu applyLook.
     function applyNorth(offset) {
@@ -148,14 +155,18 @@
       return { size, gray };
     }
 
-    function showStars(stars) {
-      if (starPoints) {
-        sphere.remove(starPoints);
-        starPoints.geometry.dispose();
-        starPoints.material.dispose();
-        starPoints = null;
+    function disposeSkyObject(object) {
+      if (object.geometry) object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material) continue;
+        if (material.map && !material.userData.sharedMap) material.map.dispose();
+        material.dispose();
       }
-      if (!stars.length) return;
+    }
+
+    function makeStarPoints(stars) {
+      if (!stars.length) return null;
       const positions = new Float32Array(stars.length * 3);
       const colors = new Float32Array(stars.length * 3);
       const sizes = new Float32Array(stars.length);
@@ -174,7 +185,7 @@
       geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
       geo.setAttribute("aColor", new THREE.BufferAttribute(colors, 3));
       geo.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
-      starPoints = new THREE.Points(geo, new THREE.ShaderMaterial({
+      const points = new THREE.Points(geo, new THREE.ShaderMaterial({
         uniforms: { uPixelRatio: { value: Math.min(devicePixelRatio, 2) } },
         vertexShader: `
           attribute float aSize;
@@ -202,9 +213,192 @@
         depthTest: false,
         depthWrite: false,
       }));
-      starPoints.renderOrder = 1;
-      starPoints.frustumCulled = false;
-      sphere.add(starPoints);
+      points.renderOrder = 1;
+      points.frustumCulled = false;
+      return points;
+    }
+
+    function makeConstellationLines(lines) {
+      const usable = lines.filter((line) => (
+        Number.isFinite(Number(line.az1)) && Number.isFinite(Number(line.alt1))
+        && Number.isFinite(Number(line.az2)) && Number.isFinite(Number(line.alt2))
+      ));
+      if (!usable.length) return null;
+      const positions = new Float32Array(usable.length * 6);
+      usable.forEach((line, index) => {
+        const a = azAltToVec(Number(line.az1), Number(line.alt1), 478);
+        const b = azAltToVec(Number(line.az2), Number(line.alt2), 478);
+        positions.set([a.x, a.y, a.z, b.x, b.y, b.z], index * 6);
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      const segments = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        color: 0x7dd3fc,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+        depthWrite: false,
+      }));
+      segments.renderOrder = 1;
+      segments.frustumCulled = false;
+      return segments;
+    }
+
+    function makeLabelTexture(name) {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const font = "bold 42px sans-serif";
+      ctx.font = font;
+      const textWidth = Math.ceil(ctx.measureText(name).width);
+      canvas.width = Math.max(64, textWidth + 28);
+      canvas.height = 64;
+      ctx.font = font;
+      ctx.fillStyle = "rgba(2, 6, 23, 0.62)";
+      ctx.fillRect(0, 8, canvas.width, 48);
+      ctx.fillStyle = "#e0f2fe";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, canvas.width / 2, 34);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.userData.label = name;
+      return texture;
+    }
+
+    function textureForLabel(iau, name) {
+      const key = String(iau || name);
+      const cached = labelTextures.get(key);
+      if (cached && cached.userData.label === name) return cached;
+      if (cached) {
+        cached.dispose();
+        labelTextures.delete(key);
+      }
+      const texture = makeLabelTexture(name);
+      labelTextures.set(key, texture);
+      return texture;
+    }
+
+    function makeLabelSprite(label) {
+      const name = String(label.name || label.iau || "");
+      const az = Number(label.az);
+      const alt = Number(label.alt);
+      if (!name || !Number.isFinite(az) || !Number.isFinite(alt)) return null;
+      const texture = textureForLabel(label.iau || name, name);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      });
+      material.userData.sharedMap = true;
+      const sprite = new THREE.Sprite(material);
+      const height = 7;
+      sprite.scale.set(height * (texture.image.width / texture.image.height), height, 1);
+      sprite.position.copy(azAltToVec(az, alt, 470));
+      sprite.renderOrder = 2;
+      sprite.frustumCulled = false;
+      return sprite;
+    }
+
+    const bodyColors = {
+      Sonne: 0xfde68a,
+      Mond: 0xe5e7eb,
+      Merkur: 0xa8a29e,
+      Venus: 0xfef3c7,
+      Mars: 0xf87171,
+      Jupiter: 0xfdba74,
+      Saturn: 0xfbbf24,
+      Uranus: 0x67e8f9,
+      Neptun: 0x60a5fa,
+    };
+
+    function makeBodyMark(body) {
+      if (!body || body.kind === "earth" || body.name === "Erde") return [];
+      const az = Number(body.az);
+      const alt = Number(body.alt);
+      if (!Number.isFinite(az) || !Number.isFinite(alt)) return [];
+      const kind = body.kind || "planet";
+      const discRadius = kind === "sun" ? 3.2 : (kind === "moon" ? 3.0 : 1.8);
+      const mesh = new THREE.Mesh(
+        new THREE.CircleGeometry(discRadius, 32),
+        new THREE.MeshBasicMaterial({
+          color: bodyColors[body.name] || 0xe2e8f0,
+          transparent: true,
+          opacity: kind === "sun" ? 0.72 : 0.9,
+          depthTest: false,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.position.copy(azAltToVec(az, alt, 476));
+      mesh.renderOrder = 2;
+      mesh.frustumCulled = false;
+      mesh.userData.faceOrigin = true;
+      const objects = [mesh];
+      let caption = String(body.name || body.id || "");
+      if (kind === "moon" && Number.isFinite(Number(body.phase))) {
+        caption = `${caption} ${Math.round(Number(body.phase) * 100)}%`;
+      }
+      try {
+        const sprite = makeLabelSprite({ iau: body.id || caption, name: caption, az, alt: alt + 1.6 });
+        if (sprite) objects.push(sprite);
+      } catch (_err) {
+        // Das Schild darf die Scheibe nicht verhindern.
+      }
+      return objects;
+    }
+
+    function faceOrigin(object) {
+      if (!object.userData.faceOrigin) return;
+      if (Math.abs(object.position.y) > 0.95 * object.position.length()) object.up.set(1, 0, 0);
+      object.lookAt(0, 0, 0);
+    }
+
+    function buildSky(stars, lines, labels, bodies) {
+      const objects = [];
+      try {
+        const points = makeStarPoints(stars);
+        if (points) objects.push(points);
+        const segments = makeConstellationLines(lines);
+        if (segments) objects.push(segments);
+        for (const label of labels) {
+          try {
+            const sprite = makeLabelSprite(label);
+            if (sprite) objects.push(sprite);
+          } catch (_err) {
+            // Ein einzelnes Schild darf den Himmel nicht leeren.
+          }
+        }
+        for (const body of bodies) {
+          try {
+            objects.push(...makeBodyMark(body));
+          } catch (_err) {
+            // Ein Gestirn darf den übrigen Himmel nicht leeren.
+          }
+        }
+        return objects;
+      } catch (err) {
+        for (const object of objects) disposeSkyObject(object);
+        throw err;
+      }
+    }
+
+    function showSky(stars, lines, labels, bodies) {
+      const next = buildSky(stars, lines, labels, bodies);
+      try {
+        for (const object of next) sky.add(object);
+        for (const object of next) faceOrigin(object);
+      } catch (err) {
+        for (const object of next) sky.remove(object);
+        for (const object of next) disposeSkyObject(object);
+        throw err;
+      }
+      const previous = skyObjects;
+      skyObjects = next;
+      for (const object of previous) {
+        sky.remove(object);
+        disposeSkyObject(object);
+      }
     }
 
     async function loadSky() {
@@ -219,10 +413,10 @@
         lat: siteLat,
         lon: siteLon,
         stars: "1",
-        const: "0",
+        const: "1",
         messier: "0",
         ngc: "0",
-        planets: "0",
+        planets: "1",
         mag: starLimit,
       });
       if (siteStem) query.set("stem", siteStem);
@@ -230,16 +424,29 @@
         const response = await fetch(`/sky-overlay?${query}`, { cache: "no-store" });
         const data = await response.json();
         if (!response.ok || data.error) {
-          skyNote = `Sterne: ${data.error || response.status}`;
+          skyLink = "Fehler";
+          skyFault = String(data.error || response.status);
+          skyNote = `Himmel: ${skyFault}`;
           setStatus(northLabel());
           return;
         }
-        showStars(data.stars || []);
-        skyNote = `${(data.stars || []).length} Sterne bis mag ${starLimit}`;
+        const stars = data.stars || [];
+        const lines = data.lines || [];
+        const labels = data.labels || [];
+        const bodies = data.bodies || [];
+        showSky(stars, lines, labels, bodies);
+        skyStars = stars.length;
+        skyNames = labels.length;
+        skyWhen = String(data.when || "");
+        skyLink = "verbunden";
+        skyFault = "";
+        skyNote = `${stars.length} Sterne bis mag ${starLimit} · ${lines.length} Linien · ${labels.length} Namen · ${bodies.length} Gestirne`;
         setStatus(northLabel());
       } catch (err) {
         const message = err && err.message ? err.message : String(err);
-        skyNote = `Sterne nicht geladen: ${message}`;
+        skyLink = "Fehler";
+        skyFault = message;
+        skyNote = `Himmel nicht geladen: ${message}`;
         setStatus(northLabel());
       } finally {
         skyLoading = false;
@@ -263,7 +470,31 @@
     geometry.scale(-1, 1, 1);
     const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
     sphere.add(new THREE.Mesh(geometry, material));
+    sphere.add(sky);
     scene.add(sphere);
+
+    const dashboardCanvas = document.createElement("canvas");
+    dashboardCanvas.width = 1024;
+    dashboardCanvas.height = 576;
+    const dashboardTexture = new THREE.CanvasTexture(dashboardCanvas);
+    dashboardTexture.colorSpace = THREE.SRGBColorSpace;
+    const dashboard = new THREE.Group();
+    const dashboardPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.68, 0.382),
+      new THREE.MeshBasicMaterial({
+        map: dashboardTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.FrontSide,
+      }),
+    );
+    dashboardPanel.renderOrder = 10;
+    dashboard.add(dashboardPanel);
+    dashboard.visible = false;
+    scene.add(dashboard);
+    let dashboardPlaced = false;
+    let dashboardKey = "";
 
     let lon = 0;
     let lat = 18;
@@ -381,6 +612,9 @@
         await renderer.xr.setSession(session);
         enterBtn.textContent = "VR beenden";
         session.addEventListener("end", () => {
+          dashboard.visible = false;
+          dashboardPlaced = false;
+          dashboardKey = "";
           enterBtn.textContent = "Enter VR";
           applyLook();
           refreshEnterButton();
@@ -452,11 +686,97 @@
       );
     }
 
+    function formatCoord(value, positive, negative) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "fehlt";
+      const hemisphere = number >= 0 ? positive : negative;
+      return `${Math.abs(number).toFixed(5)}° ${hemisphere}`;
+    }
+
+    function dashboardSections() {
+      const utc = new Date().toISOString().slice(0, 19).replace("T", " ") + " UTC";
+      const when = skyWhen
+        ? skyWhen.replace("T", " ").replace(".000Z", " UTC").replace("Z", " UTC")
+        : "noch keins";
+      const system = skyFault
+        ? ["Overlay Fehler", skyFault.slice(0, 42)]
+        : ["Overlay " + skyLink, "Abruf " + when];
+      return [
+        { title: "Zeit", lines: [utc, "Live"] },
+        { title: "Standort", lines: [formatCoord(siteLat, "N", "S"), formatCoord(siteLon, "E", "W")] },
+        { title: "Himmel", lines: [`${skyStars} Sterne`, `${skyNames} Sternbilder`, "Overlay " + when] },
+        { title: "System", lines: system },
+      ];
+    }
+
+    function paintDashboard() {
+      const ctx = dashboardCanvas.getContext("2d");
+      const width = dashboardCanvas.width;
+      const height = dashboardCanvas.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "rgba(15, 23, 42, 0.86)";
+      ctx.fillRect(0, 0, width, height);
+      ctx.strokeStyle = "rgba(125, 211, 252, 0.85)";
+      ctx.lineWidth = 6;
+      ctx.strokeRect(8, 8, width - 16, height - 16);
+      const sections = dashboardSections();
+      sections.forEach((section, index) => {
+        const column = index % 2;
+        const row = Math.floor(index / 2);
+        const x = 48 + column * 490;
+        const y = 46 + row * 250;
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 42px sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(section.title, x, y);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "34px sans-serif";
+        section.lines.forEach((line, lineIndex) => {
+          ctx.fillText(line, x, y + 62 + lineIndex * 46);
+        });
+      });
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "28px sans-serif";
+      ctx.fillText("Nur Anzeige", 48, height - 52);
+      dashboardTexture.needsUpdate = true;
+    }
+
+    function refreshDashboard() {
+      if (!dashboard.visible) return;
+      const key = dashboardSections().map((section) => section.title + section.lines.join("|")).join("||");
+      if (key === dashboardKey) return;
+      dashboardKey = key;
+      paintDashboard();
+    }
+
+    function placeDashboard() {
+      const xrCamera = renderer.xr.getCamera();
+      const headPos = new THREE.Vector3();
+      const headQuat = new THREE.Quaternion();
+      xrCamera.getWorldPosition(headPos);
+      xrCamera.getWorldQuaternion(headQuat);
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+      const down = new THREE.Vector3(0, -1, 0).applyQuaternion(headQuat);
+      dashboard.position.copy(headPos).addScaledVector(forward, 1.75).addScaledVector(down, 0.22);
+      dashboard.lookAt(headPos);
+      dashboard.visible = true;
+      dashboardPlaced = true;
+      dashboardKey = "";
+      refreshDashboard();
+    }
+
     applyLook();
     refreshEnterButton();
     useAppPanorama().then((ok) => { if (ok) loadTexture(); });
-    renderer.setAnimationLoop(() => {
-      if (!renderer.xr.isPresenting) applyLook();
+    renderer.setAnimationLoop((_time, frame) => {
+      if (!renderer.xr.isPresenting) {
+        applyLook();
+      } else if (!dashboardPlaced && frame) {
+        const space = renderer.xr.getReferenceSpace();
+        if (space && frame.getViewerPose(space)) placeDashboard();
+      }
+      refreshDashboard();
       renderer.render(scene, camera);
     });
   </script>

@@ -40,6 +40,12 @@ sections:
       - id: astro-vr-architektur-v0.2
         title: Astro-VR Architektur v0.2 (XR-6a)
         file: knowledge/astro-vr-architektur-v0.2.md
+      - id: astro-vr-architektur-v0.3
+        title: Astro-VR Architektur v0.3 (XR-6b)
+        file: knowledge/astro-vr-architektur-v0.3.md
+      - id: astro-vr-architektur-v0.4
+        title: Astro-VR Architektur v0.4 (XR-6c)
+        file: knowledge/astro-vr-architektur-v0.4.md
       - id: astro-netzberger-roadmap
         title: astro.netzberger.at — öffentliche Plattform (Roadmap)
         file: knowledge/astro-netzberger-roadmap.md

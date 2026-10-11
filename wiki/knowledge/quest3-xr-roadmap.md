@@ -51,7 +51,7 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 
 XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
 
-XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im bestehenden Gartenpanorama, gleiche Positionen wie der Desktop, 15-Sekunden-Takt. Die Zeile XR-6 bleibt `GEPLANT`, weil Sternbilder, Planeten, Dashboard und die Headset-Nordkalibrierung nicht dazugehören. Details in [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md).
+XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im bestehenden Gartenpanorama, gleiche Positionen wie der Desktop, 15-Sekunden-Takt. XR-6b, Sternbildlinien und deutsche Namen, ist auf der Quest gesehen: lesbar, nicht zu dominant, [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md). XR-6c, Sonne, Mond und Planeten, ist auf der Quest abgenommen: [Astro-VR Architektur v0.4](astro-vr-architektur-v0.4.md). Die Zeile XR-6 bleibt `GEPLANT`, weil das Dashboard und die Headset-Nordkalibrierung nicht dazugehören. Details zu den Sternen in [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md).
 
 XR-8 wartet auf die Mehrclient-Koordination in der Feldnetz-Spec. Eine Controllerbewegung löst keinen Befehl aus. Bestätigung bleibt Pflicht. Befehle gehen nur durch die bestehenden Backend-Routen.
 
@@ -99,6 +99,8 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 
 - [Astro-VR Architektur v0.1](astro-vr-architektur-v0.1.md) — Grundlage
 - [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md) — XR-6a abgenommen am 2026-10-11
+- [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md) — XR-6b auf der Quest gesehen
+- [Astro-VR Architektur v0.4](astro-vr-architektur-v0.4.md) — XR-6c auf der Quest abgenommen
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md)
 - [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)
 - [Session Storage](mele-session-storage-weather-archive-spec.md) — Sessions und Vorschauen, keine zweite Bilddatenbank

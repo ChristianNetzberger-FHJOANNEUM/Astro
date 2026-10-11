@@ -109,12 +109,13 @@ Abnahme von XR-6a, 2026-10-11: die vier Marken stimmen, die Sternpositionen deck
 
 ## Später, nicht in XR-6a
 
-Dashboard, Zeitumschaltung in der Quest, Interpolation zwischen den 15 Sekunden, Sternbilder, Planeten, GoTo. Die Headset-Nordkalibrierung bleibt außerhalb. Zuerst gilt die Nordmarke des Fotos.
+Sternbilder und Beschriftungen stehen in [v0.3](astro-vr-architektur-v0.3.md). Danach Planeten, dann das lesende Dashboard. Zeitumschaltung, Interpolation und GoTo bleiben später. Die Headset-Nordkalibrierung bleibt außerhalb. Zuerst gilt die Nordmarke des Fotos.
 
 Geplante Dateien, sobald dieser Plan freigegeben ist: nur `app_mele/vr.html`, und getrennt davon eine Zeile in `C:\Caddy\Caddyfile`. Nicht `pano.html`, nicht `mele/sky.py`.
 
 ## Verwandte Seiten
 
 - [Astro-VR Architektur v0.1](astro-vr-architektur-v0.1.md)
+- [Astro-VR Architektur v0.3](astro-vr-architektur-v0.3.md) — XR-6b auf der Quest gesehen
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)
 - [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)
