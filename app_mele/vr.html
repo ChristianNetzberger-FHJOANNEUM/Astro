@@ -606,10 +606,10 @@
               if (alpha < 0.04) discard;
               tint = mix(vec3(0.45, 0.78, 1.0), vec3(0.86, 0.95, 1.0), spikes);
             } else {
-              vec2 left = p - vec2(-0.16, 0.0);
-              vec2 right = p - vec2(0.16, 0.02);
-              float yellowStar = smoothstep(0.16, 0.035, length(left));
-              float redStar = smoothstep(0.145, 0.03, length(right));
+              vec2 left = p - vec2(-0.08, 0.0);
+              vec2 right = p - vec2(0.08, 0.01);
+              float yellowStar = smoothstep(0.13, 0.03, length(left));
+              float redStar = smoothstep(0.12, 0.028, length(right));
               alpha = max(yellowStar, redStar);
               if (alpha < 0.04) discard;
               tint = (yellowStar * vec3(1.0, 0.84, 0.2) + redStar * vec3(0.96, 0.24, 0.18))
@@ -1011,6 +1011,8 @@
     let trackData = null;
     let trackNote = "";
     let trackItemKey = "";
+    let trackRa = null;
+    let trackDec = null;
     let trackReturn = "list";
     let searchHits = [];
     let searchPage = 0;
@@ -1957,6 +1959,8 @@
       trackData = null;
       trackNote = "";
       trackItemKey = "";
+      trackRa = null;
+      trackDec = null;
       disposeTrackMeshes();
     }
 
@@ -1979,20 +1983,25 @@
     function trackRuns(points) {
       const runs = [];
       let run = [];
+      let styleAt = null;
+      const turnOf = (left, right) => Math.abs(((((left.az - right.az) % 360) + 540) % 360) - 180);
       const joined = (left, right) => {
         if (!left) return false;
         if (left.light !== right.light || left.above !== right.above) return false;
-        const turn = Math.abs(((((left.az - right.az) % 360) + 540) % 360) - 180);
-        return turn < 25;
+        return turnOf(left, right) < 25;
       };
       for (const point of points) {
         if (run.length && !joined(run[run.length - 1], point)) {
-          runs.push(run);
-          run = [];
+          const prev = run[run.length - 1];
+          const turn = turnOf(prev, point);
+          runs.push({ points: run, style: styleAt || run[0] });
+          run = turn < 25 ? [prev] : [];
+          styleAt = point;
         }
+        if (!styleAt) styleAt = point;
         run.push(point);
       }
-      if (run.length) runs.push(run);
+      if (run.length) runs.push({ points: run, style: styleAt || run[0] });
       return runs;
     }
 
@@ -2011,15 +2020,16 @@
       disposeTrackMeshes();
       const list = Array.isArray(points) ? points : [];
       for (const run of trackRuns(list)) {
-        if (run.length < 2) continue;
-        const style = trackStyle(run[0].light || "night", run[0].above);
+        if (run.points.length < 2) continue;
+        const sample = run.style || run.points[0];
+        const style = trackStyle(sample.light || "night", sample.above);
         if (style.kind === "solid") {
-          addTrackTube(run, style.radius, style.color, style.opacity);
+          addTrackTube(run.points, style.radius, style.color, style.opacity);
           continue;
         }
         let index = 0;
-        while (index < run.length - 1) {
-          addTrackTube(run.slice(index, index + style.on + 1), style.radius, style.color, style.opacity);
+        while (index < run.points.length - 1) {
+          addTrackTube(run.points.slice(index, index + style.on + 1), style.radius, style.color, style.opacity);
           index += style.on + style.off;
         }
       }
@@ -2068,13 +2078,14 @@
 
     function addHourMarks(points) {
       for (const item of hourMarks(points)) {
+        if (!(Number(item.alt) > 0)) continue;
         const style = trackStyle(item.light || "night", item.above);
         const dot = new THREE.Mesh(
           new THREE.SphereGeometry(item.above ? 1.9 : 1.15, 10, 8),
           new THREE.MeshBasicMaterial({
             color: style.color,
             transparent: true,
-            opacity: item.above ? 0.95 : 0.4,
+            opacity: item.above ? 0.95 : 0.85,
             depthWrite: false,
           }),
         );
@@ -2089,7 +2100,7 @@
           alt: Number(item.alt) + 1.4,
         });
         if (!sprite) continue;
-        sprite.material.opacity = item.above ? 1 : 0.5;
+        sprite.material.opacity = 1;
         trackGroup.add(sprite);
       }
     }
@@ -2131,23 +2142,26 @@
 
     async function loadDayTrack() {
       const serial = ++trackSerial;
-      const item = selectedItem;
-      if (!itemHasEquatorial(item)) {
-        trackData = null;
-        trackItemKey = "";
-        trackNote = "Keine RA/Dec für die Bahn.";
-        disposeTrackMeshes();
-        dashboardKey = "";
-        if (panelMode === "track") paintDashboard();
+      const fromSelection = itemHasEquatorial(selectedItem);
+      const ra = fromSelection ? Number(selectedItem.ra) : trackRa;
+      const dec = fromSelection ? Number(selectedItem.dec) : trackDec;
+      const key = fromSelection ? objectKey(selectedItem) : trackItemKey;
+      if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
+        if (!trackData) {
+          trackNote = "Keine RA/Dec für die Bahn.";
+          disposeTrackMeshes();
+          dashboardKey = "";
+          if (panelMode === "track") paintDashboard();
+        }
         return;
       }
-      trackNote = "Lade Bahn …";
+      trackNote = trackData ? "" : "Lade Bahn …";
       dashboardKey = "";
       if (panelMode === "track") paintDashboard();
       const when = trackSkyWhen();
       const params = new URLSearchParams({
-        ra: String(item.ra),
-        dec: String(item.dec),
+        ra: String(ra),
+        dec: String(dec),
         lat: String(siteLat),
         lon: String(siteLon),
         when: when.toISOString(),
@@ -2159,33 +2173,39 @@
         const data = await response.json();
         if (serial !== trackSerial) return;
         if (!response.ok || data.error || !Array.isArray(data.points) || data.points.length < 2) {
-          trackData = null;
-          trackItemKey = "";
-          trackNote = data.error || "Keine Tagesbahndaten";
-          disposeTrackMeshes();
+          if (!trackData) {
+            trackNote = data.error || "Keine Tagesbahndaten";
+            disposeTrackMeshes();
+          }
         } else {
           trackData = data;
-          trackItemKey = objectKey(item);
+          trackItemKey = key;
+          trackRa = ra;
+          trackDec = dec;
           trackNote = "";
           drawSkyTrack(data.points);
         }
       } catch (_err) {
         if (serial !== trackSerial) return;
-        trackData = null;
-        trackItemKey = "";
-        trackNote = "Bahn nicht erreichbar";
-        disposeTrackMeshes();
+        if (!trackData) {
+          trackNote = "Bahn nicht erreichbar";
+          disposeTrackMeshes();
+        }
       }
       dashboardKey = "";
       if (panelMode === "track") paintDashboard();
     }
 
     function ensureDayTrack() {
+      if (selectedItem && trackItemKey && objectKey(selectedItem) !== trackItemKey) return;
       const when = trackSkyWhen();
-      const same = trackData && trackItemKey === objectKey(selectedItem) && trackCovers(when);
-      if (same) {
+      if (trackData && trackItemKey && trackCovers(when)) {
         drawSkyTrack(trackData.points);
-        dashboardKey = "";
+        if (panelMode === "track") dashboardKey = "";
+        return;
+      }
+      if (trackData && trackItemKey && !itemHasEquatorial(selectedItem)) {
+        drawSkyTrack(trackData.points);
         return;
       }
       loadDayTrack();
