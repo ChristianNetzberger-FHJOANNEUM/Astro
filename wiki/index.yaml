@@ -34,6 +34,12 @@ sections:
       - id: quest3-xr-roadmap
         title: Quest 3 — XR-Roadmap
         file: knowledge/quest3-xr-roadmap.md
+      - id: astro-vr-architektur-v0.1
+        title: Astro-VR Architektur v0.1 (Prüfung)
+        file: knowledge/astro-vr-architektur-v0.1.md
+      - id: astro-vr-architektur-v0.2
+        title: Astro-VR Architektur v0.2 (XR-6a)
+        file: knowledge/astro-vr-architektur-v0.2.md
       - id: astro-netzberger-roadmap
         title: astro.netzberger.at — öffentliche Plattform (Roadmap)
         file: knowledge/astro-netzberger-roadmap.md

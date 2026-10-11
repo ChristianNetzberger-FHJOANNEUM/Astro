@@ -25,7 +25,7 @@ Beide dürfen dieselben astronomischen Daten und später dieselben HTTP-Schnitts
 | Three.js r170 lokal | Bibliothek, von `/vr-view` für WebXR benutzt. Kein CDN |
 | Kugel `scale(-1, 1, 1)`, equirektangulares JPEG, Nord aus `north` / `srcw` | `IMPLEMENTIERT` im 2D-Viewer |
 | Quest-Browser zeigt App und 2D-Panorama | praktisch bestätigt |
-| `/vr-view`, `app_mele/vr.html` | Prototyp in der App. 2D am PC geprüft. Enter VR auf der Quest wartet auf HTTPS |
+| `/vr-view`, `app_mele/vr.html` | Prototyp. Immersiv auf der Quest über HTTPS gesehen. Sterne nur im 360-Viewer |
 | WCS / Plate-Solving im Repo | nicht vorhanden, für XR-5 `GEPLANT` |
 | Stellarium-Anbindung | `OPTIONAL`, nicht eingebaut |
 | Native Quest-App, Unity, Godot, Unreal | nicht Teil dieses Repos |
@@ -50,6 +50,8 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 | XR-10 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
 
 XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
+
+XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im bestehenden Gartenpanorama, gleiche Positionen wie der Desktop, 15-Sekunden-Takt. Die Zeile XR-6 bleibt `GEPLANT`, weil Sternbilder, Planeten, Dashboard und die Headset-Nordkalibrierung nicht dazugehören. Details in [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md).
 
 XR-8 wartet auf die Mehrclient-Koordination in der Feldnetz-Spec. Eine Controllerbewegung löst keinen Befehl aus. Bestätigung bleibt Pflicht. Befehle gehen nur durch die bestehenden Backend-Routen.
 
@@ -95,6 +97,8 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 
 ## Verwandte Seiten
 
+- [Astro-VR Architektur v0.1](astro-vr-architektur-v0.1.md) — Grundlage
+- [Astro-VR Architektur v0.2](astro-vr-architektur-v0.2.md) — XR-6a abgenommen am 2026-10-11
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md)
 - [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)
 - [Session Storage](mele-session-storage-weather-archive-spec.md) — Sessions und Vorschauen, keine zweite Bilddatenbank

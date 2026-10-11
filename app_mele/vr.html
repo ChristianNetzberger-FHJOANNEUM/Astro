@@ -37,13 +37,22 @@
     const northParam = Number(params.get("north") || 0);
     const srcwParam = Number(params.get("srcw") || 0);
     let northOffset = srcwParam > 0 ? (360 * northParam / srcwParam) : 0;
+    const debugDirections = params.get("debugDirections") === "1";
+    let siteLat = params.get("lat") || "";
+    let siteLon = params.get("lon") || "";
+    let siteStem = params.get("stem") || "";
+    const starLimit = "5.5";
+    let starPoints = null;
+    let skyTimer = 0;
+    let skyLoading = false;
+    let skyNote = "";
 
     const statusEl = document.getElementById("status");
     const diagEl = document.getElementById("diag");
     const enterBtn = document.getElementById("enter");
 
     function setStatus(text) {
-      statusEl.textContent = text;
+      statusEl.textContent = skyNote ? `${text} · ${skyNote}` : text;
     }
 
     const scene = new THREE.Scene();
@@ -66,7 +75,189 @@
     function applyNorth(offset) {
       northOffset = offset;
       sphere.rotation.y = THREE.MathUtils.degToRad(northOffset + 90);
+      placeDirectionMarks();
     }
+
+    // Dieselbe Abbildung wie azAltToVec in pano.html. Lokal in der Gruppe,
+    // damit die Gruppen-Drehung Marken und Foto gemeinsam schiebt.
+    function azAltToVec(az, alt, radius) {
+      const viewLon = ((az + northOffset) % 360 + 360) % 360;
+      const phi = THREE.MathUtils.degToRad(90 - alt);
+      const theta = THREE.MathUtils.degToRad(viewLon);
+      return new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta) * radius,
+        Math.cos(phi) * radius,
+        Math.sin(phi) * Math.sin(theta) * radius,
+      );
+    }
+
+    const directionMarks = [];
+
+    function makeDirectionSprite(label, color) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(64, 64, 48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#020617";
+      ctx.font = "bold 72px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, 64, 70);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      }));
+      sprite.scale.set(22, 22, 1);
+      sprite.renderOrder = 2;
+      return sprite;
+    }
+
+    function placeDirectionMarks() {
+      if (!debugDirections) return;
+      if (!directionMarks.length) {
+        for (const [label, az, color] of [
+          ["N", 0, "#f8fafc"],
+          ["O", 90, "#fbbf24"],
+          ["S", 180, "#38bdf8"],
+          ["W", 270, "#fb7185"],
+        ]) {
+          const sprite = makeDirectionSprite(label, color);
+          sprite.userData.az = az;
+          sphere.add(sprite);
+          directionMarks.push(sprite);
+        }
+      }
+      for (const sprite of directionMarks) {
+        sprite.position.copy(azAltToVec(sprite.userData.az, 20, 480));
+      }
+    }
+
+    function starDisc(mag) {
+      const m = Number.isFinite(mag) ? mag : 5;
+      const size = Math.max(1.8, 12 * Math.pow(2.512, -0.28 * (m + 0.3)));
+      const tone = THREE.MathUtils.clamp((7.2 - m) / 8.0, 0.22, 1);
+      const gray = 0.32 + 0.68 * tone;
+      return { size, gray };
+    }
+
+    function showStars(stars) {
+      if (starPoints) {
+        sphere.remove(starPoints);
+        starPoints.geometry.dispose();
+        starPoints.material.dispose();
+        starPoints = null;
+      }
+      if (!stars.length) return;
+      const positions = new Float32Array(stars.length * 3);
+      const colors = new Float32Array(stars.length * 3);
+      const sizes = new Float32Array(stars.length);
+      stars.forEach((star, index) => {
+        const vec = azAltToVec(Number(star.az), Number(star.alt), 480);
+        const disc = starDisc(Number(star.mag));
+        positions[index * 3] = vec.x;
+        positions[index * 3 + 1] = vec.y;
+        positions[index * 3 + 2] = vec.z;
+        colors[index * 3] = disc.gray;
+        colors[index * 3 + 1] = disc.gray;
+        colors[index * 3 + 2] = disc.gray;
+        sizes[index] = disc.size;
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("aColor", new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+      starPoints = new THREE.Points(geo, new THREE.ShaderMaterial({
+        uniforms: { uPixelRatio: { value: Math.min(devicePixelRatio, 2) } },
+        vertexShader: `
+          attribute float aSize;
+          attribute vec3 aColor;
+          uniform float uPixelRatio;
+          varying vec3 vColor;
+          void main() {
+            vColor = aColor;
+            vec4 mv = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mv;
+            gl_PointSize = aSize * uPixelRatio;
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vColor;
+          void main() {
+            vec2 p = gl_PointCoord - vec2(0.5);
+            float r = length(p);
+            if (r > 0.5) discard;
+            float edge = smoothstep(0.5, 0.22, r);
+            gl_FragColor = vec4(vColor, edge);
+          }
+        `,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      }));
+      starPoints.renderOrder = 1;
+      starPoints.frustumCulled = false;
+      sphere.add(starPoints);
+    }
+
+    async function loadSky() {
+      if (document.hidden || !textureReady || skyLoading) return;
+      if (!siteLat || !siteLon) {
+        skyNote = "Sterne: Standort fehlt";
+        setStatus(northLabel());
+        return;
+      }
+      skyLoading = true;
+      const query = new URLSearchParams({
+        lat: siteLat,
+        lon: siteLon,
+        stars: "1",
+        const: "0",
+        messier: "0",
+        ngc: "0",
+        planets: "0",
+        mag: starLimit,
+      });
+      if (siteStem) query.set("stem", siteStem);
+      try {
+        const response = await fetch(`/sky-overlay?${query}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || data.error) {
+          skyNote = `Sterne: ${data.error || response.status}`;
+          setStatus(northLabel());
+          return;
+        }
+        showStars(data.stars || []);
+        skyNote = `${(data.stars || []).length} Sterne bis mag ${starLimit}`;
+        setStatus(northLabel());
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        skyNote = `Sterne nicht geladen: ${message}`;
+        setStatus(northLabel());
+      } finally {
+        skyLoading = false;
+      }
+    }
+
+    function startSky() {
+      loadSky();
+      if (skyTimer) return;
+      skyTimer = setInterval(loadSky, 15000);
+    }
+
+    function rememberSite(data) {
+      if (data.lat) siteLat = String(data.lat);
+      if (data.lon) siteLon = String(data.lon);
+      if (data.stem) siteStem = String(data.stem);
+    }
+
     applyNorth(northOffset);
     const geometry = new THREE.SphereGeometry(500, 96, 48);
     geometry.scale(-1, 1, 1);
@@ -95,7 +286,8 @@
         : "Kein srcw — Nord-Offset 0°";
       const kind = tex === "png" ? "Transparentes PNG" : (tex === "original" ? "Original" : "Vorschau");
       const stars = tex === "png" ? " · Sterne nur in der 360-Ansicht" : "";
-      return `${kind}${stars} · ${offset}`;
+      const debug = debugDirections ? " · Himmelsmarken N O S W" : "";
+      return `${kind}${stars}${debug} · ${offset}`;
     }
 
     function showDiag(xrText) {
@@ -208,6 +400,7 @@
           return false;
         }
         const data = await response.json();
+        rememberSite(data);
         urls = {
           preview: data.preview || "",
           png: data.png || "",
@@ -245,9 +438,10 @@
           material.map = texture;
           material.needsUpdate = true;
           textureReady = true;
-          const kind = tex === "png" ? "Transparentes PNG, ohne Sterne" : (tex === "original" ? "Original" : "Vorschau");
+          const kind = tex === "png" ? "Transparentes PNG" : (tex === "original" ? "Original" : "Vorschau");
           setStatus(`${kind} · ${northLabel()} · lade Ansicht …`);
           refreshEnterButton();
+          startSky();
         },
         undefined,
         () => {
