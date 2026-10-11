@@ -41,7 +41,7 @@ Nach einem späteren Neustart, sobald die Aufgaben aktiv sind:
 1. Technitium, Windows-Dienst, sofort. Unverändert.
 2. `AstroVR-Caddy`, 45 Sekunden nach Systemstart, Konto `SYSTEM`. Unabhängig von der Anmeldung. Bei Fehler wiederholt die Aufgabe den Start fünfmal im Abstand von einer Minute. Der Starter selbst versucht `caddy validate` bis zu fünfmal alle 20 Sekunden.
 3. Anmeldung von `ASTRO\Chris`.
-4. `Astro-mele_app`, 30 Sekunden nach der Anmeldung. Der Starter wartet höchstens drei Minuten auf `C:\Python\310\python.exe` und das Repo. Danach ein Prozess. Kein Neustart, wenn die App später abstürzt.
+4. `Astro-mele_app`, 30 Sekunden nach der Anmeldung. Der Starter wartet höchstens drei Minuten auf `C:\Astro\Git\Astro\.venv\Scripts\python.exe` und das Repo. Danach ein Prozess. Kein Neustart, wenn die App später abstürzt.
 5. `AstroVR-CertRenewal`, täglich 09:15, nur wenn Chris angemeldet ist. Versäumte Läufe holt die Aufgabe nach, sobald die Sitzung da ist.
 
 ## 4. Aufgaben
@@ -49,7 +49,7 @@ Nach einem späteren Neustart, sobald die Aufgaben aktiv sind:
 | Aufgabe | Konto | Trigger | Startbefehl |
 |---|---|---|---|
 | `AstroVR-Caddy` | `SYSTEM`, höchste Rechte | Beim Start, Verzögerung 45 s, Neustart 5× / 1 min | `Start-AstroVrCaddy.ps1` → `C:\Caddy\caddy.exe validate`, danach `run --config C:\Caddy\Caddyfile` |
-| `Astro-mele_app` | `ASTRO\Chris`, interaktiv, eingeschränkt | Bei Anmeldung, Verzögerung 30 s, kein `RestartCount` | `C:\Python\310\python.exe -m app_mele`, Arbeitsverzeichnis `C:\Astro\Git\Astro` |
+| `Astro-mele_app` | `ASTRO\Chris`, interaktiv, eingeschränkt | Bei Anmeldung, Verzögerung 30 s, kein `RestartCount` | `C:\Astro\Git\Astro\.venv\Scripts\python.exe -m app_mele`, Arbeitsverzeichnis `C:\Astro\Git\Astro` |
 | `AstroVR-CertRenewal` | `ASTRO\Chris`, interaktiv | Täglich 09:15, nachholen wenn verpasst | `Invoke-AstroVrCertRenewal.ps1` |
 
 Die App-Aufgabe heißt `Astro-mele_app`, wie in der Autostart-Spec vorgesehen. Sie ist der erste konkrete Starter dafür. `--no-show` gibt es im Code noch nicht. NINA, SynScan und PHD2 startet sie nicht.
@@ -82,7 +82,7 @@ Nach einer späteren Aktivierung und einem freigegebenen Neustart:
 |---|---|
 | Quest findet den Namen nicht | Dienst `DnsService`, dann `Resolve-DnsName vr.netzberger.at -Server 192.168.0.176` |
 | HTTPS fehlgeschlagen, App lokal da | `C:\ProgramData\AstroVR\logs\caddy-task.log` und `caddy-stdout.log` |
-| Port 8082 fehlt nach der Anmeldung | `C:\Astro\Git\Astro\data\vr-boot\mele-app.log` |
+| Port 8082 fehlt nach der Anmeldung | `data\vr-boot\mele-app.log` und die Python-Ausgabe in `data\vr-boot\mele-app-output.log` |
 | Zertifikat läuft ab | `data\vr-boot\cert-renew.log`. Die Aufgabe läuft nur in der Sitzung von Chris |
 | Datei neu, Browser noch alt | Statuszeile `live certificate`. Reload ist dann fehlgeschlagen, die alte Datei ist nicht gelöscht |
 

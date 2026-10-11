@@ -134,7 +134,7 @@ Freigabe des externen Auftrags vom 2026-10-11, mit den drei Ergänzungen Startve
 | Aufgabe | Konto | Trigger | Befehl |
 |---|---|---|---|
 | `AstroVR-Caddy` | `SYSTEM` | Systemstart, Verzögerung 45 s, Neustart 5× / 1 min | `Start-AstroVrCaddy.ps1`, vorher `caddy validate`. Port 8443 belegt → Exit 0 |
-| `Astro-mele_app` | `ASTRO\Chris`, interaktiv | Anmeldung, Verzögerung 30 s, kein `RestartCount` | `C:\Python\310\python.exe -m app_mele` in `C:\Astro\Git\Astro`. Port 8082 belegt → Exit 0 |
+| `Astro-mele_app` | `ASTRO\Chris`, interaktiv | Anmeldung, Verzögerung 30 s, kein `RestartCount` | `C:\Astro\Git\Astro\.venv\Scripts\python.exe -m app_mele` in `C:\Astro\Git\Astro`. Port 8082 belegt → Exit 0 |
 | `AstroVR-CertRenewal` | `ASTRO\Chris`, interaktiv | täglich 09:15, versäumte Läufe nachholen | Posh-ACME-Auftrag wiederverwenden. `Submit-Renewal` erst ab `RenewAfter`. Danach `caddy reload` nur wenn `fullchain.cer` sich geändert hat |
 
 Die App bekommt absichtlich keinen Nacht-Watchdog. Die drei Minuten Wartezeit gelten nur beim Start, bis Python und das Repo da sind. Ein Absturz während der Beobachtung bleibt stehen. NINA, SynScan und PHD2 startet diese Aufgabe nicht.

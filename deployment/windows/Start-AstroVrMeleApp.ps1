@@ -30,9 +30,28 @@ if (Get-AstroVrListener -Port 8082) {
     exit 0
 }
 
+$outputLog = Join-Path $AstroVrRepo "data\vr-boot\mele-app-output.log"
+Initialize-AstroVrLog -Path $outputLog
+$stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+[System.IO.File]::AppendAllText(
+    $outputLog,
+    "$stamp --- python stdout/stderr ---`r`n",
+    (New-Object System.Text.UTF8Encoding $false)
+)
+
 Write-AstroVrLog $log "starting $AstroVrPython -m app_mele in $AstroVrRepo"
+Write-AstroVrLog $log "python output: $outputLog"
 Set-Location -LiteralPath $AstroVrRepo
-& $AstroVrPython -m app_mele
+# cmd owns the redirection. PowerShell would treat stderr as a terminating
+# error under ErrorAction Stop and skip the exit-code log below.
+$env:PYTHONUNBUFFERED = "1"
+$env:PYTHONIOENCODING = "utf-8"
+& cmd.exe /d /c "`"$AstroVrPython`" -m app_mele >> `"$outputLog`" 2>&1"
 $code = $LASTEXITCODE
-Write-AstroVrLog $log "app exited code=$code"
+if ($null -eq $code) {
+    $code = 1
+    Write-AstroVrLog $log "app exit code missing, returning 1"
+} else {
+    Write-AstroVrLog $log "app exited code=$code"
+}
 exit $code

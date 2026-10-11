@@ -4,7 +4,8 @@
 $ErrorActionPreference = "Stop"
 
 $AstroVrRepo = "C:\Astro\Git\Astro"
-$AstroVrPython = "C:\Python\310\python.exe"
+# System Python has no NiceGUI. The app runs from the repo virtualenv.
+$AstroVrPython = "C:\Astro\Git\Astro\.venv\Scripts\python.exe"
 $AstroVrCaddyExe = "C:\Caddy\caddy.exe"
 $AstroVrCaddyfile = "C:\Caddy\Caddyfile"
 $AstroVrUser = "ASTRO\Chris"
