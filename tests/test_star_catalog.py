@@ -5,6 +5,7 @@ import numpy as np
 
 from mele.catalog import (
     build_database,
+    canonical_dso_key,
     catalog_ready,
     classify_daylight,
     normalize_object_query,
@@ -326,3 +327,48 @@ def test_search_and_resolve_without_overlay_filters(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_canonical_key_stores_messier_not_ngc_alias(tmp_path: Path) -> None:
+    db = _build(tmp_path)
+    assert canonical_dso_key("NGC 224", db) == "M31"
+    assert canonical_dso_key("NGC6426", db) == "NGC6426"
+    assert canonical_dso_key("keinobjekt", db) is None
+
+
+def test_ngc_mine_ignores_magnitude_and_does_not_repeat_messier(tmp_path: Path) -> None:
+    db = _build(tmp_path)
+    when = None
+    for hour in range(24):
+        stamp = datetime(2026, 7, 1, hour, 0, tzinfo=timezone.utc)
+        _az, alt = radec_to_az_alt(266.228, 3.170, 48.2, 16.4, stamp)
+        if alt > 5:
+            when = stamp
+            break
+    assert when is not None
+    common = dict(
+        db_path=db,
+        latitude_deg=48.2,
+        longitude_deg=16.4,
+        when=when,
+        mag_limit=5.5,
+        stars=False,
+        constellations=False,
+        planets=False,
+    )
+    broad = query_overlay(messier=False, ngc=True, **common)
+    assert all(item["id"] != "NGC6426" for item in broad["dso"])
+    assert broad["ngc_mode"] == "all"
+    mine = query_overlay(
+        messier=True,
+        ngc=False,
+        ngc_mode="mine",
+        pick_keys={"NGC6426", "M31"},
+        **common,
+    )
+    ngc_ids = [item["id"] for item in mine["dso"] if item["kind"] == "ngc"]
+    messier_ids = [item["id"] for item in mine["dso"] if item["kind"] == "messier"]
+    assert ngc_ids == ["NGC6426"]
+    assert "M31" not in ngc_ids
+    assert messier_ids.count("M31") <= 1
+    assert all(not str(item["id"]).startswith("M") for item in mine["dso"] if item["kind"] == "ngc")

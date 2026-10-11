@@ -534,6 +534,36 @@ def normalize_object_query(raw: str) -> str:
     return compact
 
 
+def canonical_dso_key(query: str, db_path: Path | None = None) -> str | None:
+    """Nutzereingabe auf den gespeicherten ``dso.key`` bringen. NGC 224 wird M31."""
+    norm = normalize_object_query(query)
+    if not norm:
+        return None
+    path = catalog_db_path(db_path)
+    if not catalog_ready(path):
+        return None
+    with sqlite3.connect(path) as conn:
+        row = conn.execute("SELECT key FROM dso WHERE key = ?", (norm,)).fetchone()
+        if row:
+            return str(row[0])
+        number = None
+        catalog = ""
+        if norm.startswith("NGC") and norm[3:].isdigit():
+            catalog, number = "NGC", int(norm[3:])
+        elif norm.startswith("IC") and norm[2:].isdigit():
+            catalog, number = "IC", int(norm[2:])
+        elif norm.startswith("M") and norm[1:].isdigit():
+            row = conn.execute("SELECT key FROM dso WHERE messier = ?", (int(norm[1:]),)).fetchone()
+            return str(row[0]) if row else None
+        if catalog:
+            row = conn.execute(
+                "SELECT key FROM dso WHERE catalog = ? AND number = ?",
+                (catalog, number),
+            ).fetchone()
+            return str(row[0]) if row else None
+    return None
+
+
 def _dso_kind(row: sqlite3.Row) -> str:
     return "messier" if row["messier"] is not None else "ngc"
 
@@ -840,12 +870,17 @@ def query_overlay(
     constellations: bool = True,
     messier: bool = True,
     ngc: bool = False,
+    ngc_mode: str | None = None,
+    pick_keys: set[str] | None = None,
     planets: bool = True,
     dso_types: list[str] | set[str] | None = None,
     profile: HorizonProfile | None = None,
 ) -> dict:
     when_utc = when.astimezone(timezone.utc)
     type_groups = normalize_dso_type_groups(dso_types)
+    mode = (ngc_mode or "").strip().lower()
+    if mode not in {"off", "mine", "all"}:
+        mode = "all" if ngc else "off"
     empty = {
         "when": when_utc.isoformat(),
         "stars": [],
@@ -875,21 +910,40 @@ def query_overlay(
                         (max(mag_limit, 6.5) if constellations else mag_limit,),
                     )
                 )
-            if messier or ngc:
+            if messier or mode != "off":
                 if type_groups is not None and not type_groups:
                     dso_rows = []
                 else:
-                    clauses = []
-                    if messier:
-                        clauses.append("messier IS NOT NULL")
-                    if ngc:
-                        clauses.append("(catalog IN ('NGC','IC') AND (mag IS NULL OR mag <= ?))")
-                    sql = (
+                    selected = (
                         "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
-                        "FROM dso WHERE " + " OR ".join(clauses)
+                        "FROM dso WHERE "
                     )
-                    params = (max(mag_limit + 3.0, 9.0),) if ngc else ()
-                    dso_rows = list(conn.execute(sql, params))
+                    seen: set[str] = set()
+
+                    def _take(rows: list) -> None:
+                        for row in rows:
+                            key = str(row["key"])
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            dso_rows.append(row)
+
+                    if messier:
+                        _take(list(conn.execute(selected + "messier IS NOT NULL")))
+                    if mode == "all":
+                        _take(list(conn.execute(
+                            selected + "messier IS NULL AND catalog IN ('NGC','IC') AND (mag IS NULL OR mag <= ?)",
+                            (max(mag_limit + 3.0, 9.0),),
+                        )))
+                    elif mode == "mine" and pick_keys:
+                        keys = [str(key) for key in pick_keys if str(key).strip()]
+                        for start in range(0, len(keys), 400):
+                            chunk = keys[start:start + 400]
+                            marks = ",".join("?" * len(chunk))
+                            _take(list(conn.execute(
+                                selected + f"messier IS NULL AND catalog IN ('NGC','IC') AND key IN ({marks})",
+                                chunk,
+                            )))
                     if type_groups is not None:
                         dso_rows = [
                             row
@@ -975,7 +1029,7 @@ def query_overlay(
             kind = "messier" if row["messier"] is not None else "ngc"
             if kind == "messier" and not messier:
                 continue
-            if kind == "ngc" and not ngc:
+            if kind == "ngc" and mode == "off":
                 continue
             item = {
                 "id": row["key"],
@@ -1038,6 +1092,8 @@ def query_overlay(
         "labels": labels,
         "dso": out_dso,
         "bodies": out_bodies,
+        "ngc_mode": mode,
+        "ngc_count": sum(1 for item in out_dso if item.get("kind") == "ngc"),
     }
     if not ready:
         result["error"] = "Katalog fehlt. Einmal (mit Internet): python -m mele.catalog import"

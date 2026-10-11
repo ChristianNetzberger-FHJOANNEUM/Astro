@@ -1,7 +1,7 @@
 # Astro-VR Architektur v1.1 — XR-8d Himmel
 
 > Quelle: abgenommene Navigation in [v1.0](astro-vr-architektur-v1.0.md), Schalter aus dem [Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md)
-> Stand: **Gebaut, Abnahme auf der Quest offen.** Nur `app_mele/vr.html`. Keine neue Route, kein Python, kein `pano.html`.
+> Stand: **Auf der Quest bestätigt** (Messier, Tafel, Form, Farben, Unruhe). Fortschreibung: [v1.2](astro-vr-architektur-v1.2.md).
 
 Das Himmel-Panel bleibt dieselbe Fläche. `ZURÜCK` führt zur Übersicht. Die Sechserliste unter OBJEKTE bleibt Gestirne und benannte Sterne.
 
@@ -100,6 +100,7 @@ Nicht in diesem Schritt: NGC, Gitter, Suche, Favoriten, Bahn, Montierung, GoTo, 
 
 ## Verwandte Seiten
 
+- [Astro-VR Architektur v1.2](astro-vr-architektur-v1.2.md) — XR-8e persönliche NGC-Auswahl
 - [Astro-VR Architektur v1.0](astro-vr-architektur-v1.0.md)
 - [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md)
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)

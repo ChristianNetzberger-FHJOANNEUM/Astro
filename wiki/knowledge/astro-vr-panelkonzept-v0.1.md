@@ -1,11 +1,11 @@
 # Astro-VR Panelkonzept v0.1 — XR-8b
 
 > Quelle: [Desktop-Inventar v0.1](astro-vr-desktop-inventar-v0.1.md), abgenommenes Dashboard aus [v0.9](astro-vr-architektur-v0.9.md)
-> Stand: **Für XR-8c freigegeben, XR-8c abgenommen.** Die Himmel-Schalter sind in [v1.1](astro-vr-architektur-v1.1.md) gebaut. Die Quest-Abnahme von XR-8d ist offen.
+> Stand: **Für XR-8c freigegeben, XR-8c abgenommen.** Die Himmel-Schalter sind in [v1.1](astro-vr-architektur-v1.1.md) gebaut und auf der Quest bestätigt. Die persönliche NGC-Auswahl ist [v1.2](astro-vr-architektur-v1.2.md).
 
 Die Quest bleibt der astronomische Viewer. Geräteverwaltung, Guiding, SynScan und die Session-Formulare bleiben in der MeLE-App. `pano.html` wird nicht nachgebaut.
 
-Ein Dashboard, eine Gruppe zur Zeit. Kein zweites schwebendes Fenster. Position und Größe bleiben: 0,68 m × 0,38 m, 1,75 m vor dem Blick beim Einblenden, danach weltfest. Strahl, `select`, `squeeze`, Ein- und Ausblenden und die Preferences bleiben.
+Ein Dashboard, eine Gruppe zur Zeit. Kein zweites schwebendes Fenster. Breite 0,68 m, 1,75 m vor dem Blick beim Einblenden, danach weltfest. Die Höhe ist 0,44 m, der Zusatz liegt unten, damit ZURÜCK die NGC-Bewertung nicht überdeckt. Strahl, `select`, `squeeze`, Ein- und Ausblenden und die Preferences bleiben.
 
 ## Sechs Bereiche, zwei Ebenen
 

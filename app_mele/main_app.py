@@ -20,7 +20,14 @@ from nicegui import app, run, ui
 
 from app_mele.layout import build_ui
 from app_mele.state import UiState
-from mele.catalog import object_track, query_overlay, resolve_catalog_object, search_catalog
+from mele.catalog import (
+    canonical_dso_key,
+    object_track,
+    query_overlay,
+    resolve_catalog_object,
+    search_catalog,
+)
+from mele.picks import PicksCorrupt, eligible_keys, load_picks, upsert_pick
 from mele.favorites import (
     add_favorite,
     favorite_markers,
@@ -317,7 +324,7 @@ def run_app(port: int | None = None) -> None:
 
     @app.get("/vr-view")
     def vr_view() -> HTMLResponse:
-        return HTMLResponse(vr_html)
+        return HTMLResponse(vr_html, headers={"Cache-Control": "no-store"})
 
     @app.get("/vr/current")
     def vr_current_api() -> JSONResponse:
@@ -2392,6 +2399,57 @@ def run_app(port: int | None = None) -> None:
             )
         return JSONResponse({"ok": True, "query": query, "object": obj})
 
+    @app.get("/catalog/picks")
+    def catalog_picks_get(key: str = "") -> JSONResponse:
+        """Persönliche Bewertung. Nur Port 8082, nicht über Caddy 8443."""
+        data = load_picks(settings.horizon_dir)
+        want = str(key or "").strip()
+        if want:
+            canonical = canonical_dso_key(want, settings.catalog_dir / "sky.sqlite")
+            stored = data["objects"].get(canonical or "")
+            return JSONResponse({
+                "ok": not data["corrupt"],
+                "corrupt": data["corrupt"],
+                "error": data["error"],
+                "key": canonical or "",
+                "pick": stored,
+            })
+        return JSONResponse({"ok": not data["corrupt"], **data})
+
+    @app.put("/catalog/picks")
+    async def catalog_picks_put(request: Request) -> JSONResponse:
+        """Ein Objekt bewerten. Schlüssel wird auf dso.key aufgelöst."""
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": "JSON fehlt"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "JSON fehlt"}, status_code=400)
+        query = str(body.get("key") or body.get("query") or "").strip()
+        canonical = canonical_dso_key(query, settings.catalog_dir / "sky.sqlite")
+        if not canonical:
+            return JSONResponse({"ok": False, "error": f"Nicht im Katalog: {query}"}, status_code=404)
+        try:
+            saved = upsert_pick(
+                settings.horizon_dir,
+                canonical,
+                rating=body.get("rating"),
+                quest=body.get("quest", False),
+                note=body.get("note") or "",
+            )
+        except PicksCorrupt as exc:
+            return JSONResponse({"ok": False, "error": str(exc), "corrupt": True}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        messier = canonical.startswith("M") and canonical[1:].isdigit()
+        return JSONResponse({
+            "ok": True,
+            "key": canonical,
+            "messier": messier,
+            "pick": saved.get("pick"),
+            "objects": saved.get("objects"),
+        })
+
     @app.get("/catalog/favorites")
     def catalog_favorites_get() -> JSONResponse:
         data = load_favorites(settings.horizon_dir)
@@ -2477,6 +2535,8 @@ def run_app(port: int | None = None) -> None:
         const: int = 1,
         messier: int = 1,
         ngc: int = 0,
+        ngc_mode: str = "",
+        ngc_min: int = 1,
         planets: int = 1,
         dso_types: str = "",
         stem: str = "",
@@ -2505,6 +2565,16 @@ def run_app(port: int | None = None) -> None:
             if json_path.is_file():
                 profile = load_profile(json_path)
         type_list = [p.strip() for p in dso_types.replace(";", ",").split(",") if p.strip()] or None
+        mode = (ngc_mode or "").strip().lower()
+        if mode not in {"off", "mine", "all"}:
+            mode = "all" if ngc else "off"
+        minimum = min(5, max(1, int(ngc_min or 1)))
+        pick_keys = None
+        picks_error = ""
+        if mode == "mine":
+            loaded = load_picks(settings.horizon_dir)
+            picks_error = str(loaded.get("error") or "")
+            pick_keys = eligible_keys(loaded.get("objects") or {}, minimum)
         payload = query_overlay(
             db_path=settings.catalog_dir / "sky.sqlite",
             latitude_deg=lat,
@@ -2515,10 +2585,14 @@ def run_app(port: int | None = None) -> None:
             constellations=bool(const),
             messier=bool(messier),
             ngc=bool(ngc),
+            ngc_mode=mode,
+            pick_keys=pick_keys,
             planets=bool(planets),
             dso_types=type_list,
             profile=profile,
         )
+        if picks_error:
+            payload["picks_error"] = picks_error
         return JSONResponse(payload)
 
     @app.get("/sky-track")

@@ -14,6 +14,20 @@
     #bar button:disabled { opacity: .45; cursor: not-allowed; }
     #status, #diag { flex: 1 1 220px; font-size: 12px; line-height: 1.35; }
     #diag { flex-basis: 100%; font-variant-numeric: tabular-nums; }
+    #xr-overlay { position: fixed; z-index: 6; left: 0; right: 0; bottom: 0;
+                  display: flex; justify-content: center; padding: 0 16px 7vh;
+                  pointer-events: none; }
+    #kb-test { visibility: hidden; pointer-events: none; width: min(36rem, 100%);
+               padding: 14px 16px; border-radius: 12px; background: rgba(15, 23, 42, .94);
+               border: 2px solid #38bdf8; color: #e2e8f0; font-size: 22px; }
+    #kb-test.open { visibility: visible; pointer-events: auto; }
+    #kb-test p { margin: 8px 0; font-size: 18px; line-height: 1.35; }
+    #kb-test label { display: flex; gap: 10px; align-items: center; }
+    #kb-input { flex: 1; font-size: 22px; padding: 10px 12px; border-radius: 8px;
+                border: 1px solid #7dd3fc; background: #020617; color: #f8fafc; }
+    #kb-test .row { display: flex; gap: 10px; margin-top: 10px; }
+    #kb-test button { font-size: 20px; padding: 10px 14px; border: 0; border-radius: 8px;
+                      background: #1f4e5f; color: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -21,6 +35,21 @@
     <button id="enter" type="button" disabled>Enter VR</button>
     <div id="status">Lade …</div>
     <div id="diag">protocol: … · isSecureContext: … · immersive-vr: …</div>
+  </div>
+  <div id="xr-overlay">
+    <form id="kb-test">
+      <p id="kb-head">Suche</p>
+      <p id="kb-last"></p>
+      <label>Objekt: <input id="kb-input" type="text" inputmode="text" enterkeyhint="done"
+        autocomplete="off" spellcheck="false" placeholder="M13"></label>
+      <div class="row">
+        <button id="kb-ok" type="submit">Übernehmen</button>
+        <button id="kb-again" type="button" hidden>Nochmal</button>
+        <button id="kb-close" type="button">Schließen</button>
+      </div>
+      <p id="kb-taken"></p>
+      <p id="kb-note"></p>
+    </form>
   </div>
   <!-- Three.js 0.170.0 lokal unter /mele-static — kein CDN. -->
   <script type="module">
@@ -48,6 +77,8 @@
       messier: false,
       icons: false,
       seeing: false,
+      ngcMode: "off",
+      ngcMin: 1,
       mag: Number(starLimit),
       live: true,
       when: null,
@@ -406,7 +437,7 @@
       object.lookAt(0, 0, 0);
     }
 
-    function buildSky(stars, lines, labels, bodies, dsos) {
+    function buildSky(stars, lines, labels, bodies, messierItems, ngcItems) {
       const objects = [];
       try {
         const points = makeStarPoints(stars);
@@ -429,9 +460,10 @@
           }
         }
         try {
-          objects.push(...makeMessierLayer(dsos || []));
+          objects.push(...makeDsoLayer(messierItems || [], "messier"));
+          objects.push(...makeDsoLayer(ngcItems || [], "ngc"));
         } catch (_err) {
-          // Die Messier-Schicht darf den übrigen Himmel nicht leeren.
+          // Eine Objektschicht darf den übrigen Himmel nicht leeren.
         }
         return objects;
       } catch (err) {
@@ -453,8 +485,13 @@
 
     const messierTints = [0xfbbf24, 0xbfdbfe, 0xfcd34d, 0xfef3c7, 0x5eead4, 0xf9a8d4, 0xe7e5e4];
 
-    function makeMessierLayer(items) {
-      const usable = items.filter((item) => Number.isFinite(Number(item.az)) && Number.isFinite(Number(item.alt)));
+    function makeDsoLayer(items, layer) {
+      const ngc = layer === "ngc";
+      const usable = items.filter((item) => {
+        if (!Number.isFinite(Number(item.az)) || !Number.isFinite(Number(item.alt))) return false;
+        if (ngc && /^M\d+$/.test(String(item.id || ""))) return false;
+        return true;
+      });
       if (!usable.length) return [];
       const positions = new Float32Array(usable.length * 3);
       const colors = new Float32Array(usable.length * 3);
@@ -566,19 +603,23 @@
       }));
       points.renderOrder = 2;
       points.frustumCulled = false;
-      points.userData.messier = true;
-      points.userData.messierPoints = true;
+      points.userData.messier = !ngc;
+      points.userData.ngc = ngc;
+      points.userData.dsoPoints = true;
       const objects = [points];
+      const showLabels = !ngc || skyView.ngcMode === "mine";
+      if (!showLabels) return objects;
       for (const item of usable) {
         const caption = String(item.id || "").trim();
         const az = Number(item.az);
         const alt = Number(item.alt);
         if (!caption) continue;
         try {
-          const sprite = makeLabelSprite({ iau: `M:${caption}`, name: caption, az, alt: alt + 1.2 });
+          const sprite = makeLabelSprite({ iau: ngc ? caption : `M:${caption}`, name: caption, az, alt: alt + 1.2 });
           if (!sprite) continue;
           sprite.userData.labelScale = 0.72;
-          sprite.userData.messier = true;
+          sprite.userData.messier = !ngc;
+          sprite.userData.ngc = ngc;
           const height = vrTune.labelHeight * sprite.userData.labelScale;
           const aspect = sprite.scale.y ? sprite.scale.x / sprite.scale.y : 2;
           sprite.scale.set(height * aspect, height, 1);
@@ -590,8 +631,8 @@
       return objects;
     }
 
-    function showSky(stars, lines, labels, bodies, dsos) {
-      const next = buildSky(stars, lines, labels, bodies, dsos || []);
+    function showSky(stars, lines, labels, bodies, messierItems, ngcItems) {
+      const next = buildSky(stars, lines, labels, bodies, messierItems || [], ngcItems || []);
       try {
         for (const object of next) sky.add(object);
         for (const object of next) faceOrigin(object);
@@ -608,10 +649,10 @@
       }
     }
 
-    function hideMessierMarks() {
+    function hideMarked(flag) {
       const kept = [];
       for (const object of skyObjects) {
-        if (!object.userData.messier) {
+        if (!object.userData[flag]) {
           kept.push(object);
           continue;
         }
@@ -621,12 +662,17 @@
       skyObjects = kept;
     }
 
-    function rebuildMessierMarks() {
-      hideMessierMarks();
-      if (!skyView.messier || !lastDso.length) return;
+    function hideMessierMarks() {
+      hideMarked("messier");
+    }
+
+    function rebuildDsoMarks() {
+      hideMarked("messier");
+      hideMarked("ngc");
       const layer = [];
       try {
-        layer.push(...makeMessierLayer(lastDso));
+        if (skyView.messier) layer.push(...makeDsoLayer(lastDso, "messier"));
+        if (skyView.ngcMode !== "off") layer.push(...makeDsoLayer(lastNgc, "ngc"));
         for (const object of layer) sky.add(object);
         for (const object of layer) faceOrigin(object);
         skyObjects.push(...layer);
@@ -664,6 +710,8 @@
       const mag = skyView.mag;
       const liveAtStart = skyView.live;
       const whenAtStart = skyView.when ? skyView.when.getTime() : 0;
+      const modeAtStart = skyView.ngcMode;
+      const minAtStart = skyView.ngcMin;
       const query = new URLSearchParams({
         lat: siteLat,
         lon: siteLon,
@@ -671,17 +719,21 @@
         const: skyView.constellations ? "1" : "0",
         messier: skyView.messier ? "1" : "0",
         ngc: "0",
+        ngc_mode: skyView.ngcMode,
         planets: "1",
         mag: String(mag),
       });
+      if (skyView.ngcMode === "mine") query.set("ngc_min", String(skyView.ngcMin));
       if (!skyView.live && skyView.when) query.set("when", skyView.when.toISOString());
       if (siteStem) query.set("stem", siteStem);
       try {
         const response = await fetch(`/sky-overlay?${query}`, { cache: "no-store" });
-        const data = await response.json();
+        const raw = await response.text();
+        const data = JSON.parse(raw);
         if (serial !== skySerial) return;
         if (liveAtStart !== skyView.live) return;
         if ((skyView.when ? skyView.when.getTime() : 0) !== whenAtStart) return;
+        if (skyView.ngcMode !== modeAtStart || skyView.ngcMin !== minAtStart) return;
         if (!response.ok || data.error) {
           skyLink = "Fehler";
           skyFault = String(data.error || response.status);
@@ -693,24 +745,32 @@
         const lines = skyView.constellations ? (data.lines || []) : [];
         const labels = skyView.constellations ? (data.labels || []) : [];
         const bodies = data.bodies || [];
-        const dsos = skyView.messier
-          ? (data.dso || []).filter((item) => item && item.kind === "messier")
+        const allDso = data.dso || [];
+        const messierItems = skyView.messier
+          ? allDso.filter((item) => item && item.kind === "messier")
           : [];
-        showSky(stars, lines, labels, bodies, dsos);
+        const ngcItems = skyView.ngcMode === "off"
+          ? []
+          : allDso.filter((item) => item && item.kind === "ngc" && !/^M\d+$/.test(String(item.id || "")));
+        showSky(stars, lines, labels, bodies, messierItems, ngcItems);
         lastBodies = bodies;
         lastStars = stars;
-        lastDso = dsos;
+        lastDso = messierItems;
+        lastNgc = ngcItems;
+        skyBytes = raw.length;
         if (skyKey && !findByKey(skyKey)) {
           skyKey = "";
           skyMark.visible = false;
         }
         refreshObjectPanel();
+        syncNavTarget();
         skyStars = stars.length;
         skyNames = labels.length;
         skyWhen = String(data.when || "");
         skyLink = "verbunden";
         skyFault = "";
-        skyNote = `${stars.length} Sterne bis mag ${mag} · ${lines.length} Linien · ${labels.length} Namen · ${dsos.length} Messier · ${bodies.length} Gestirne`;
+        const picksNote = data.picks_error ? ` · ${data.picks_error}` : "";
+        skyNote = `${stars.length} Sterne bis mag ${mag} · ${lines.length} Linien · ${labels.length} Namen · ${messierItems.length} Messier · ${ngcItems.length} NGC · ${Math.round(raw.length / 1024)} kB · ${bodies.length} Gestirne${picksNote}`;
         setStatus(northLabel());
         if (panelMode === "himmel") paintHimmelButtons();
       } catch (err) {
@@ -762,12 +822,12 @@
 
     const dashboardCanvas = document.createElement("canvas");
     dashboardCanvas.width = 1024;
-    dashboardCanvas.height = 576;
+    dashboardCanvas.height = 662;
     const dashboardTexture = new THREE.CanvasTexture(dashboardCanvas);
     dashboardTexture.colorSpace = THREE.SRGBColorSpace;
     const dashboard = new THREE.Group();
     const dashboardPanel = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.68, 0.382),
+      new THREE.PlaneGeometry(0.68, 0.44),
       new THREE.MeshBasicMaterial({
         map: dashboardTexture,
         transparent: true,
@@ -776,6 +836,7 @@
         side: THREE.FrontSide,
       }),
     );
+    dashboardPanel.position.y = -0.029;
     dashboardPanel.renderOrder = 10;
     dashboard.add(dashboardPanel);
     dashboard.scale.setScalar(vrTune.panelScale);
@@ -792,8 +853,18 @@
     paintMenuButton(objectsButton, "OBJEKTE", "Liste und Details");
     paintMenuButton(skyMenuButton, "HIMMEL", "Anzeige und Zeit");
     paintMenuButton(prefsButton, "EINSTELLUNGEN", "VR-Preferences");
-    const backButton = makeTextButton("ZURÜCK", "back", 0, -0.162, 0.28, 0.05);
+    const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
     backButton.visible = false;
+    const goalButton = makeTextButton("ZIEL FINDEN", "nav-goal", 0, -0.152, 0.32, 0.040);
+    goalButton.visible = false;
+    const keyboardTestButton = makeTextButton("SUCHEN", "kb-test", -0.24, -0.128, 0.16, 0.040);
+    keyboardTestButton.visible = false;
+    const searchPrevButton = makeTextButton("ZURÜCK", "search-page", 0.00, -0.128, 0.16, 0.040);
+    searchPrevButton.userData.dir = -1;
+    searchPrevButton.visible = false;
+    const searchNextButton = makeTextButton("WEITER", "search-page", 0.18, -0.128, 0.14, 0.040);
+    searchNextButton.userData.dir = 1;
+    searchNextButton.visible = false;
     const objectRows = [];
     for (let index = 0; index < 6; index += 1) {
       const row = makeTextButton("", "object", -0.02, 0.14 - index * 0.042, 0.42, 0.038);
@@ -870,13 +941,21 @@
       addSkyControl("+1 h", "sky-step", 0.078, -0.044, 0.13, 0.044, { seconds: 3600 }),
       addSkyControl("+1 d", "sky-step", 0.233, -0.044, 0.13, 0.044, { seconds: 86400 }),
     ];
-    const skyIconBtn = addSkyControl("Form SCHEIBE", "sky-icons", -0.15, -0.100, 0.28, 0.040);
-    const skySeeingBtn = addSkyControl("Unruhe AUS", "sky-seeing", 0.15, -0.100, 0.28, 0.040);
+    const skyIconBtn = addSkyControl("Form SCHEIBE", "sky-icons", -0.15, -0.092, 0.28, 0.040);
+    const skySeeingBtn = addSkyControl("Unruhe AUS", "sky-seeing", 0.15, -0.092, 0.28, 0.040);
+    const skyNgcBtn = addSkyControl("NGC AUS", "sky-ngc", -0.16, -0.136, 0.22, 0.040);
+    const skyNgcMinMinus = addSkyControl("−", "sky-ngc-min", 0.02, -0.136, 0.07, 0.040, { dir: -1 });
+    const skyNgcMinLabel = addSkyControl("≥ 1", "sky-hold", 0.12, -0.136, 0.10, 0.040);
+    const skyNgcMinPlus = addSkyControl("+", "sky-ngc-min", 0.23, -0.136, 0.07, 0.040, { dir: 1 });
     const pointerButtons = [
       objectsButton,
       skyMenuButton,
       prefsButton,
       backButton,
+      goalButton,
+      keyboardTestButton,
+      searchPrevButton,
+      searchNextButton,
       ...objectRows,
       ...skyControls,
       ...prefTabs,
@@ -884,6 +963,16 @@
       prefReset,
       prefDone,
     ];
+    let overlayStateText = "DOM-Overlay: nicht geprüft";
+    let searchQuery = "";
+    let searchHits = [];
+    let searchPage = 0;
+    let searchNote = "";
+    let searchSerial = 0;
+    let resolveSerial = 0;
+    let hitSerial = 0;
+    let aimSerial = 0;
+    let detailNote = "";
     let panelMode = "home";
     let panelReturn = "home";
     let selectedItem = null;
@@ -892,6 +981,8 @@
     let lastBodies = [];
     let lastStars = [];
     let lastDso = [];
+    let lastNgc = [];
+    let skyBytes = 0;
     const pointerHits = new Map();
     const pointerRaycaster = new THREE.Raycaster();
     let hoveredButton = null;
@@ -947,6 +1038,29 @@
     const skyPoint = new THREE.Vector3();
     const aimDir = new THREE.Vector3();
     const objDir = new THREE.Vector3();
+    function makeNavArrow() {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 3.2);
+      shape.lineTo(1.35, -2.4);
+      shape.lineTo(-1.35, -2.4);
+      shape.closePath();
+      const mesh = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        new THREE.MeshBasicMaterial({
+          color: 0x4ade80,
+          transparent: true,
+          opacity: 0.92,
+          depthTest: false,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.renderOrder = 7;
+      mesh.frustumCulled = false;
+      mesh.raycast = () => {};
+      return mesh;
+    }
+
     function makeRing(radius, color) {
       const points = [];
       const steps = 72;
@@ -991,7 +1105,51 @@
     for (const child of skyMark.children) child.renderOrder = 6;
     scene.add(skyMark);
     let skyLabelText = "";
+    const navColor = 0x4ade80;
+    const navReachedColor = 0xbbf7d0;
+    const greenTelrad = new THREE.Group();
+    greenTelrad.visible = false;
+    scene.add(greenTelrad);
+    const navArrow = makeNavArrow();
+    navArrow.visible = false;
+    scene.add(navArrow);
+    const navTurn = new THREE.Group();
+    navTurn.visible = false;
+    scene.add(navTurn);
+    const navReadout = new THREE.Sprite(new THREE.SpriteMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }));
+    navReadout.raycast = () => {};
+    navReadout.renderOrder = 7;
+    navReadout.visible = false;
+    navReadout.frustumCulled = false;
+    scene.add(navReadout);
+    const navTarget = {
+      active: false,
+      key: "",
+      name: "",
+      kind: "",
+      id: "",
+      az: null,
+      alt: null,
+      ra: null,
+      dec: null,
+      below: false,
+      stale: false,
+      pending: false,
+      source: "",
+      query: "",
+    };
+    const navPoint = new THREE.Vector3();
+    const navTargetDir = new THREE.Vector3();
+    const navPerp = new THREE.Vector3();
+    const navLocalY = new THREE.Vector3();
+    let navReadoutText = "";
+    let navReachedDrawn = false;
     loadPrefs();
+    fillGreenTelrad();
 
     let lon = 0;
     let lat = 18;
@@ -1095,6 +1253,128 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
+    function readOverlayState(session) {
+      const state = session && session.domOverlayState;
+      const type = state && typeof state.type === "string" ? state.type : "";
+      overlayStateText = type ? `DOM-Overlay: ${type}` : "DOM-Overlay: nicht aktiv";
+    }
+
+    async function requestImmersiveSession() {
+      const root = document.getElementById("xr-overlay");
+      try {
+        const session = await navigator.xr.requestSession("immersive-vr", {
+          optionalFeatures: ["local", "dom-overlay"],
+          domOverlay: { root },
+        });
+        readOverlayState(session);
+        return session;
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        const session = await navigator.xr.requestSession("immersive-vr", {
+          optionalFeatures: ["local"],
+        });
+        readOverlayState(session);
+        if (!session.domOverlayState || !session.domOverlayState.type) {
+          overlayStateText = `DOM-Overlay abgelehnt (${message}). Sitzung ohne Overlay.`;
+        }
+        return session;
+      }
+    }
+
+    function paintKeyboardPanel(extra) {
+      const head = document.getElementById("kb-head");
+      const note = document.getElementById("kb-note");
+      if (head) head.textContent = "Suche";
+      if (note) note.textContent = extra || "";
+    }
+
+    function showStoredQuery() {
+      const last = document.getElementById("kb-last");
+      const again = document.getElementById("kb-again");
+      if (last) last.textContent = searchQuery ? `Zuletzt: ${searchQuery}` : "";
+      if (again) {
+        again.hidden = !searchQuery;
+        again.textContent = searchQuery ? `${searchQuery} suchen` : "Nochmal";
+      }
+    }
+
+    function openKeyboardTest() {
+      const box = document.getElementById("kb-test");
+      const input = document.getElementById("kb-input");
+      if (!box || !input) return;
+      box.classList.add("open");
+      showStoredQuery();
+      input.value = "";
+      input.focus({ preventScroll: true });
+      const focused = document.activeElement === input;
+      const live = renderer.xr.isPresenting ? "XR-Sitzung aktiv." : "XR-Sitzung nicht aktiv.";
+      paintKeyboardPanel(focused
+        ? `${live} Feld hat den Fokus.`
+        : `${live} Fokus nicht gesetzt. Das Feld antippen, falls es sichtbar ist.`);
+    }
+
+    function closeKeyboardTest() {
+      const box = document.getElementById("kb-test");
+      const input = document.getElementById("kb-input");
+      if (box) box.classList.remove("open");
+      if (input) input.blur();
+    }
+
+    function bindKeyboardTest() {
+      const form = document.getElementById("kb-test");
+      const input = document.getElementById("kb-input");
+      const close = document.getElementById("kb-close");
+      const ok = document.getElementById("kb-ok");
+      const again = document.getElementById("kb-again");
+      if (!form || !input || !close || !ok || !again || form.dataset.bound) return;
+      form.dataset.bound = "1";
+      let committing = false;
+      let cancelSearch = false;
+      const commitSearch = () => {
+        if (committing || cancelSearch) return;
+        committing = true;
+        const text = input.value.trim();
+        if (text) searchQuery = text;
+        closeKeyboardTest();
+        committing = false;
+        runCatalogSearch(text || searchQuery);
+      };
+      const repeatSearch = () => {
+        if (committing || !searchQuery) return;
+        closeKeyboardTest();
+        runCatalogSearch(searchQuery);
+      };
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        commitSearch();
+      });
+      ok.addEventListener("click", (event) => {
+        event.preventDefault();
+        commitSearch();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        commitSearch();
+      });
+      again.addEventListener("click", (event) => {
+        event.preventDefault();
+        repeatSearch();
+      });
+      input.addEventListener("change", () => {
+        if (committing || cancelSearch || !form.classList.contains("open")) return;
+        if (!input.value.trim()) return;
+        commitSearch();
+      });
+      close.addEventListener("pointerdown", () => { cancelSearch = true; });
+      close.addEventListener("click", () => {
+        closeKeyboardTest();
+        cancelSearch = false;
+      });
+    }
+
+    bindKeyboardTest();
+
     enterBtn.addEventListener("click", async () => {
       if (!navigator.xr || !window.isSecureContext) return;
       if (renderer.xr.isPresenting) {
@@ -1103,14 +1383,15 @@
         return;
       }
       try {
-        const session = await navigator.xr.requestSession("immersive-vr", {
-          optionalFeatures: ["local"],
-        });
+        const session = await requestImmersiveSession();
         await renderer.xr.setSession(session);
         enterBtn.textContent = "VR beenden";
+        setStatus(`${northLabel()} · ${overlayStateText}`);
+        dashboardKey = "";
         bindControlRoles();
         session.addEventListener("end", () => {
           unbindControlRoles(session);
+          closeKeyboardTest();
           dashboard.visible = false;
           dashboardPlaced = false;
           dashboardKey = "";
@@ -1118,6 +1399,8 @@
           clearPointerHits();
           clearSkyCandidate();
           hideSkyAim();
+          hideNavCue();
+          greenTelrad.visible = false;
           activeAim = -1;
           aimEnabled = true;
           for (const pointer of pointers) pointer.line.visible = false;
@@ -1273,6 +1556,9 @@
       if (skyView.messier) {
         for (const item of lastDso) if (objectKey(item) === key) return item;
       }
+      if (skyView.ngcMode !== "off") {
+        for (const item of lastNgc) if (objectKey(item) === key) return item;
+      }
       return null;
     }
 
@@ -1281,6 +1567,7 @@
       if (item.kind === "moon") return "Mond";
       if (item.kind === "planet") return "Planet";
       if (item.kind === "messier") return "Messier";
+      if (item.kind === "ngc") return String(item.id || "").startsWith("IC") ? "IC" : "NGC";
       if (item.kind === "star" || item.hip) return "Stern";
       return item.kind || "Objekt";
     }
@@ -1326,6 +1613,8 @@
       if (item.phase != null && Number.isFinite(Number(item.phase))) {
         lines.push(`Phase ${Math.round(Number(item.phase) * 100)}%`);
       }
+      if (item.above === false || (item.fromSearch && Number(item.alt) <= 0)) lines.push("unter Horizont");
+      if (detailNote) lines.push(detailNote);
       if (missing) lines.push("nicht mehr in der Liste");
       return lines;
     }
@@ -1350,6 +1639,7 @@
         const key = objectKey(item);
         const label = item.name || item.id || "Objekt";
         row.visible = true;
+        row.userData.action = "object";
         row.userData.item = item;
         if (row.userData.key === key && row.userData.label === label) return;
         row.userData.key = key;
@@ -1396,6 +1686,7 @@
           : "home";
       }
       panelMode = "detail";
+      if (!item.fromSearch) detailNote = "";
       selectedItem = item;
       selectedKey = objectKey(item);
       selectedMissing = false;
@@ -1404,7 +1695,198 @@
       paintDashboard();
     }
 
+    function catalogQueryOf(item) {
+      if (!item) return "";
+      if (item.kind === "planet" || item.kind === "sun" || item.kind === "moon") {
+        return String(item.name || item.id || "").trim();
+      }
+      return String(item.key || item.id || item.name || "").trim();
+    }
+
+    function searchHitLabel(hit) {
+      const name = String(hit.name || "").trim();
+      if (hit.kind === "planet") return `${name || "Planet"} · Planet`;
+      if (hit.kind === "sun") return `${name || "Sonne"} · Sonne`;
+      if (hit.kind === "moon") return `${name || "Mond"} · Mond`;
+      const key = String(hit.key || hit.id || "").trim();
+      if (key && name && name !== key) return `${key} · ${name}`;
+      return name || key || "Objekt";
+    }
+
+    function updateSearchRows() {
+      if (!searchHits.length) {
+        objectRows.forEach((row, index) => {
+          if (index !== 0 || !searchNote) {
+            row.visible = false;
+            row.userData.item = null;
+            row.userData.action = "object";
+            return;
+          }
+          row.visible = true;
+          row.userData.action = "";
+          row.userData.item = null;
+          row.userData.key = "";
+          paintTextButton(row, searchNote);
+        });
+        return;
+      }
+      const pageHits = searchHits.slice(searchPage * 6, searchPage * 6 + 6);
+      objectRows.forEach((row, index) => {
+        const hit = pageHits[index];
+        if (!hit) {
+          row.visible = false;
+          row.userData.item = null;
+          row.userData.key = "";
+          return;
+        }
+        const label = searchHitLabel(hit);
+        row.visible = true;
+        row.userData.action = "search-hit";
+        row.userData.item = hit;
+        row.userData.key = hit.key || hit.id || label;
+        row.userData.label = label;
+        paintTextButton(row, label);
+      });
+    }
+
+    function showSearchResults() {
+      panelMode = "search";
+      panelReturn = "list";
+      syncPanelButtons();
+      updateSearchRows();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function stepSearchPage(dir) {
+      const pages = Math.max(1, Math.ceil(searchHits.length / 6));
+      const next = Math.min(pages - 1, Math.max(0, searchPage + dir));
+      if (next === searchPage) return;
+      searchPage = next;
+      updateSearchRows();
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function skyWhenParam() {
+      if (skyView.live || !skyView.when) return "";
+      return skyView.when.toISOString();
+    }
+
+    function catalogResolveParams(query) {
+      const params = new URLSearchParams({
+        q: String(query || "").trim(),
+        lat: String(siteLat),
+        lon: String(siteLon),
+      });
+      const when = skyWhenParam();
+      if (when) params.set("when", when);
+      if (siteStem) params.set("stem", siteStem);
+      return params;
+    }
+
+    async function runCatalogSearch(query) {
+      const serial = ++searchSerial;
+      const q = String(query || "").trim();
+      searchQuery = q;
+      searchPage = 0;
+      searchHits = [];
+      searchBusyNote(q ? `Suche ${q} …` : "Suchbegriff fehlt");
+      if (!q) return;
+      try {
+        const response = await fetch(`/catalog/search?q=${encodeURIComponent(q)}&limit=48`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== searchSerial) return;
+        if (!response.ok || data.ok === false) {
+          searchHits = [];
+          searchNote = data.error || "Suche fehlgeschlagen";
+        } else {
+          searchHits = Array.isArray(data.hits) ? data.hits : [];
+          searchNote = searchHits.length ? "" : "Keine Treffer";
+        }
+      } catch (_err) {
+        if (serial !== searchSerial) return;
+        searchHits = [];
+        searchNote = "Suche nicht erreichbar";
+      }
+      showSearchResults();
+    }
+
+    function searchBusyNote(text) {
+      searchNote = text;
+      showSearchResults();
+    }
+
+    async function openSearchHit(hit) {
+      const serial = ++hitSerial;
+      const query = catalogQueryOf(hit);
+      searchNote = "Auflösen …";
+      dashboardKey = "";
+      if (panelMode === "search") paintDashboard();
+      try {
+        const response = await fetch(`/catalog/resolve?${catalogResolveParams(query)}`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== hitSerial) return;
+        if (!response.ok || !data.ok || !data.object) {
+          searchNote = data.error || "Nicht aufgelöst";
+          showSearchResults();
+          return;
+        }
+        searchNote = "";
+        detailNote = "";
+        const item = data.object;
+        item.fromSearch = true;
+        showObjectDetail(item);
+        panelReturn = "search";
+      } catch (_err) {
+        if (serial !== hitSerial) return;
+        searchNote = "Auflösen nicht erreichbar";
+        showSearchResults();
+      }
+    }
+
+    async function aimResolvedTarget(item) {
+      const serial = ++aimSerial;
+      const query = catalogQueryOf(item);
+      detailNote = "Auflösen …";
+      dashboardKey = "";
+      if (panelMode === "detail") paintDashboard();
+      try {
+        const response = await fetch(`/catalog/resolve?${catalogResolveParams(query)}`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== aimSerial) return;
+        if (!response.ok || !data.ok || !data.object) {
+          detailNote = data.error || "Nicht aufgelöst";
+          dashboardKey = "";
+          if (panelMode === "detail") paintDashboard();
+          return;
+        }
+        const obj = data.object;
+        obj.fromSearch = true;
+        detailNote = "";
+        selectedItem = obj;
+        selectedKey = objectKey(obj);
+        adoptNavTarget(obj, "resolve");
+        dashboardKey = "";
+        if (panelMode === "detail") paintDashboard();
+      } catch (_err) {
+        if (serial !== aimSerial) return;
+        detailNote = "Auflösen nicht erreichbar";
+        dashboardKey = "";
+        if (panelMode === "detail") paintDashboard();
+      }
+    }
+
     function goBack() {
+      if (panelMode === "search") {
+        showObjectList();
+        return;
+      }
+      if (panelMode === "detail" && panelReturn === "search") {
+        showSearchResults();
+        return;
+      }
       if (panelMode === "detail" && panelReturn === "list") {
         showObjectList();
         return;
@@ -1429,7 +1911,12 @@
         updateObjectRows();
         return;
       }
+      if (panelMode === "search") {
+        updateSearchRows();
+        return;
+      }
       if (panelMode !== "detail" || !selectedKey || !selectedItem) return;
+      if (selectedItem.fromSearch) return;
       const found = findByKey(selectedKey);
       if (found) {
         selectedItem = found;
@@ -1463,6 +1950,21 @@
         dashboardTexture.needsUpdate = true;
         return;
       }
+      if (panelMode === "search") {
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 42px sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText("Suche", 48, 22);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "28px sans-serif";
+        const pages = Math.max(1, Math.ceil(searchHits.length / 6));
+        const pageText = searchHits.length ? `   Seite ${searchPage + 1} / ${pages}` : "";
+        ctx.fillText(`${searchQuery || "—"}${pageText}`, 48, 72);
+        if (searchNote) ctx.fillText(searchNote, 48, 112);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
       if (panelMode === "prefs") {
         dashboardTexture.needsUpdate = true;
         return;
@@ -1475,10 +1977,13 @@
         ctx.fillText("Himmel", 48, 22);
         ctx.fillStyle = "#e2e8f0";
         ctx.font = "26px sans-serif";
-        const messierNote = skyView.messier
-          ? `  ·  ${lastDso.length} Messier · ${skyView.icons ? "Typen" : "Scheiben"}${skyView.seeing ? " · Unruhe" : ""}`
+        const markNote = (skyView.messier || skyView.ngcMode !== "off")
+          ? `  ·  ${skyView.icons ? "Typen" : "Scheiben"}${skyView.seeing ? " · Unruhe" : ""}`
           : "";
-        ctx.fillText(`${skyClockLabel()}${messierNote}`, 48, 68);
+        const ngcNote = skyView.ngcMode === "off"
+          ? ""
+          : `  ·  ${lastNgc.length} NGC`;
+        ctx.fillText(`${skyClockLabel()}  ·  ${lastDso.length} Messier${ngcNote}${markNote}`, 48, 68);
         dashboardTexture.needsUpdate = true;
         return;
       }
@@ -1504,6 +2009,9 @@
       const clock = sections[0] && sections[0].lines ? sections[0].lines[0] : "";
       const fault = skyFault ? `  ·  ${String(skyFault).slice(0, 42)}` : "";
       ctx.fillText(`${clock}  ·  ${skyStars} Sterne${fault}`, 48, 78);
+      ctx.fillStyle = "#fde68a";
+      ctx.font = "28px sans-serif";
+      ctx.fillText(overlayStateText, 48, 500);
       dashboardTexture.needsUpdate = true;
     }
 
@@ -1512,12 +2020,14 @@
       const key = panelMode === "prefs"
         ? "prefs"
         : panelMode === "himmel"
-        ? `himmel|${skyClockLabel()}|${skyView.mag}|${skyView.live}|${skyView.stars}|${skyView.constellations}|${skyView.messier}|${skyView.icons}|${skyView.seeing}|${lastDso.length}`
+        ? `himmel|${skyClockLabel()}|${skyView.mag}|${skyView.live}|${skyView.stars}|${skyView.constellations}|${skyView.messier}|${skyView.ngcMode}|${skyView.ngcMin}|${skyView.icons}|${skyView.seeing}|${lastDso.length}|${lastNgc.length}`
         : panelMode === "list"
-        ? `list|${objectChoices().map(objectKey).join(",")}`
+        ? `list|${objectChoices().map(objectKey).join(",")}|${overlayStateText}`
+        : panelMode === "search"
+        ? `search|${searchQuery}|${searchPage}|${searchNote}|${searchHits.map((hit) => hit.key || hit.id).join(",")}`
         : (panelMode === "detail" && selectedItem
           ? `detail|${detailLines(selectedItem, selectedMissing).join("|")}`
-          : `home|${dashboardSections().map((section) => section.title + section.lines.join("|")).join("||")}|${skyStars}`);
+          : `home|${dashboardSections().map((section) => section.title + section.lines.join("|")).join("||")}|${skyStars}|${overlayStateText}`);
       if (key === dashboardKey) return;
       dashboardKey = key;
       paintDashboard();
@@ -1553,9 +2063,14 @@
       ctx.lineWidth = 8;
       ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
       ctx.fillStyle = "#f8fafc";
-      ctx.font = "bold 40px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      let size = 40;
+      ctx.font = `bold ${size}px sans-serif`;
+      while (size > 22 && ctx.measureText(text).width > canvas.width - 36) {
+        size -= 2;
+        ctx.font = `bold ${size}px sans-serif`;
+      }
       ctx.fillText(text, canvas.width / 2, canvas.height / 2);
       mesh.userData.texture.needsUpdate = true;
     }
@@ -1657,8 +2172,19 @@
       objectsButton.visible = home;
       skyMenuButton.visible = home;
       prefsButton.visible = home;
-      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel";
-      if (panelMode !== "list") hideObjectRows();
+      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search";
+      const backLabel = panelMode === "search" ? "LISTE" : "ZURÜCK";
+      if (backButton.userData.face !== backLabel) {
+        backButton.userData.face = backLabel;
+        paintTextButton(backButton, backLabel);
+      }
+      goalButton.visible = panelMode === "detail";
+      keyboardTestButton.visible = panelMode === "list" || panelMode === "search";
+      keyboardTestButton.position.x = panelMode === "search" ? -0.24 : 0;
+      const pages = Math.ceil(searchHits.length / 6);
+      searchPrevButton.visible = panelMode === "search" && searchPage > 0;
+      searchNextButton.visible = panelMode === "search" && searchPage + 1 < pages;
+      if (panelMode !== "list" && panelMode !== "search") hideObjectRows();
       for (const tab of prefTabs) tab.visible = prefs;
       for (const row of prefRows) {
         const show = prefs && row.page === prefsPage;
@@ -1687,29 +2213,53 @@
       paintTextButton(skyLiveBtn, skyView.live ? "LIVE EIN" : "LIVE AUS");
       paintTextButton(skyIconBtn, skyView.icons ? "Form TYPEN" : "Form SCHEIBE");
       paintTextButton(skySeeingBtn, skyView.seeing ? "Unruhe EIN" : "Unruhe AUS");
-      const messierOn = panelMode === "himmel" && skyView.messier;
-      skyIconBtn.visible = messierOn;
-      skySeeingBtn.visible = messierOn;
-    }
-
-    function messierPointsObject() {
-      for (const object of skyObjects) if (object.userData.messierPoints) return object;
-      return null;
+      const ngcLabel = skyView.ngcMode === "mine" ? "NGC MEINE" : skyView.ngcMode === "all" ? "NGC ALLE" : "NGC AUS";
+      paintTextButton(skyNgcBtn, ngcLabel);
+      paintTextButton(skyNgcMinLabel, `≥ ${skyView.ngcMin}`);
+      const marksOn = panelMode === "himmel" && (skyView.messier || skyView.ngcMode !== "off");
+      skyIconBtn.visible = marksOn;
+      skySeeingBtn.visible = marksOn;
+      const mine = panelMode === "himmel" && skyView.ngcMode === "mine";
+      skyNgcMinMinus.visible = mine;
+      skyNgcMinLabel.visible = mine;
+      skyNgcMinPlus.visible = mine;
     }
 
     function applyMessierSeeing(timeMs) {
-      const points = messierPointsObject();
-      const uniforms = points && points.material && points.material.uniforms;
-      if (!uniforms || !uniforms.uSeeing) return;
-      uniforms.uSeeing.value = skyView.seeing ? 1 : 0;
-      if (skyView.seeing && uniforms.uTime) uniforms.uTime.value = timeMs * 0.001;
+      for (const object of skyObjects) {
+        if (!object.userData.dsoPoints) continue;
+        const uniforms = object.material && object.material.uniforms;
+        if (!uniforms || !uniforms.uSeeing) continue;
+        uniforms.uSeeing.value = skyView.seeing ? 1 : 0;
+        if (skyView.seeing && uniforms.uTime) uniforms.uTime.value = timeMs * 0.001;
+      }
     }
 
     function toggleMessierIcons() {
       skyView.icons = !skyView.icons;
       paintHimmelButtons();
       dashboardKey = "";
-      if (skyView.messier) rebuildMessierMarks();
+      rebuildDsoMarks();
+    }
+
+    function cycleNgcMode() {
+      skyView.ngcMode = skyView.ngcMode === "off" ? "mine" : skyView.ngcMode === "mine" ? "all" : "off";
+      if (skyKey && !findByKey(skyKey)) {
+        skyKey = "";
+        skyMark.visible = false;
+      }
+      paintHimmelButtons();
+      dashboardKey = "";
+      requestSky(true);
+    }
+
+    function stepNgcMin(dir) {
+      const next = Math.min(5, Math.max(1, skyView.ngcMin + dir));
+      if (next === skyView.ngcMin) return;
+      skyView.ngcMin = next;
+      paintHimmelButtons();
+      dashboardKey = "";
+      if (skyView.ngcMode === "mine") requestSky(true);
     }
 
     function toggleMessierSeeing() {
@@ -1804,6 +2354,7 @@
         ring.renderOrder = 5;
         telrad.add(ring);
       }
+      fillGreenTelrad();
     }
 
     function applyPanelScale() {
@@ -1984,9 +2535,296 @@
     function onAimToggle() {
       aimEnabled = !aimEnabled;
       if (aimActive()) return;
+      clearNavTarget();
       clearSkyCandidate();
       hideSkyAim();
       for (const pointer of pointers) pointer.line.visible = false;
+    }
+
+    function fillGreenTelrad() {
+      while (greenTelrad.children.length) {
+        const child = greenTelrad.children[0];
+        greenTelrad.remove(child);
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+      while (navTurn.children.length) {
+        const child = navTurn.children[0];
+        navTurn.remove(child);
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+      const outer = Math.max(...vrTune.telradHalfDeg);
+      for (const halfDeg of vrTune.telradHalfDeg) {
+        const ring = makeRing(
+          vrTune.shellRadius * Math.tan(THREE.MathUtils.degToRad(halfDeg)),
+          navColor,
+        );
+        ring.renderOrder = 5;
+        greenTelrad.add(ring);
+      }
+      const turn = makeRing(
+        vrTune.shellRadius * Math.tan(THREE.MathUtils.degToRad(outer + 0.35)),
+        navColor,
+      );
+      turn.renderOrder = 7;
+      navTurn.add(turn);
+      navReachedDrawn = false;
+    }
+
+    function paintGreen(reached) {
+      if (navReachedDrawn === reached) return;
+      navReachedDrawn = reached;
+      const color = reached ? navReachedColor : navColor;
+      const opacity = reached ? 1 : 0.85;
+      for (const ring of greenTelrad.children) {
+        ring.material.color.setHex(color);
+        ring.material.opacity = opacity;
+      }
+    }
+
+    function navOuterReach(extra) {
+      const outer = Math.max(...vrTune.telradHalfDeg);
+      return vrTune.shellRadius * Math.tan(THREE.MathUtils.degToRad(outer)) + extra;
+    }
+
+    function hideNavCue() {
+      navArrow.visible = false;
+      navTurn.visible = false;
+      navReadout.visible = false;
+    }
+
+    function clearNavTarget() {
+      navTarget.active = false;
+      navTarget.key = "";
+      navTarget.below = false;
+      navTarget.stale = false;
+      navTarget.source = "";
+      navTarget.query = "";
+      navTarget.pending = false;
+      resolveSerial += 1;
+      greenTelrad.visible = false;
+      paintGreen(false);
+      hideNavCue();
+    }
+
+    function navDisplayOff(target) {
+      if (target.kind === "messier") return !skyView.messier;
+      if (target.kind === "ngc") return skyView.ngcMode === "off";
+      if (target.kind === "star") return !skyView.stars;
+      return false;
+    }
+
+    function findNavSource(key) {
+      if (!key) return null;
+      for (const body of lastBodies) if (objectKey(body) === key) return body;
+      for (const star of lastStars) if (objectKey(star) === key) return star;
+      for (const item of lastDso) if (objectKey(item) === key) return item;
+      for (const item of lastNgc) if (objectKey(item) === key) return item;
+      return null;
+    }
+
+    function syncNavTarget() {
+      if (!navTarget.active || !navTarget.key) return;
+      const found = findNavSource(navTarget.key);
+      if (found && Number.isFinite(Number(found.az)) && Number.isFinite(Number(found.alt))) {
+        navTarget.az = Number(found.az);
+        navTarget.alt = Number(found.alt);
+        navTarget.name = found.name || found.id || navTarget.name;
+        navTarget.below = false;
+        navTarget.stale = false;
+        return;
+      }
+      if (navTarget.source === "resolve") {
+        refreshResolveTarget();
+        return;
+      }
+      if (navDisplayOff(navTarget)) {
+        navTarget.below = false;
+        navTarget.stale = true;
+        return;
+      }
+      navTarget.below = true;
+      navTarget.stale = false;
+    }
+
+    function adoptNavTarget(item, source) {
+      const az = Number(item && item.az);
+      const alt = Number(item && item.alt);
+      if (!Number.isFinite(az) || !Number.isFinite(alt)) return;
+      navTarget.active = true;
+      navTarget.key = objectKey(item);
+      navTarget.name = item.name || item.id || "Objekt";
+      navTarget.kind = item.kind || (item.hip ? "star" : "");
+      navTarget.id = item.id || "";
+      navTarget.az = az;
+      navTarget.alt = alt;
+      navTarget.ra = Number.isFinite(Number(item.ra)) ? Number(item.ra) : null;
+      navTarget.dec = Number.isFinite(Number(item.dec)) ? Number(item.dec) : null;
+      const origin = source || "overlay";
+      navTarget.source = origin;
+      navTarget.query = catalogQueryOf(item);
+      navTarget.pending = false;
+      navTarget.below = origin === "resolve" && (item.above === false || alt <= 0);
+      navTarget.stale = false;
+      if (origin !== "resolve") syncNavTarget();
+    }
+
+    async function refreshResolveTarget() {
+      if (!navTarget.active || navTarget.source !== "resolve" || !navTarget.query) return;
+      if (findNavSource(navTarget.key)) return;
+      const serial = ++resolveSerial;
+      const query = navTarget.query;
+      try {
+        const response = await fetch(`/catalog/resolve?${catalogResolveParams(query)}`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== resolveSerial || navTarget.query !== query || navTarget.source !== "resolve") return;
+        const obj = data.object;
+        if (!response.ok || !data.ok || !obj || !Number.isFinite(Number(obj.az)) || !Number.isFinite(Number(obj.alt))) {
+          navTarget.pending = true;
+          return;
+        }
+        navTarget.az = Number(obj.az);
+        navTarget.alt = Number(obj.alt);
+        navTarget.below = obj.above === false || Number(obj.alt) <= 0;
+        navTarget.pending = false;
+        navTarget.stale = false;
+        if (panelMode === "detail" && selectedItem && selectedItem.fromSearch && objectKey(selectedItem) === navTarget.key) {
+          selectedItem.az = navTarget.az;
+          selectedItem.alt = navTarget.alt;
+          selectedItem.above = obj.above;
+          selectedItem.ra = obj.ra;
+          selectedItem.dec = obj.dec;
+          dashboardKey = "";
+        }
+      } catch (_err) {
+        if (serial !== resolveSerial) return;
+        navTarget.pending = true;
+      }
+    }
+
+    function navCaption(angle, reached) {
+      const name = navTarget.name || "Ziel";
+      if (navTarget.pending) return `${name} · Position nicht erneuert`;
+      if (navTarget.below) return `${name} · Ziel unter Horizont`;
+      if (!Number.isFinite(angle)) return "";
+      let text = `${name} · ${angle.toFixed(1).replace(".", ",")}°`;
+      if (reached) text += " · erreicht";
+      else if (navTarget.stale) text += " · fest";
+      return text;
+    }
+
+    function paintNavReadout(text) {
+      if (text !== navReadoutText) {
+        navReadoutText = text;
+        const previous = navReadout.material.map;
+        const texture = makeLabelTexture(text);
+        navReadout.material.map = texture;
+        navReadout.material.needsUpdate = true;
+        if (previous) previous.dispose();
+      }
+      const height = Math.max(7, vrTune.labelHeight);
+      const image = navReadout.material.map && navReadout.material.map.image;
+      const aspect = image && image.height ? image.width / image.height : 4;
+      navReadout.scale.set(height * aspect, height, 1);
+    }
+
+    function tangentUp(radial, target) {
+      const scale = radial.length() || 1;
+      target.set(0, 1, 0).addScaledVector(radial, -(radial.y / scale) / scale);
+      if (target.lengthSq() < 1e-4) target.set(1, 0, 0);
+      else target.normalize();
+      return target;
+    }
+
+    function placeNavReadout(hitPoint, text) {
+      if (!text) {
+        navReadout.visible = false;
+        return;
+      }
+      paintNavReadout(text);
+      tangentUp(hitPoint, navLocalY);
+      navReadout.position.copy(hitPoint).addScaledVector(navLocalY, navOuterReach(22));
+      navReadout.visible = true;
+    }
+
+    function placeNavArrow(hitPoint, heading) {
+      navArrow.position.copy(hitPoint).addScaledVector(heading, navOuterReach(7));
+      navArrow.up.copy(heading);
+      navArrow.lookAt(0, 0, 0);
+      navArrow.visible = true;
+    }
+
+    function placeNavTurn(hitPoint) {
+      navTurn.position.copy(hitPoint);
+      navTurn.up.set(0, 1, 0);
+      navTurn.lookAt(0, 0, 0);
+      navTurn.visible = true;
+    }
+
+    function placeGreenTelrad() {
+      if (!navTarget.active || navTarget.below || navTarget.pending || !Number.isFinite(navTarget.az) || !Number.isFinite(navTarget.alt)) {
+        greenTelrad.visible = false;
+        return;
+      }
+      navPoint.copy(azAltToVec(navTarget.az, navTarget.alt, vrTune.shellRadius));
+      sphere.localToWorld(navPoint);
+      if (navPoint.lengthSq() < 1) {
+        greenTelrad.visible = false;
+        return;
+      }
+      greenTelrad.position.copy(navPoint);
+      greenTelrad.lookAt(0, 0, 0);
+      greenTelrad.visible = true;
+    }
+
+    function updateNavCue(direction, hitPoint) {
+      if (!navTarget.active) {
+        hideNavCue();
+        paintGreen(false);
+        return;
+      }
+      const aimOk = Boolean(direction && direction.lengthSq() > 0.5 && hitPoint);
+      if (navTarget.below || navTarget.pending || !Number.isFinite(navTarget.az) || !Number.isFinite(navTarget.alt)) {
+        navArrow.visible = false;
+        navTurn.visible = false;
+        paintGreen(false);
+        if (aimOk && (navTarget.below || navTarget.pending)) placeNavReadout(hitPoint, navCaption(null, false));
+        else navReadout.visible = false;
+        return;
+      }
+      if (!objectWorldDir(navTarget, navTargetDir)) {
+        hideNavCue();
+        return;
+      }
+      const dot = THREE.MathUtils.clamp(direction.dot(navTargetDir), -1, 1);
+      const angle = THREE.MathUtils.radToDeg(Math.acos(dot));
+      const reached = angle <= vrTune.pickAcquireDeg;
+      paintGreen(reached);
+      if (aimOk) placeNavReadout(hitPoint, navCaption(angle, reached));
+      else navReadout.visible = false;
+      if (!aimOk) {
+        navArrow.visible = false;
+        navTurn.visible = false;
+        return;
+      }
+      if (angle >= 165) {
+        navArrow.visible = false;
+        placeNavTurn(hitPoint);
+        return;
+      }
+      navTurn.visible = false;
+      if (angle < 3) {
+        navArrow.visible = false;
+        return;
+      }
+      navPerp.copy(navTargetDir).addScaledVector(direction, -dot);
+      if (navPerp.lengthSq() < 1e-4) {
+        navArrow.visible = false;
+        return;
+      }
+      navPerp.normalize();
+      placeNavArrow(hitPoint, navPerp);
     }
 
     function hideSkyAim() {
@@ -2042,6 +2880,9 @@
       if (skyView.messier) {
         for (const item of lastDso) pool.push(item);
       }
+      if (skyView.ngcMode !== "off") {
+        for (const item of lastNgc) pool.push(item);
+      }
       for (const item of pool) {
         if (!objectWorldDir(item, objDir)) continue;
         const angle = angleDeg(direction, objDir);
@@ -2066,19 +2907,23 @@
     }
 
     function updateSkyAim() {
+      placeGreenTelrad();
       if (!aimActive()) {
         hideSkyAim();
+        hideNavCue();
         return;
       }
       const pointer = activeAim >= 0 ? pointers[activeAim] : null;
       if (!pointer || !pointer.ready || pointer.buttonHit) {
         hideSkyAim();
+        hideNavCue();
         if (!pointer || !pointer.ready) clearSkyCandidate();
         return;
       }
       const hit = skyHit(pointer.origin, pointer.direction);
       if (!hit) {
         hideSkyAim();
+        hideNavCue();
         clearSkyCandidate();
         return;
       }
@@ -2086,6 +2931,7 @@
       telrad.lookAt(0, 0, 0);
       telrad.visible = true;
       aimDir.copy(hit).normalize();
+      updateNavCue(aimDir, hit);
       const pick = chooseCandidate(aimDir);
       if (!pick) {
         clearSkyCandidate();
@@ -2112,6 +2958,8 @@
         clearPointerHits();
         clearSkyCandidate();
         hideSkyAim();
+        hideNavCue();
+        greenTelrad.visible = false;
         for (const pointer of pointers) pointer.line.visible = false;
         return;
       }
@@ -2260,6 +3108,31 @@
       }
       if (sameHand && hit.userData.action === "sky-seeing") {
         toggleMessierSeeing();
+        return;
+      }
+      if (sameHand && hit.userData.action === "sky-ngc") {
+        cycleNgcMode();
+        return;
+      }
+      if (sameHand && hit.userData.action === "sky-ngc-min") {
+        stepNgcMin(hit.userData.dir || 0);
+        return;
+      }
+      if (sameHand && hit.userData.action === "nav-goal") {
+        if (selectedItem && selectedItem.fromSearch) aimResolvedTarget(selectedItem);
+        else if (selectedItem) adoptNavTarget(selectedItem, "overlay");
+        return;
+      }
+      if (sameHand && hit.userData.action === "kb-test") {
+        openKeyboardTest();
+        return;
+      }
+      if (sameHand && hit.userData.action === "search-page") {
+        stepSearchPage(hit.userData.dir || 0);
+        return;
+      }
+      if (sameHand && hit.userData.action === "search-hit" && hit.userData.item) {
+        openSearchHit(hit.userData.item);
         return;
       }
       const aim = activeAim >= 0 ? pointers[activeAim] : null;

@@ -67,6 +67,18 @@ sections:
       - id: astro-vr-architektur-v1.1
         title: Astro-VR Architektur v1.1 (XR-8d Himmel)
         file: knowledge/astro-vr-architektur-v1.1.md
+      - id: astro-vr-architektur-v1.2
+        title: Astro-VR Architektur v1.2 (XR-8e NGC-Auswahl)
+        file: knowledge/astro-vr-architektur-v1.2.md
+      - id: astro-vr-architektur-v1.3
+        title: Astro-VR Architektur v1.3 (XR-8f Zielführung)
+        file: knowledge/astro-vr-architektur-v1.3.md
+      - id: astro-vr-architektur-v1.4
+        title: Astro-VR Architektur v1.4 (XR-8g.1 Tastaturtest)
+        file: knowledge/astro-vr-architektur-v1.4.md
+      - id: astro-vr-architektur-v1.5
+        title: Astro-VR Architektur v1.5 (XR-8g.2 Katalogsuche)
+        file: knowledge/astro-vr-architektur-v1.5.md
       - id: astro-vr-desktop-inventar-v0.1
         title: Astro-VR Desktop-Inventar v0.1 (XR-8a)
         file: knowledge/astro-vr-desktop-inventar-v0.1.md

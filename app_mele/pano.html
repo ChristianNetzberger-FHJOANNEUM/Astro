@@ -117,6 +117,14 @@
     }
     #btn-fav-toggle.on { background: #854d0e; border-color: #fbbf24; }
     #btn-fav-toggle:disabled { opacity: .35; cursor: not-allowed; }
+    #info-pick { display: none; margin: 8px 0; padding-top: 6px; border-top: 1px solid #334155; }
+    #info-pick label { display: flex; gap: 6px; align-items: center; margin: 4px 0; font-size: 12px; }
+    #info-pick select, #info-pick input[type="text"] {
+      background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; padding: 3px 6px;
+    }
+    #info-pick input[type="text"] { width: 100%; }
+    #pick-key, #pick-hint, #pick-status { margin: 2px 0 6px; font-size: 12px; color: #94a3b8; }
+    #btn-pick-save { background: #1f4e5f; color: #e2e8f0; border: 0; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
     #sky-search {
       width: 9.5rem; max-width: 28vw; background: #0f172a; color: #e2e8f0;
       border: 1px solid #475569; border-radius: 4px; padding: 3px 6px; font-size: 13px;
@@ -293,6 +301,24 @@
       <span class="sw day">···</span> Tag (duenn, gepunktet)
     </p>
     <p id="info-windows"></p>
+    <div id="info-pick">
+      <p id="pick-key"></p>
+      <p id="pick-hint"></p>
+      <label>Bewertung
+        <select id="pick-rating">
+          <option value="">unbewertet</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
+      </label>
+      <label><input id="pick-quest" type="checkbox"> Quest-Freigabe</label>
+      <label>Notiz <input id="pick-note" type="text" maxlength="240"></label>
+      <button id="btn-pick-save" type="button">Speichern</button>
+      <p id="pick-status"></p>
+    </div>
     <div class="goto-row">
       <button id="btn-fav-toggle" type="button" disabled title="Zu Favoriten hinzufügen/entfernen">☆</button>
       <button id="btn-goto" type="button" disabled>GoTo</button>
@@ -2814,6 +2840,75 @@
         document.getElementById("info-windows").textContent = "";
         document.getElementById("info-legend").style.display = "none";
       }
+      loadPickForm(item);
+    }
+
+    function pickableItem(item) {
+      return Boolean(item && (item.kind === "messier" || item.kind === "ngc"));
+    }
+
+    async function loadPickForm(item) {
+      const box = document.getElementById("info-pick");
+      if (!box) return;
+      if (!pickableItem(item)) {
+        box.style.display = "none";
+        return;
+      }
+      box.style.display = "block";
+      const key = item.id || item.key || "";
+      const status = document.getElementById("pick-status");
+      status.textContent = "";
+      document.getElementById("pick-key").textContent = key;
+      document.getElementById("pick-hint").textContent = "";
+      try {
+        const response = await fetch(`/catalog/picks?key=${encodeURIComponent(key)}`);
+        const data = await response.json();
+        const pick = data.pick || {};
+        const canonical = data.key || key;
+        document.getElementById("pick-key").textContent = canonical;
+        document.getElementById("pick-rating").value = pick.rating ? String(pick.rating) : "";
+        document.getElementById("pick-quest").checked = Boolean(pick.quest);
+        document.getElementById("pick-note").value = pick.note || "";
+        if (data.corrupt) {
+          document.getElementById("pick-hint").textContent = data.error || "Auswahldatei beschädigt";
+        } else if (/^M\d+$/.test(canonical)) {
+          document.getElementById("pick-hint").textContent =
+            `Gespeichert als ${canonical}. Erscheint nur über Messier, nicht zusätzlich als NGC.`;
+        }
+      } catch (_err) {
+        status.textContent = "Auswahl nicht geladen";
+      }
+      document.getElementById("btn-pick-save").onclick = () => { savePickForm(); };
+    }
+
+    async function savePickForm() {
+      const status = document.getElementById("pick-status");
+      const ratingRaw = document.getElementById("pick-rating").value;
+      const body = {
+        key: document.getElementById("pick-key").textContent,
+        rating: ratingRaw === "" ? null : Number(ratingRaw),
+        quest: document.getElementById("pick-quest").checked,
+        note: document.getElementById("pick-note").value,
+      };
+      status.textContent = "Speichere …";
+      try {
+        const response = await fetch("/catalog/picks", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          status.textContent = data.error || "Speichern fehlgeschlagen";
+          return;
+        }
+        document.getElementById("pick-key").textContent = data.key || body.key;
+        status.textContent = data.messier
+          ? `Gespeichert als ${data.key}. Nur Messier.`
+          : `Gespeichert als ${data.key}.`;
+      } catch (_err) {
+        status.textContent = "Speichern fehlgeschlagen";
+      }
     }
 
     function hideInfo() {
@@ -2833,6 +2928,8 @@
       }
       updateTrackPin();
       syncFavoriteToggleButton();
+      const pickBox = document.getElementById("info-pick");
+      if (pickBox) pickBox.style.display = "none";
     }
 
     function updateTrackPin() {
