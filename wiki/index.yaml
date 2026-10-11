@@ -79,6 +79,9 @@ sections:
       - id: astro-vr-architektur-v1.5
         title: Astro-VR Architektur v1.5 (XR-8g.2 Katalogsuche)
         file: knowledge/astro-vr-architektur-v1.5.md
+      - id: astro-vr-architektur-v1.6
+        title: Astro-VR Architektur v1.6 (XR-9a Tagesbahn)
+        file: knowledge/astro-vr-architektur-v1.6.md
       - id: astro-vr-desktop-inventar-v0.1
         title: Astro-VR Desktop-Inventar v0.1 (XR-8a)
         file: knowledge/astro-vr-desktop-inventar-v0.1.md

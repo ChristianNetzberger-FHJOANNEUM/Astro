@@ -1,7 +1,7 @@
 # Astro-VR Architektur v1.5 — XR-8g.2 Katalogsuche
 
 > Quelle: abgenommene Systemtastatur in [v1.4](astro-vr-architektur-v1.4.md)
-> Stand: **Auf der Quest bestätigt** am 2026-10-11. `app_mele/vr.html` und die Caddy-Freigabe auf Port 8443. Keine neue Python-Route, keine 3D-Tastatur, kein GoTo. Die Quest-Tastatur füllt einen früheren Suchbegriff nicht vor. Das ist kein Fehler.
+> Stand: **Auf der Quest bestätigt** am 2026-10-11. `app_mele/vr.html` und die Caddy-Freigabe auf Port 8443. Keine neue Python-Route, keine 3D-Tastatur, kein GoTo. Die Quest-Tastatur füllt einen früheren Suchbegriff nicht vor. Das ist kein Fehler. Fortschreibung: [v1.6](astro-vr-architektur-v1.6.md).
 
 XR-8f und XR-8g.1 bleiben. Die Sechserliste, der rote Telrad, Pfeil, Winkel, aimToggle, Panorama, Sterne, Messier, NGC, TYPEN, Unruhe, LIVE und die Tafelgröße sind unverändert. NINA, SynScan, GoTo und Aufnahme bleiben unberührt. Eine Mindesthöhe von 25° ist nicht eingebaut. Die Unterscheidung zwischen astronomischem Horizont und Verdeckung durch Haus oder Baum ist nicht Teil dieses Schritts.
 
@@ -64,4 +64,5 @@ Geprüft: M13 bei MESSIER AUS, NGC 7009 bei NGC AUS, ein IC-Objekt (vorgegeben w
 ## Verwandte Seiten
 
 - [Astro-VR Architektur v1.4](astro-vr-architektur-v1.4.md)
+- [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md) — XR-9a Tagesbahn, Quest-Abnahme offen
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)

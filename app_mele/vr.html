@@ -99,6 +99,7 @@
       aimMotion: 0.01,
       aimRotWeight: 0.2,
       panelScale: 1.5,
+      panoBrightness: 100,
     };
     const controlDefaults = { dashboard: "select", aimToggle: "" };
     const vrTune = {
@@ -116,6 +117,7 @@
       aimMotion: vrDefaults.aimMotion,
       aimRotWeight: vrDefaults.aimRotWeight,
       panelScale: vrDefaults.panelScale,
+      panoBrightness: vrDefaults.panoBrightness,
     };
     const controlRoles = {
       dashboard: controlDefaults.dashboard,
@@ -480,6 +482,8 @@
       if (code === "OCl" || code === "*Ass" || code === "Cl+N") return 3;
       if (code === "PN") return 4;
       if (code === "Neb" || code === "HII" || code === "EmN" || code === "RfN" || code === "DrkN" || code === "SNR") return 5;
+      if (code === "*") return 7;
+      if (code === "**") return 8;
       return 6;
     }
 
@@ -503,14 +507,14 @@
         const vec = azAltToVec(Number(item.az), Number(item.alt), vrTune.shellRadius);
         const kind = messierKind(item.type);
         const shape = skyView.icons ? kind : 0;
-        tint.setHex(shape === 0 ? 0xfbbf24 : messierTints[kind]);
+        tint.setHex(shape === 0 ? 0xfbbf24 : (messierTints[kind] || 0xe7e5e4));
         positions[index * 3] = vec.x;
         positions[index * 3 + 1] = vec.y;
         positions[index * 3 + 2] = vec.z;
         colors[index * 3] = tint.r;
         colors[index * 3 + 1] = tint.g;
         colors[index * 3 + 2] = tint.b;
-        sizes[index] = shape === 0 ? 12 : 18;
+        sizes[index] = shape === 0 ? 12 : shape >= 7 ? 30 : 18;
         shapes[index] = shape;
         seeds[index] = (index % 17) / 17;
       });
@@ -559,6 +563,7 @@
             }
             vec2 p = (uv - vec2(0.5)) * (1.0 + 0.18 * max(wobble, 0.0));
             float alpha = 0.0;
+            vec3 tint = vColor;
             if (vShape < 0.5) {
               float r = length(p);
               if (r > 0.5) discard;
@@ -588,13 +593,30 @@
               float puff = smoothstep(0.28, 0.0, length(p - vec2(0.10, -0.08)));
               alpha = max(blob * 0.72, puff * 0.45);
               if (alpha < 0.05) discard;
-            } else {
+            } else if (vShape < 6.5) {
               float m = abs(p.x) + abs(p.y);
               if (m > 0.46) discard;
               alpha = smoothstep(0.46, 0.22, m);
+            } else if (vShape < 7.5) {
+              float disc = smoothstep(0.18, 0.05, length(p));
+              float spikeH = smoothstep(0.05, 0.01, abs(p.y)) * smoothstep(0.5, 0.14, abs(p.x));
+              float spikeV = smoothstep(0.05, 0.01, abs(p.x)) * smoothstep(0.5, 0.14, abs(p.y));
+              float spikes = max(spikeH, spikeV);
+              alpha = max(disc, spikes);
+              if (alpha < 0.04) discard;
+              tint = mix(vec3(0.45, 0.78, 1.0), vec3(0.86, 0.95, 1.0), spikes);
+            } else {
+              vec2 left = p - vec2(-0.16, 0.0);
+              vec2 right = p - vec2(0.16, 0.02);
+              float yellowStar = smoothstep(0.16, 0.035, length(left));
+              float redStar = smoothstep(0.145, 0.03, length(right));
+              alpha = max(yellowStar, redStar);
+              if (alpha < 0.04) discard;
+              tint = (yellowStar * vec3(1.0, 0.84, 0.2) + redStar * vec3(0.96, 0.24, 0.18))
+                / max(yellowStar + redStar, 0.001);
             }
             float gleam = uSeeing > 0.5 ? (0.62 + 0.38 * (0.5 + 0.5 * wobble)) : 1.0;
-            gl_FragColor = vec4(vColor, alpha * gleam);
+            gl_FragColor = vec4(tint, alpha * gleam);
           }
         `,
         transparent: true,
@@ -767,6 +789,7 @@
         skyStars = stars.length;
         skyNames = labels.length;
         skyWhen = String(data.when || "");
+        if (trackData && trackItemKey) ensureDayTrack();
         skyLink = "verbunden";
         skyFault = "";
         const picksNote = data.picks_error ? ` · ${data.picks_error}` : "";
@@ -817,7 +840,13 @@
     geometry.scale(-1, 1, 1);
     const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
     sphere.add(new THREE.Mesh(geometry, material));
+    function applyPanoBrightness() {
+      const level = Math.min(100, Math.max(0, vrTune.panoBrightness)) / 100;
+      material.color.setRGB(level, level, level, THREE.SRGBColorSpace);
+    }
     sphere.add(sky);
+    const trackGroup = new THREE.Group();
+    sky.add(trackGroup);
     scene.add(sphere);
 
     const dashboardCanvas = document.createElement("canvas");
@@ -845,6 +874,13 @@
     let dashboardPlaced = false;
     let dashboardKey = "";
     let dashboardToggleAt = 0;
+    let dragSource = null;
+    let dragArm = null;
+    let dragDistance = 0;
+    const dragLocal = new THREE.Vector3();
+    const dragRayPoint = new THREE.Vector3();
+    const dragGrabWorld = new THREE.Vector3();
+    const dragHead = new THREE.Vector3();
     const testRest = 0xffffff;
     const testHoverColor = 0xfbbf24;
     const objectsButton = makeTextButton("OBJEKTE", "objects", -0.16, 0.05, 0.30, 0.09);
@@ -855,8 +891,11 @@
     paintMenuButton(prefsButton, "EINSTELLUNGEN", "VR-Preferences");
     const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
     backButton.visible = false;
-    const goalButton = makeTextButton("ZIEL FINDEN", "nav-goal", 0, -0.152, 0.32, 0.040);
+    const goalButton = makeTextButton("ZIEL FINDEN", "nav-goal", -0.16, -0.152, 0.30, 0.040);
     goalButton.visible = false;
+    const trackButton = makeTextButton("TAGESBAHN", "day-track", 0.16, -0.152, 0.30, 0.040);
+    trackButton.visible = false;
+    const dragHandle = makeTextButton("ZIEHEN", "drag", 0, 0.191, 0.64, 0.034);
     const keyboardTestButton = makeTextButton("SUCHEN", "kb-test", -0.24, -0.128, 0.16, 0.040);
     keyboardTestButton.visible = false;
     const searchPrevButton = makeTextButton("ZURÜCK", "search-page", 0.00, -0.128, 0.16, 0.040);
@@ -913,6 +952,7 @@
     makePrefRow("bild", "label", prefRowY[0], "step");
     makePrefRow("bild", "mark", prefRowY[1], "hold");
     makePrefRow("bild", "panel", prefRowY[2], "step");
+    makePrefRow("bild", "pano", prefRowY[3], "step");
     makePrefRow("tasten", "dashboard", prefRowY[0], "cycle");
     makePrefRow("tasten", "aim", prefRowY[1], "cycle");
     const prefReset = makeTextButton("STANDARD", "prefs-reset", -0.13, -0.148, 0.22, 0.048);
@@ -953,6 +993,8 @@
       prefsButton,
       backButton,
       goalButton,
+      trackButton,
+      dragHandle,
       keyboardTestButton,
       searchPrevButton,
       searchNextButton,
@@ -965,6 +1007,11 @@
     ];
     let overlayStateText = "DOM-Overlay: nicht geprüft";
     let searchQuery = "";
+    let trackSerial = 0;
+    let trackData = null;
+    let trackNote = "";
+    let trackItemKey = "";
+    let trackReturn = "list";
     let searchHits = [];
     let searchPage = 0;
     let searchNote = "";
@@ -1396,6 +1443,8 @@
           dashboardPlaced = false;
           dashboardKey = "";
           dashboardToggleAt = 0;
+          dragSource = null;
+          dragArm = null;
           clearPointerHits();
           clearSkyCandidate();
           hideSkyAim();
@@ -1680,6 +1729,7 @@
     }
 
     function showObjectDetail(item) {
+      if (trackItemKey && trackItemKey !== objectKey(item)) clearDayTrack();
       if (panelMode !== "detail") {
         panelReturn = panelMode === "list" || panelMode === "himmel" || panelMode === "prefs"
           ? panelMode
@@ -1878,7 +1928,369 @@
       }
     }
 
+    function itemHasEquatorial(item) {
+      return Boolean(item) && Number.isFinite(Number(item.ra)) && Number.isFinite(Number(item.dec));
+    }
+
+    function trackSkyWhen() {
+      if (!skyView.live && skyView.when) return skyView.when;
+      return skyWhen ? new Date(skyWhen) : new Date();
+    }
+
+    function trackClock(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "—";
+      return date.toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit", hour12: false });
+    }
+
+    function disposeTrackMeshes() {
+      while (trackGroup.children.length) {
+        const child = trackGroup.children[0];
+        trackGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      }
+    }
+
+    function clearDayTrack() {
+      trackSerial += 1;
+      trackData = null;
+      trackNote = "";
+      trackItemKey = "";
+      disposeTrackMeshes();
+    }
+
+    function trackStyle(light, above) {
+      if (light === "night") {
+        return above
+          ? { kind: "solid", color: 0x5eead4, radius: 1.45, opacity: 0.95 }
+          : { kind: "solid", color: 0x64748b, radius: 0.45, opacity: 0.35 };
+      }
+      if (light === "twilight") {
+        return above
+          ? { kind: "dash", color: 0xfbbf24, radius: 0.9, opacity: 0.92, on: 2, off: 1 }
+          : { kind: "dash", color: 0x78716c, radius: 0.4, opacity: 0.3, on: 2, off: 1 };
+      }
+      return above
+        ? { kind: "dot", color: 0xfb923c, radius: 0.45, opacity: 0.75, on: 1, off: 2 }
+        : { kind: "dot", color: 0x57534e, radius: 0.32, opacity: 0.25, on: 1, off: 2 };
+    }
+
+    function trackRuns(points) {
+      const runs = [];
+      let run = [];
+      const joined = (left, right) => {
+        if (!left) return false;
+        if (left.light !== right.light || left.above !== right.above) return false;
+        const turn = Math.abs(((((left.az - right.az) % 360) + 540) % 360) - 180);
+        return turn < 25;
+      };
+      for (const point of points) {
+        if (run.length && !joined(run[run.length - 1], point)) {
+          runs.push(run);
+          run = [];
+        }
+        run.push(point);
+      }
+      if (run.length) runs.push(run);
+      return runs;
+    }
+
+    function addTrackTube(points, radius, color, opacity) {
+      if (points.length < 2) return;
+      const vectors = points.map((item) => azAltToVec(item.az, item.alt, vrTune.shellRadius - 8));
+      const curve = new THREE.CatmullRomCurve3(vectors);
+      const geometry = new THREE.TubeGeometry(curve, Math.max(2, (vectors.length - 1) * 3), radius, 5, false);
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false,
+      }));
+      trackGroup.add(mesh);
+    }
+
+    function drawSkyTrack(points) {
+      disposeTrackMeshes();
+      const list = Array.isArray(points) ? points : [];
+      for (const run of trackRuns(list)) {
+        if (run.length < 2) continue;
+        const style = trackStyle(run[0].light || "night", run[0].above);
+        if (style.kind === "solid") {
+          addTrackTube(run, style.radius, style.color, style.opacity);
+          continue;
+        }
+        let index = 0;
+        while (index < run.length - 1) {
+          addTrackTube(run.slice(index, index + style.on + 1), style.radius, style.color, style.opacity);
+          index += style.on + style.off;
+        }
+      }
+      const now = trackSkyWhen().getTime();
+      let nearest = null;
+      for (const point of list) {
+        const distance = Math.abs(new Date(point.when).getTime() - now);
+        if (!nearest || distance < nearest.distance) nearest = { point, distance };
+      }
+      addHourMarks(list);
+      if (!nearest || nearest.distance > 20 * 60 * 1000) return;
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(nearest.point.above ? 2.2 : 1.2, 10, 8),
+        new THREE.MeshBasicMaterial({
+          color: 0xf8fafc,
+          transparent: true,
+          opacity: nearest.point.above ? 0.95 : 0.45,
+          depthWrite: false,
+        }),
+      );
+      marker.position.copy(azAltToVec(nearest.point.az, nearest.point.alt, vrTune.shellRadius - 8));
+      trackGroup.add(marker);
+    }
+
+    function hourMarks(points) {
+      const list = Array.isArray(points) ? points : [];
+      const exact = list.filter((item) => {
+        if (!item.when) return false;
+        const stamp = new Date(item.when);
+        return stamp.getMinutes() === 0 && stamp.getSeconds() === 0;
+      });
+      if (exact.length) return exact;
+      const byHour = new Map();
+      for (const item of list) {
+        if (!item.when) continue;
+        const stamp = new Date(item.when);
+        const key = `${stamp.getFullYear()}-${stamp.getMonth()}-${stamp.getDate()}-${stamp.getHours()}`;
+        const dist = Math.abs(stamp.getMinutes() * 60 + stamp.getSeconds());
+        const prev = byHour.get(key);
+        if (!prev || dist < prev.dist) byHour.set(key, { item, dist });
+      }
+      return [...byHour.values()]
+        .filter((entry) => entry.dist <= 20 * 60)
+        .map((entry) => entry.item);
+    }
+
+    function addHourMarks(points) {
+      for (const item of hourMarks(points)) {
+        const style = trackStyle(item.light || "night", item.above);
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(item.above ? 1.9 : 1.15, 10, 8),
+          new THREE.MeshBasicMaterial({
+            color: style.color,
+            transparent: true,
+            opacity: item.above ? 0.95 : 0.4,
+            depthWrite: false,
+          }),
+        );
+        dot.position.copy(azAltToVec(item.az, item.alt, vrTune.shellRadius - 8));
+        trackGroup.add(dot);
+        const stamp = new Date(item.when);
+        const label = stamp.toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit", hour12: false });
+        const sprite = makeLabelSprite({
+          iau: `hour:${item.when}`,
+          name: label,
+          az: item.az,
+          alt: Number(item.alt) + 1.4,
+        });
+        if (!sprite) continue;
+        sprite.material.opacity = item.above ? 1 : 0.5;
+        trackGroup.add(sprite);
+      }
+    }
+
+    function trackSlice(data, start) {
+      const from = start.getTime();
+      const to = from + 12 * 60 * 60 * 1000;
+      return (data && data.points ? data.points : []).filter((point) => {
+        const stamp = new Date(point.when).getTime();
+        return stamp >= from - 8 * 60 * 1000 && stamp <= to;
+      });
+    }
+
+    function trackCovers(start) {
+      if (!trackData || !Array.isArray(trackData.points) || !trackData.points.length) return false;
+      const end = new Date(trackData.points[trackData.points.length - 1].when).getTime();
+      return start.getTime() + 12 * 60 * 60 * 1000 <= end + 16 * 60 * 1000;
+    }
+
+    function slicePeak(slice) {
+      if (!slice.length) return null;
+      let best = slice[0];
+      for (const point of slice) if (Number(point.alt) > Number(best.alt)) best = point;
+      return {
+        point: best,
+        interior: best !== slice[0] && best !== slice[slice.length - 1],
+      };
+    }
+
+    function overlappingWindows(windows, start) {
+      const from = start.getTime();
+      const to = from + 12 * 60 * 60 * 1000;
+      return (Array.isArray(windows) ? windows : []).filter((slot) => {
+        const begin = new Date(slot.start).getTime();
+        const end = new Date(slot.end).getTime();
+        return Number.isFinite(begin) && Number.isFinite(end) && end > from && begin < to;
+      });
+    }
+
+    async function loadDayTrack() {
+      const serial = ++trackSerial;
+      const item = selectedItem;
+      if (!itemHasEquatorial(item)) {
+        trackData = null;
+        trackItemKey = "";
+        trackNote = "Keine RA/Dec für die Bahn.";
+        disposeTrackMeshes();
+        dashboardKey = "";
+        if (panelMode === "track") paintDashboard();
+        return;
+      }
+      trackNote = "Lade Bahn …";
+      dashboardKey = "";
+      if (panelMode === "track") paintDashboard();
+      const when = trackSkyWhen();
+      const params = new URLSearchParams({
+        ra: String(item.ra),
+        dec: String(item.dec),
+        lat: String(siteLat),
+        lon: String(siteLon),
+        when: when.toISOString(),
+        tz_offset_min: String(-new Date().getTimezoneOffset()),
+      });
+      if (siteStem) params.set("stem", siteStem);
+      try {
+        const response = await fetch(`/sky-track?${params}`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== trackSerial) return;
+        if (!response.ok || data.error || !Array.isArray(data.points) || data.points.length < 2) {
+          trackData = null;
+          trackItemKey = "";
+          trackNote = data.error || "Keine Tagesbahndaten";
+          disposeTrackMeshes();
+        } else {
+          trackData = data;
+          trackItemKey = objectKey(item);
+          trackNote = "";
+          drawSkyTrack(data.points);
+        }
+      } catch (_err) {
+        if (serial !== trackSerial) return;
+        trackData = null;
+        trackItemKey = "";
+        trackNote = "Bahn nicht erreichbar";
+        disposeTrackMeshes();
+      }
+      dashboardKey = "";
+      if (panelMode === "track") paintDashboard();
+    }
+
+    function ensureDayTrack() {
+      const when = trackSkyWhen();
+      const same = trackData && trackItemKey === objectKey(selectedItem) && trackCovers(when);
+      if (same) {
+        drawSkyTrack(trackData.points);
+        dashboardKey = "";
+        return;
+      }
+      loadDayTrack();
+    }
+
+    function showDayTrack() {
+      if (panelMode !== "track") trackReturn = panelReturn;
+      panelMode = "track";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+      ensureDayTrack();
+    }
+
+    function closeDayTrack() {
+      panelMode = "detail";
+      panelReturn = trackReturn || "list";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function paintAltitudeChart(ctx, slice, start) {
+      const left = 78;
+      const right = 980;
+      const top = 196;
+      const bottom = 520;
+      let minAlt = 0;
+      let maxAlt = 20;
+      for (const point of slice) {
+        minAlt = Math.min(minAlt, Number(point.alt));
+        maxAlt = Math.max(maxAlt, Number(point.alt));
+      }
+      minAlt = Math.floor(minAlt / 10) * 10;
+      maxAlt = Math.ceil(maxAlt / 10) * 10;
+      if (maxAlt - minAlt < 20) maxAlt = minAlt + 20;
+      const xAt = (index) => left + (right - left) * (index / Math.max(1, slice.length - 1));
+      const yAt = (alt) => bottom - (bottom - top) * ((alt - minAlt) / (maxAlt - minAlt));
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(left, top);
+      ctx.lineTo(left, bottom);
+      ctx.lineTo(right, bottom);
+      ctx.stroke();
+      if (minAlt < 0 && maxAlt > 0) {
+        ctx.strokeStyle = "rgba(248, 250, 252, 0.85)";
+        ctx.beginPath();
+        ctx.moveTo(left, yAt(0));
+        ctx.lineTo(right, yAt(0));
+        ctx.stroke();
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "22px sans-serif";
+        ctx.fillText("0°", 28, yAt(0) + 6);
+      }
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "22px sans-serif";
+      ctx.fillText(`${Math.round(maxAlt)}°`, 18, top + 8);
+      ctx.fillText(`${Math.round(minAlt)}°`, 18, bottom);
+      const colors = { night: "#5eead4", twilight: "#fbbf24", day: "#fb923c" };
+      for (let index = 1; index < slice.length; index += 1) {
+        const point = slice[index];
+        ctx.strokeStyle = colors[point.light] || "#e2e8f0";
+        ctx.globalAlpha = point.above ? 1 : 0.4;
+        ctx.lineWidth = point.above ? 5 : 3;
+        ctx.beginPath();
+        ctx.moveTo(xAt(index - 1), yAt(Number(slice[index - 1].alt)));
+        ctx.lineTo(xAt(index), yAt(Number(point.alt)));
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      const now = start.getTime();
+      let nowIndex = 0;
+      let nowDistance = Infinity;
+      slice.forEach((point, index) => {
+        const distance = Math.abs(new Date(point.when).getTime() - now);
+        if (distance < nowDistance) {
+          nowDistance = distance;
+          nowIndex = index;
+        }
+      });
+      ctx.strokeStyle = "#f8fafc";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(xAt(nowIndex), top);
+      ctx.lineTo(xAt(nowIndex), bottom);
+      ctx.stroke();
+      const peak = slicePeak(slice);
+      if (peak) {
+        ctx.fillStyle = "#f8fafc";
+        ctx.beginPath();
+        ctx.arc(xAt(slice.indexOf(peak.point)), yAt(Number(peak.point.alt)), 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "22px sans-serif";
+      ctx.fillText(trackClock(slice[0].when), left, bottom + 28);
+      ctx.fillText(trackClock(slice[slice.length - 1].when), right - 70, bottom + 28);
+    }
+
     function goBack() {
+      if (panelMode === "track") {
+        closeDayTrack();
+        return;
+      }
       if (panelMode === "search") {
         showObjectList();
         return;
@@ -1987,6 +2399,43 @@
         dashboardTexture.needsUpdate = true;
         return;
       }
+      if (panelMode === "track") {
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 36px sans-serif";
+        const title = selectedItem ? (selectedItem.name || selectedItem.id || "Objekt") : "Tagesbahn";
+        ctx.fillText(`Tagesbahn  ${title}`, 48, 22);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "26px sans-serif";
+        if (trackNote || !trackData) {
+          ctx.fillText(trackNote || "Keine Tagesbahndaten", 48, 78);
+          dashboardTexture.needsUpdate = true;
+          return;
+        }
+        const start = trackSkyWhen();
+        const slice = trackSlice(trackData, start);
+        const peak = slicePeak(slice);
+        const summary = trackData.summary || {};
+        const nights = overlappingWindows(summary.observable_windows, start);
+        const horizon = siteStem ? "Gartenhorizont" : "Horizont 0°";
+        const peakText = peak
+          ? `${peak.interior ? "Kulmination" : "Höchste Höhe im Abschnitt"} ${Number(peak.point.alt).toFixed(0)}° um ${trackClock(peak.point.when)}`
+          : "Keine Höhe im Abschnitt";
+        const nightText = nights.length
+          ? `Nacht über Horizont ${nights.slice(0, 2).map((slot) => `${trackClock(slot.start)}–${trackClock(slot.end)}`).join(", ")}`
+          : "Kein Nachtfenster in den nächsten 12 h";
+        const hidden = slice.length && slice.every((point) => point.above === false);
+        ctx.fillText(peakText, 48, 68);
+        ctx.fillText(hidden ? `${nightText} · im Fenster unter dem Horizont` : nightText, 48, 102);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "22px sans-serif";
+        ctx.fillText(`12 h ab ${trackClock(start.toISOString())} · ${horizon} · Nacht türkis, Dämmerung gelb, Tag orange`, 48, 140);
+        if (slice.length >= 2) paintAltitudeChart(ctx, slice, start);
+        else ctx.fillText("Der gelieferte Abschnitt deckt keine 12 h ab.", 48, 220);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
       if (panelMode === "detail" && selectedItem) {
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
@@ -2025,6 +2474,8 @@
         ? `list|${objectChoices().map(objectKey).join(",")}|${overlayStateText}`
         : panelMode === "search"
         ? `search|${searchQuery}|${searchPage}|${searchNote}|${searchHits.map((hit) => hit.key || hit.id).join(",")}`
+        : panelMode === "track"
+        ? `track|${trackItemKey}|${trackNote}|${skyClockLabel()}|${siteStem}`
         : (panelMode === "detail" && selectedItem
           ? `detail|${detailLines(selectedItem, selectedMissing).join("|")}`
           : `home|${dashboardSections().map((section) => section.title + section.lines.join("|")).join("||")}|${skyStars}|${overlayStateText}`);
@@ -2153,6 +2604,7 @@
       if (pref === "ring2") return `Außen ${fmtTune(vrTune.telradHalfDeg[2] * 2, 1)}°`;
       if (pref === "label") return `Namen ${fmtTune(vrTune.labelHeight, 0)}`;
       if (pref === "panel") return `Tafel ${Math.round(vrTune.panelScale * 100)} %`;
+      if (pref === "pano") return `Foto ${Math.round(vrTune.panoBrightness)} %`;
       if (pref === "mark") return "Markierung Telrad";
       if (pref === "dashboard") return `Öffnen ${roleLabel(controlRoles.dashboard)}`;
       if (pref === "aim") return `Zielhilfe ${roleLabel(controlRoles.aimToggle)}`;
@@ -2172,13 +2624,16 @@
       objectsButton.visible = home;
       skyMenuButton.visible = home;
       prefsButton.visible = home;
-      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search";
+      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track";
       const backLabel = panelMode === "search" ? "LISTE" : "ZURÜCK";
       if (backButton.userData.face !== backLabel) {
         backButton.userData.face = backLabel;
         paintTextButton(backButton, backLabel);
       }
+      const trackable = panelMode === "detail" && itemHasEquatorial(selectedItem);
       goalButton.visible = panelMode === "detail";
+      goalButton.position.x = trackable ? -0.16 : 0;
+      trackButton.visible = trackable;
       keyboardTestButton.visible = panelMode === "list" || panelMode === "search";
       keyboardTestButton.position.x = panelMode === "search" ? -0.24 : 0;
       const pages = Math.ceil(searchHits.length / 6);
@@ -2240,6 +2695,7 @@
       paintHimmelButtons();
       dashboardKey = "";
       rebuildDsoMarks();
+      savePrefs();
     }
 
     function cycleNgcMode() {
@@ -2251,6 +2707,7 @@
       paintHimmelButtons();
       dashboardKey = "";
       requestSky(true);
+      savePrefs();
     }
 
     function stepNgcMin(dir) {
@@ -2260,6 +2717,7 @@
       paintHimmelButtons();
       dashboardKey = "";
       if (skyView.ngcMode === "mine") requestSky(true);
+      savePrefs();
     }
 
     function toggleMessierSeeing() {
@@ -2267,6 +2725,7 @@
       applyMessierSeeing(performance.now());
       paintHimmelButtons();
       dashboardKey = "";
+      savePrefs();
     }
 
     function toggleSky(which) {
@@ -2294,6 +2753,7 @@
       paintHimmelButtons();
       dashboardKey = "";
       requestSky(true);
+      savePrefs();
     }
 
     function stepSkyMag(dir) {
@@ -2303,6 +2763,7 @@
       paintHimmelButtons();
       dashboardKey = "";
       requestSky(true);
+      savePrefs();
     }
 
     function freezeSkyNow() {
@@ -2391,6 +2852,8 @@
       if (!session) return;
       unbindControlRoles(session);
       session.addEventListener(controlRoles.dashboard, onSelect);
+      session.addEventListener("selectstart", onDragStart);
+      session.addEventListener("selectend", onDragEnd);
       if (controlRoles.aimToggle) session.addEventListener(controlRoles.aimToggle, onAimToggle);
     }
 
@@ -2398,6 +2861,8 @@
       if (!session) return;
       session.removeEventListener("select", onSelect);
       session.removeEventListener("squeeze", onSelect);
+      session.removeEventListener("selectstart", onDragStart);
+      session.removeEventListener("selectend", onDragEnd);
       session.removeEventListener("select", onAimToggle);
       session.removeEventListener("squeeze", onAimToggle);
     }
@@ -2413,10 +2878,21 @@
           pickHoldDeg: vrTune.pickHoldDeg,
           pickSwitchDeg: vrTune.pickSwitchDeg,
           panelScale: vrTune.panelScale,
+          panoBrightness: vrTune.panoBrightness,
         },
         roles: {
           dashboard: controlRoles.dashboard,
           aimToggle: controlRoles.aimToggle,
+        },
+        sky: {
+          stars: skyView.stars,
+          constellations: skyView.constellations,
+          messier: skyView.messier,
+          icons: skyView.icons,
+          seeing: skyView.seeing,
+          ngcMode: skyView.ngcMode,
+          ngcMin: skyView.ngcMin,
+          mag: skyView.mag,
         },
       };
       try {
@@ -2441,6 +2917,7 @@
       vrTune.pickHoldDeg = takeNumber(tune.pickHoldDeg, 0.1, 2, vrDefaults.pickHoldDeg);
       vrTune.pickSwitchDeg = takeNumber(tune.pickSwitchDeg, 0.02, 0.5, vrDefaults.pickSwitchDeg);
       vrTune.panelScale = takeNumber(tune.panelScale, 1, 2, vrDefaults.panelScale);
+      vrTune.panoBrightness = takeNumber(tune.panoBrightness, 0, 100, vrDefaults.panoBrightness);
       if (vrTune.pickHoldDeg < vrTune.pickAcquireDeg) vrTune.pickHoldDeg = vrTune.pickAcquireDeg;
       if (Array.isArray(tune.telradHalfDeg) && tune.telradHalfDeg.length === 3) {
         vrTune.telradHalfDeg = [0, 1, 2].map((index) => takeNumber(
@@ -2459,6 +2936,18 @@
       applyRayLength();
       rebuildTelrad();
       applyPanelScale();
+      applyPanoBrightness();
+      const sky = data.sky || {};
+      if (typeof sky.stars === "boolean") skyView.stars = sky.stars;
+      if (typeof sky.constellations === "boolean") skyView.constellations = sky.constellations;
+      if (typeof sky.messier === "boolean") skyView.messier = sky.messier;
+      if (typeof sky.icons === "boolean") skyView.icons = sky.icons;
+      if (typeof sky.seeing === "boolean") skyView.seeing = sky.seeing;
+      if (sky.ngcMode === "off" || sky.ngcMode === "mine" || sky.ngcMode === "all") skyView.ngcMode = sky.ngcMode;
+      skyView.ngcMin = Math.min(5, Math.max(1, Math.round(Number(sky.ngcMin) || skyView.ngcMin)));
+      skyView.mag = takeNumber(sky.mag, 0, 9, skyView.mag);
+      skyView.live = true;
+      skyView.when = null;
     }
 
     function stepPref(pref, dir) {
@@ -2469,6 +2958,7 @@
         ray: [() => vrTune.rayMeters, (value) => { vrTune.rayMeters = value; applyRayLength(); }, 0.5, 6, 0.5],
         label: [() => vrTune.labelHeight, (value) => { vrTune.labelHeight = value; applyLabelHeight(); }, 4, 12, 1],
         panel: [() => vrTune.panelScale, (value) => { vrTune.panelScale = value; applyPanelScale(); }, 1, 2, 0.1],
+        pano: [() => vrTune.panoBrightness, (value) => { vrTune.panoBrightness = value; applyPanoBrightness(); }, 0, 100, 10],
         ring0: [() => vrTune.telradHalfDeg[0] * 2, (value) => { vrTune.telradHalfDeg[0] = value / 2; }, 0.2, 10, 0.1],
         ring1: [() => vrTune.telradHalfDeg[1] * 2, (value) => { vrTune.telradHalfDeg[1] = value / 2; }, 0.2, 10, 0.1],
         ring2: [() => vrTune.telradHalfDeg[2] * 2, (value) => { vrTune.telradHalfDeg[2] = value / 2; }, 0.2, 10, 0.1],
@@ -2512,6 +3002,7 @@
       vrTune.pickHoldDeg = vrDefaults.pickHoldDeg;
       vrTune.pickSwitchDeg = vrDefaults.pickSwitchDeg;
       vrTune.panelScale = vrDefaults.panelScale;
+      vrTune.panoBrightness = vrDefaults.panoBrightness;
       controlRoles.dashboard = controlDefaults.dashboard;
       controlRoles.aimToggle = controlDefaults.aimToggle;
       aimEnabled = true;
@@ -2524,6 +3015,7 @@
       rebuildTelrad();
       applyLabelHeight();
       applyPanelScale();
+      applyPanoBrightness();
       bindControlRoles();
       refreshPrefLabels();
     }
@@ -3034,11 +3526,47 @@
       updateSkyAim();
     }
 
+    function onDragStart(event) {
+      const source = event && event.inputSource;
+      if (!dragSource && dragArm === source) dragArm = null;
+      const pointer = pointers.find((item) => item.source === source);
+      if (!pointer || !pointer.ready || !dashboard.visible) return;
+      pointerRaycaster.set(pointer.origin, pointer.direction);
+      const hits = pointerRaycaster.intersectObject(dragHandle, false);
+      if (!hits.length || !dragHandle.visible) return;
+      dashboard.updateMatrixWorld(true);
+      dragLocal.copy(dashboard.worldToLocal(hits[0].point.clone()));
+      dragDistance = hits[0].distance;
+      dragSource = source;
+      dragArm = source;
+    }
+
+    function moveDraggedDashboard() {
+      if (!dragSource) return;
+      const pointer = pointers.find((item) => item.source === dragSource);
+      if (!pointer || !pointer.ready) return;
+      renderer.xr.getCamera().getWorldPosition(dragHead);
+      dragRayPoint.copy(pointer.origin).addScaledVector(pointer.direction, dragDistance);
+      dashboard.lookAt(dragHead);
+      dashboard.updateMatrixWorld(true);
+      dragGrabWorld.copy(dragLocal).applyMatrix4(dashboard.matrixWorld);
+      dashboard.position.add(dragRayPoint.sub(dragGrabWorld));
+    }
+
+    function onDragEnd(event) {
+      if (event && event.inputSource === dragSource) dragSource = null;
+    }
+
     function onSelect(event) {
+      const source = event && event.inputSource;
+      if (dragArm && source === dragArm) {
+        dragArm = null;
+        dragSource = null;
+        return;
+      }
       const now = performance.now();
       if (now - dashboardToggleAt < vrTune.selectGapMs) return;
       dashboardToggleAt = now;
-      const source = event && event.inputSource;
       const hit = source && dashboard.visible ? pointerHits.get(source) : null;
       const sameHand = Boolean(
         hit && hit.visible && hit.parent === dashboard && hit.userData.action && dashboard.visible
@@ -3118,6 +3646,10 @@
         stepNgcMin(hit.userData.dir || 0);
         return;
       }
+      if (sameHand && hit.userData.action === "day-track") {
+        showDayTrack();
+        return;
+      }
       if (sameHand && hit.userData.action === "nav-goal") {
         if (selectedItem && selectedItem.fromSearch) aimResolvedTarget(selectedItem);
         else if (selectedItem) adoptNavTarget(selectedItem, "overlay");
@@ -3179,7 +3711,10 @@
         const space = renderer.xr.getReferenceSpace();
         if (space && frame.getViewerPose(space)) placeDashboard();
       }
-      if (renderer.xr.isPresenting) updatePointers();
+      if (renderer.xr.isPresenting) {
+        updatePointers();
+        moveDraggedDashboard();
+      }
       if (skyView.seeing) applyMessierSeeing(performance.now());
       refreshDashboard();
       renderer.render(scene, camera);
