@@ -11,10 +11,10 @@ App-Bedienung (Buttons NINA/SynScan in der UI) bleibt unter **Hilfe**. Hier geht
 
 | Komponente | Autostart sinnvoll? | Stand |
 |---|---|---|
-| `weather_server` | Ja — Logger soll dauerhaft laufen | **eingebaut** (Task Scheduler) — einziger Astro-Task |
+| `weather_server` | Ja — Logger soll dauerhaft laufen | **eingebaut** (Task `Astro-weather_server`) |
 | Technitium DNS | Ja — Namensauflösung für die Quest | Windows-Dienst, automatisch. Details: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md) |
-| Caddy (HTTPS 8443) | Ja — Quest-URL nach Reboot | Skript `AstroVR-Caddy`, noch nicht registriert. [Dauerbetrieb](astro-vr-dauerbetrieb.md) |
-| MeLE-App (`app_mele`) | Optional — UI nach Login | Skript `Astro-mele_app` bei Anmeldung, noch nicht registriert |
+| Caddy (HTTPS 8443) | Ja — Quest-URL nach Reboot | Skript `AstroVR-Caddy`. [Dauerbetrieb](astro-vr-dauerbetrieb.md) |
+| MeLE-App (`app_mele`) | Ja — Oberfläche nach der Anmeldung | **eingebaut**, Task `Astro-mele_app` bei Anmeldung von Chris |
 | NINA / SynScan Pro | Vorsichtig — brauchen USB/ASCOM/Montierung | Nicht empfohlen als blinder Boot-Start; besser manuell oder verzögert |
 
 Details zu Port **8765**, manuellem Start/Stop, SQLite-Pfad und Client-Zugriff: [weather_server](weather-server.md).
@@ -76,22 +76,23 @@ Doppelstart-Schutz: Launcher prüft, ob schon ein `python … weather_server` l�
 
 Empfehlung: NINA/SynScan **nicht** blind parallel zu weather_server auf „sofort bei Login“ setzen, solange der 12‑V-/USB-Stack nicht stabil hochgefahren ist.
 
-## MeLE-App selbst als Autostart?
+## MeLE-App als Autostart
 
-Möglich analog zu weather_server, z. B. Task:
+Aufgabe `Astro-mele_app`, ausgelöst bei der Anmeldung von Chris, 30 Sekunden Verzögerung. Sie startet `deployment/windows/Start-AstroVrMeleApp.ps1`. Der Starter ruft
 
 ```text
-.venv\Scripts\python.exe -m app_mele
+C:\Astro\Git\Astro\.venv\Scripts\python.exe -m app_mele
 ```
 
-Dann wäre die UI nach Login unter http://127.0.0.1:8082/ erreichbar (Port aus `configs/mele.yaml`: `ui_port`).
+im Arbeitsverzeichnis `C:\Astro\Git\Astro` auf. Der System-Python `C:\Python\310\python.exe` hat kein NiceGUI und wird dafür nicht verwendet. Ist Port 8082 schon belegt, startet er keine zweite Instanz.
 
-**Entwicklungskonflikt:** Wenn die App immer per Task läuft, blockiert Port 8082 den manuellen Start aus Cursor. Deshalb:
+Die Aufgabe hat kein `RestartOnFailure`. Endet der Python-Prozess, bleibt Port 8082 bis zur nächsten Anmeldung frei. Das Schließen des Browserfensters beendet das Backend nicht.
 
-- Autostart nur auf dem **Beobachtungs-/Produktions-Login**, oder
-- Task vor dem Entwickeln deaktivieren/stoppen (siehe unten).
+NINA, SynScan und PHD2 startet diese Aufgabe nicht. Laufen sie, wurden sie über die Knöpfe in der App losgelöst gestartet (`DETACHED_PROCESS`) und überleben das Beenden der App. `weather_server` ist ein eigener Task.
 
-Ein Install-Skript für die App gibt es noch nicht. Der Beschluss dafür (Task `Astro-mele_app`, Marker `--no-show`, Umschaltung DEV/PROD) steht in [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md). Diesen Task erst nach Freigabe anlegen.
+`--no-show`, `astro-dev.ps1` und `astro-prod.ps1` sind weiterhin nur beschlossen, nicht gebaut: [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md).
+
+In der Toolbar steht **Beenden**. Der Knopf öffnet eine Bestätigung und ruft dann nur `app.shutdown()` für diesen Python-Prozess auf. NINA, SynScan, PHD2 und `weather_server` bleiben. Die nächste Anmeldung startet die App wieder. Port 8082 ist im Hausnetz offen, deshalb kann auch das iPad den Knopf erreichen. Zum Entwickeln über einen Neustart hinweg die Aufgabe zusätzlich aussetzen, siehe unten.
 
 ## 12‑V-Ausfall — starten alle Tools wieder von selbst?
 
@@ -101,26 +102,43 @@ Ein Install-Skript für die App gibt es noch nicht. Der Beschluss dafür (Task `
 | Nur 12 V an Montierung/Kamera weg, PC blieb an | Windows-Tasks starten **nicht** neu; NINA/SynScan bleiben im alten Zustand und müssen manuell oder per MeLE-Button neu verbunden/gestartet werden |
 | PC aus, kein Auto-Login | Tasks starten erst nach manueller Anmeldung |
 
-**Fazit:** Mit Auto-Login + registriertem weather_server-Task kommt der Logger nach einem kompletten PC-Neustart wieder. NINA/SynScan/MeLE nur, wenn dafür ebenfalls Tasks existieren — und Hardware-Bereitschaft ist dann trotzdem zu prüfen. Ein reiner 12‑V-Drop am Scope ohne PC-Reboot reaktiviert nichts automatisch.
+**Fazit:** Mit Auto-Login kommen `weather_server` und die MeLE-App nach einem kompletten PC-Neustart wieder, sobald Chris angemeldet ist. NINA und SynScan starten dadurch nicht. Ein reiner 12‑V-Drop am Scope ohne PC-Reboot reaktiviert nichts automatisch.
 
 ## Beim Entwickeln mit Cursor: laufende Instanz stoppen
 
 ### MeLE-App (Port 8082)
 
-Im Terminal der laufenden App: **Ctrl+C**.
-
-Oder Port freigeben (beendet den Listener inkl. Kindprozesse):
+Nur Prozesse, deren Kommandozeile `-m app_mele` enthält. NINA, SynScan, PHD2 und `weather_server` bleiben laufen. Port 8082 ist danach frei, bis sich Chris neu anmeldet.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\free-port-8082.ps1
+Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
+  Where-Object { $_.CommandLine -match '-m app_mele' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 ```
 
-Danach wieder manuell:
+Soll die App auch nach der nächsten Anmeldung aus bleiben:
 
 ```powershell
-.venv\Scripts\Activate
-python -m app_mele
+Disable-ScheduledTask -TaskName "Astro-mele_app"
 ```
+
+Automatischen Start wieder einschalten:
+
+```powershell
+Enable-ScheduledTask -TaskName "Astro-mele_app"
+```
+
+`Enable-ScheduledTask` startet die laufende Sitzung nicht nach. Dafür die Aufgabe einmal ausführen oder sich neu anmelden.
+
+`scripts\free-port-8082.ps1` beendet jeden Hörer auf Port 8082 mit `taskkill /T /F`, ohne die Kommandozeile zu prüfen. Für das gezielte Beenden der App ist der Befehl oben der richtige. Die geplante DEV/PROD-Umschaltung soll `free-port-8082.ps1` nicht aufrufen.
+
+Danach aus Cursor, im Repo:
+
+```powershell
+.venv\Scripts\python.exe -m app_mele
+```
+
+Lief die App in einem sichtbaren Terminal: dort **Ctrl+C**. Das trifft die Autostart-Instanz nicht, die hat kein Fenster.
 
 ### weather_server (Port 8765)
 
@@ -150,7 +168,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-weather-server-autostar
 
 1. PC an, Windows + Auto-Login  
 2. `weather_server` läuft (Task) → http://127.0.0.1:8765/ kurz prüfen  
-3. MeLE starten (manuell oder später Autostart) → Station erscheint in der Wetterzeile  
+3. MeLE-App kommt mit der Anmeldung (Task `Astro-mele_app`) → Station erscheint in der Wetterzeile  
 4. 12 V / USB / Montierung bereit  
 5. SynScan Pro, dann NINA (MeLE-Buttons)  
 6. Imaging wie gewohnt  

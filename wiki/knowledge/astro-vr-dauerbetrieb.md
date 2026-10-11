@@ -1,7 +1,7 @@
 # Astro-VR Dauerbetrieb (Windows)
 
 > Quelle: Chat mit Cursor, 2026-10-11 · Thema: Quest 3 über `https://vr.netzberger.at:8443/vr-view`, Bestandsaufnahme vor dem Dauerbetrieb
-> Stand: **Skripte liegen unter `deployment/windows/`, Aufgaben sind nicht registriert.** Laufende Prozesse, Zertifikat, Firewall und DNS wurden dafür nicht verändert. Aktivierung erst mit `-Confirm` nach eigener Freigabe.
+> Stand: **`Astro-mele_app` startet bei der Anmeldung von Chris.** Interpreter ist die virtuelle Umgebung im Repo. Beenden ohne die anderen Programme: [MeLE-PC Autostart](mele-pc-autostart.md).
 
 Die immersive Quest-Seite ist im Hausnetz eingerichtet. Diese Seite hält fest, was dafür läuft, was einen Neustart nicht übersteht, und was der externe Auftrag richtig und falsch einschätzt. Sie ersetzt nicht die [Autostart-Spec](mele-autostart-dev-prod-spec.md) und nicht die [Feldnetz-Spec](mele-feldnetz-quest-spec.md).
 
@@ -127,9 +127,9 @@ Was nicht übernommen wird:
 - Caddy braucht keinen zusätzlichen WinSW-Binary, solange eine Aufgabe „Beim Systemstart, ob der Benutzer angemeldet ist oder nicht“ denselben Prozess startet. WinSW bleibt eine mögliche Alternative, nicht die Vorgabe.
 - Die Zertifikate müssen nicht sofort nach `C:\ProgramData\AstroVR\` umgezogen werden. `SYSTEM` darf sie im Profil lesen. Ein Umzug ändert die Caddyfile und den Erneuerungspfad und ist ein eigener, freizugebender Schritt. Bis dahin bleibt der Profilpfad die laufende Ablage.
 
-## Phase 2, Skripte fertig, nicht aktiviert
+## Phase 2
 
-Freigabe des externen Auftrags vom 2026-10-11, mit den drei Ergänzungen Startverzögerung, tägliche Erneuerungsprüfung und Erreichbarkeitstest. Umgesetzt nur als Dateien. `Register-AstroVrTasks.ps1` ohne `-Confirm` registriert nichts. Mit `-Confirm` registriert es und startet nicht. Kein Skript beendet einen laufenden Prozess.
+`Astro-mele_app` ist registriert und startet bei der Anmeldung. Interpreter, Beenden und Task aussetzen stehen in [MeLE-PC Autostart](mele-pc-autostart.md). Die übrigen Skripte lagen zuerst nur als Dateien; eine erneute Registrierung ersetzt die Aufgabendefinition und startet keinen Prozess.
 
 | Aufgabe | Konto | Trigger | Befehl |
 |---|---|---|---|
@@ -155,7 +155,7 @@ Bedienung, Rollback und Tests: [deployment/windows/README.md](../../deployment/w
 ## Verwandte Seiten
 
 - [MeLE Autostart und Entwicklungsbetrieb](mele-autostart-dev-prod-spec.md) — App-Task, `--no-show`, DEV/PROD
-- [MeLE-PC Autostart](mele-pc-autostart.md) — weather_server ist der einzige Astro-Task
+- [MeLE-PC Autostart](mele-pc-autostart.md) — App beenden, Task aussetzen, weather_server
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md) — ADR-VR-002
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)
 - [astro.netzberger.at](astro-netzberger-roadmap.md) — öffentliche Website, anderer Name

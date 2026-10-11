@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nicegui import ui
+from nicegui import app, ui
 
 from app_mele.state import UiState
 from mele.horizon import overlay_svg, profile_belongs_to, sample_profile, sky_obstruction
@@ -307,6 +307,25 @@ def build_ui(
                     ui.button("Guiding", icon="open_in_new", on_click=on_open_guiding).props(
                         "flat dense"
                     ).tooltip("Guiding-Seite: ASI120-Bild, Loop, Mount-Pad")
+                    with ui.dialog() as shutdown_dialog, ui.card().classes("q-gutter-sm"):
+                        ui.label("MeLE-App beenden?").classes("text-subtitle2")
+                        ui.label(
+                            "Nur diese Oberfläche und ihr Python-Prozess. "
+                            "NINA, SynScan, PHD2 und der Wetterserver bleiben. "
+                            "Bei der nächsten Anmeldung startet die App wieder."
+                        ).classes("text-body2")
+                        with ui.row().classes("w-full justify-end"):
+                            ui.button("Abbrechen", on_click=shutdown_dialog.close).props("flat")
+                            ui.button("Beenden", on_click=app.shutdown).props("unelevated color=negative")
+                    ui.button(
+                        "Beenden",
+                        icon="power_settings_new",
+                        on_click=shutdown_dialog.open,
+                    ).props("flat dense").tooltip(
+                        "Diese MeLE-App beenden, damit Port 8082 frei wird. "
+                        "NINA, SynScan, PHD2 und weather_server bleiben. "
+                        "Die nächste Anmeldung startet die App wieder."
+                    )
 
             # Kontext-Box: Live | Forecast | Ort+Himmel
             with ui.card().classes("w-full q-pa-sm q-mb-sm").props("flat bordered") as safety_card:

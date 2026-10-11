@@ -1,9 +1,9 @@
 # MeLE Autostart und Entwicklungsbetrieb (Spec)
 
 > Quelle: Chat mit Cursor, 2026-10-09 · Thema: schlanker Bootstrap, DEV/PROD auf Port 8082
-> Stand: **beschlossen, noch nicht implementiert.** Den Windows-Task erst nach ausdrücklicher Freigabe registrieren. Zuerst Phase A, danach Phase B. Feldnetz und Quest hängen nicht daran.
+> Stand: **Aufgabe `Astro-mele_app` ist registriert und startet bei der Anmeldung.** `--no-show`, `astro-dev.ps1` und `astro-prod.ps1` sind weiterhin nicht gebaut. Zuerst die restliche Phase A, danach Phase B. Feldnetz und Quest hängen nicht daran.
 
-Ist-Betrieb (nur `weather_server` startet als Astro-Aufgabe): [MeLE-PC Autostart](mele-pc-autostart.md), [weather_server](weather-server.md). DNS, Caddy und das Quest-Zertifikat: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Die Skripte für `Astro-mele_app` liegen unter `deployment/windows/`, die Aufgabe ist nicht registriert. Die App wird dort nicht zum Windows-Dienst gemacht.
+Ist-Betrieb: [MeLE-PC Autostart](mele-pc-autostart.md), [weather_server](weather-server.md). DNS, Caddy und das Quest-Zertifikat: [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). Die App ist kein Windows-Dienst. Beenden und Task aussetzen: MeLE-PC Autostart, Abschnitt „Beim Entwickeln mit Cursor“.
 
 ## Ziel
 
@@ -16,7 +16,7 @@ Beobachtung (Alignment, GoTo, Guiding, Aufnahmeserien) bleibt manuell über die 
 | Thema | Heute | Diese Spec |
 |---|---|---|
 | `weather_server` | Task `Astro-weather_server`, Port 8765 | bleibt eigener Task, Bootstrap startet ihn nicht |
-| MeLE-App | nur manuell, `python -m app_mele`, Port 8082 | Task `Astro-mele_app` bei Anmeldung (Phase A) |
+| MeLE-App | Task `Astro-mele_app` bei Anmeldung, `.venv\Scripts\python.exe -m app_mele`, Port 8082 | derselbe Task, zusätzlich `--no-show` (Phase A, noch nicht im Code) |
 | NINA, SynScan, PHD2 | Buttons in der App, Starter in `mele/` | Phase B: dieselben Starter, einmalig, ohne Gerätebefehle |
 | Windows-Benutzer | `Chris` | vorerst `Chris`; Autologin erst Phase D |
 | Tailscale | Dienst automatisch plus Tray beim Login | optional, keine Startvoraussetzung |
