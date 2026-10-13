@@ -31,6 +31,15 @@ def test_zenith_declination_equals_latitude() -> None:
     assert abs(dec - 48.2) < 0.05
 
 
+def test_horizontal_round_trip_matches_the_drawn_equatorial() -> None:
+    when = datetime(2026, 10, 13, 20, 0, tzinfo=timezone.utc)
+    ra, dec = 37.95, 89.26
+    az, alt = radec_to_az_alt(ra, dec, 48.25475, 14.36614, when)
+    back_ra, back_dec = az_alt_to_radec(az, alt, 48.25475, 14.36614, when)
+    assert abs(((back_ra - ra + 180.0) % 360.0) - 180.0) < 0.02
+    assert abs(back_dec - dec) < 0.02
+
+
 def test_north_celestial_pole_at_az_zero_alt_latitude() -> None:
     when = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
     _ra, dec = az_alt_to_radec(0.0, 48.2, 48.2, 16.4, when)

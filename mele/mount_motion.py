@@ -152,6 +152,7 @@ class MountMotion:
         self.axis_fault = ""
         self.start_open = False
         self.stop_open = False
+        self._link_lost = False
 
     def view(self) -> dict[str, str]:
         with self._lock:
@@ -302,11 +303,15 @@ class MountMotion:
                 self.seen_slewing = True
             return
         if not sample.online or not sample.connected:
+            self._link_lost = True
             self.state = "unklar"
             if not sample.online:
                 self.detail = "NINA nicht erreichbar"
             else:
                 self.detail = "Montierung nicht verbunden"
+            return
+        if self._link_lost and not sample.slewing:
+            self._become_ready()
             return
         if sample.slewing:
             self.seen_slewing = True
@@ -353,6 +358,7 @@ class MountMotion:
         self.axis_fault = ""
         self.start_open = False
         self.stop_open = False
+        self._link_lost = False
         self.detail = "Bereit"
 
     def _blocked_reason(self) -> str:

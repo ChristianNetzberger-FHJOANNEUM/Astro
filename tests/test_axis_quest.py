@@ -180,7 +180,12 @@ def test_vr_binding_keeps_select_and_uses_the_right_stick() -> None:
     assert "pad.axes[3]" in text
     assert "const AXIS_DEADZONE = 0.2" in text
     assert "const AXIS_RATES = [0.005, 0.01, 0.02, 0.05, 0.1, 0.5]" in text
+    assert "const MOUNT_POLL_MS = [250, 500, 1000]" in text
+    assert "let mountPollIndex = 2" in text
     assert "quest-axis-rate" in text
+    assert "quest-poll" in text
+    assert "function applyMountPoll" in text
+    assert "setInterval(pollMount, 1000)" not in text
     assert "const AXIS_PULSE_MS = 400" in text
     assert "oculus-touch" in text
     assert "meta-quest-touch-plus" in text

@@ -198,6 +198,7 @@ from mele.mount_motion import (
     target_block_reason,
 )
 from mele.nina import NinaClient, NinaCommandResult, validate_slew_radec_deg
+from mele.sky import az_alt_to_radec
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
     SunExclude,
@@ -2693,6 +2694,43 @@ def run_app(port: int | None = None) -> None:
                 status_code=404,
             )
         return JSONResponse({"ok": True, "query": query, "object": obj})
+
+    @app.get("/sky/point")
+    def sky_point(az: float, alt: float, when: str = "") -> JSONResponse:
+        """Az/h der Himmelsschale nach RA/Dec. Liest nur, fährt nicht."""
+        if az != az or alt != alt or abs(az) == float("inf") or abs(alt) == float("inf"):
+            return JSONResponse({"ok": False, "error": "Azimut oder Höhe ungültig"}, status_code=400)
+        if not -90.0 <= float(alt) <= 90.0:
+            return JSONResponse({"ok": False, "error": "Höhe ausserhalb von -90…+90 Grad"}, status_code=400)
+        lat, lon, profile = _site_for_goto()
+        if profile == "unreadable":
+            return JSONResponse({"ok": False, "error": "Gartenmaske nicht lesbar"}, status_code=409)
+        if lat is None or lon is None:
+            return JSONResponse({"ok": False, "error": "Standort fehlt"}, status_code=409)
+        frozen = bool(str(when or "").strip())
+        if frozen:
+            try:
+                stamp = datetime.fromisoformat(str(when).replace("Z", "+00:00"))
+            except ValueError:
+                return JSONResponse({"ok": False, "error": "Zeit ungültig"}, status_code=400)
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = datetime.now(timezone.utc)
+        ra, dec = az_alt_to_radec(float(az) % 360.0, float(alt), float(lat), float(lon), stamp)
+        blocked = target_block_reason(float(ra), float(dec), float(lat), float(lon), stamp, profile)
+        return JSONResponse(
+            {
+                "ok": True,
+                "az": float(az) % 360.0,
+                "alt": float(alt),
+                "ra": float(ra),
+                "dec": float(dec),
+                "when": stamp.isoformat(),
+                "frozen": frozen,
+                "blocked": blocked,
+            }
+        )
 
     @app.get("/catalog/picks")
     def catalog_picks_get(key: str = "") -> JSONResponse:

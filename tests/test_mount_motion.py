@@ -213,6 +213,16 @@ def test_explicit_goto_error_can_recover_from_fresh_idle() -> None:
     assert motion.view()["state"] == "bereit"
 
 
+def test_nina_gap_drops_an_unconfirmed_goto_when_idle_returns() -> None:
+    motion = _ready()
+    motion.reserve_goto(idle())
+    motion.note(MountSample(online=False, connected=False, error="Timeout"))
+    assert motion.view()["label"] == "NINA nicht erreichbar"
+    motion.note(idle())
+    assert motion.view()["state"] == "bereit"
+    assert motion.reserve_goto(idle()).ok
+
+
 def test_connection_loss_during_goto_does_not_ready() -> None:
     motion = _ready()
     reserved = motion.reserve_goto(idle())

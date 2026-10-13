@@ -909,6 +909,10 @@
     paintMenuButton(prefsButton, "EINSTELLUNGEN", "VR-Preferences");
     paintMenuButton(mountButton, "MONTIERUNG", "Position der Montierung");
     const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
+    const skyPointButton = makeTextButton("HIMMELSPUNKT", "quest-sky-point", -0.16, -0.205, 0.28, 0.040);
+    skyPointButton.visible = false;
+    const skyGotoButton = makeTextButton("GOTO PUNKT", "quest-sky-goto", -0.16, 0.155, 0.28, 0.040);
+    skyGotoButton.visible = false;
     backButton.visible = false;
     const goalButton = makeTextButton("ZIEL FINDEN", "nav-goal", -0.16, -0.152, 0.30, 0.040);
     goalButton.visible = false;
@@ -926,14 +930,22 @@
     axisButton.visible = false;
     const axisStopButton = makeTextButton("STOP ACHSE", "quest-axis-stop", 0.16, 0.155, 0.28, 0.040);
     axisStopButton.visible = false;
-    const axisRateMinus = makeTextButton("−", "quest-axis-rate", -0.22, -0.108, 0.08, 0.040);
+    const axisRateMinus = makeTextButton("−", "quest-axis-rate", -0.305, -0.108, 0.05, 0.040);
     axisRateMinus.userData.dir = -1;
     axisRateMinus.visible = false;
-    const axisRateLabel = makeTextButton("0,01 °/s", "quest-axis-hold", 0, -0.108, 0.24, 0.040);
+    const axisRateLabel = makeTextButton("0,01 °/s", "quest-axis-hold", -0.175, -0.108, 0.17, 0.040);
     axisRateLabel.visible = false;
-    const axisRatePlus = makeTextButton("+", "quest-axis-rate", 0.22, -0.108, 0.08, 0.040);
+    const axisRatePlus = makeTextButton("+", "quest-axis-rate", -0.05, -0.108, 0.05, 0.040);
     axisRatePlus.userData.dir = 1;
     axisRatePlus.visible = false;
+    const mountPollMinus = makeTextButton("−", "quest-poll", 0.05, -0.108, 0.05, 0.040);
+    mountPollMinus.userData.dir = -1;
+    mountPollMinus.visible = false;
+    const mountPollLabel = makeTextButton("Lage 1 s", "quest-poll-hold", 0.175, -0.108, 0.16, 0.040);
+    mountPollLabel.visible = false;
+    const mountPollPlus = makeTextButton("+", "quest-poll", 0.295, -0.108, 0.05, 0.040);
+    mountPollPlus.userData.dir = 1;
+    mountPollPlus.visible = false;
     const pairButton = makeTextButton("KOPPELN", "quest-pair", 0, -0.108, 0.28, 0.040);
     pairButton.visible = false;
     const pairDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map((digit, index) => {
@@ -1046,6 +1058,8 @@
       prefsButton,
       mountButton,
       backButton,
+      skyPointButton,
+      skyGotoButton,
       goalButton,
       trackButton,
       gotoButton,
@@ -1057,6 +1071,9 @@
       axisRateMinus,
       axisRateLabel,
       axisRatePlus,
+      mountPollMinus,
+      mountPollLabel,
+      mountPollPlus,
       pairButton,
       pairClearButton,
       pairSubmitButton,
@@ -1294,9 +1311,16 @@
     let questGotoNote = "";
     const AXIS_DEADZONE = 0.2;
     const AXIS_RATES = [0.005, 0.01, 0.02, 0.05, 0.1, 0.5];
+    const MOUNT_POLL_MS = [250, 500, 1000];
     const AXIS_PULSE_MS = 400;
     const AXIS_PROFILES = ["oculus-touch", "meta-quest-touch-plus", "generic-thumbstick", "generic-trigger"];
     let axisRateIndex = 1;
+    let mountPollIndex = 2;
+    let mountPollTimer = 0;
+    let skyPointMode = false;
+    let skyPick = null;
+    let skyPointSerial = 0;
+    const skyLocal = new THREE.Vector3();
     let axisMode = false;
     let axisArmed = false;
     let axisToken = 0;
@@ -1821,6 +1845,7 @@
 
     function showHome() {
       if (axisMode && panelMode === "mount") leaveAxisMode("");
+      skyPointMode = false;
       panelMode = "home";
       panelReturn = "home";
       selectedItem = null;
@@ -2597,7 +2622,8 @@
         ctx.fillStyle = "#e2e8f0";
         ctx.font = "22px sans-serif";
         ctx.fillText(axisNote || "", 48, 184);
-        mountView.lines.forEach((line, index) => {
+        const pointLines = skyPointLines();
+        pointLines.concat(mountView.lines).forEach((line, index) => {
           const y = 224 + index * 26;
           if (y > 400) return;
           ctx.fillStyle = index === 0 ? "#fde68a" : "#e2e8f0";
@@ -2684,7 +2710,7 @@
         : panelMode === "track"
         ? `track|${trackItemKey}|${trackNote}|${skyClockLabel()}|${siteStem}`
         : panelMode === "mount"
-        ? `mount|${mountView.lines.join("|")}|${questGotoNote}|${axisStatus}|${axisNote}|${axisReadout}|${axisRateIndex}`
+        ? `mount|${mountView.lines.join("|")}|${questGotoNote}|${axisStatus}|${axisNote}|${axisReadout}|${axisRateIndex}|${skyPointMode}|${skyPick ? `${skyPick.ra}|${skyPick.dec}|${skyPick.blocked}|${skyPick.whenLabel}` : ""}`
         : panelMode === "goto"
         ? `goto|${selectedKey}|${mountView.status}|${questGotoNote}|${mountPaired}`
         : panelMode === "pair"
@@ -2856,6 +2882,14 @@
       prefsButton.visible = home;
       mountButton.visible = home;
       backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount";
+      const onMount = panelMode === "mount";
+      backButton.position.x = onMount ? 0.16 : 0;
+      skyPointButton.visible = onMount;
+      const skyPointLabel = skyPointMode ? "PUNKT AUS" : "HIMMELSPUNKT";
+      if (skyPointButton.userData.face !== skyPointLabel) {
+        skyPointButton.userData.face = skyPointLabel;
+        paintTextButton(skyPointButton, skyPointLabel);
+      }
       const backLabel = panelMode === "search" ? "LISTE" : "ZURÜCK";
       if (backButton.userData.face !== backLabel) {
         backButton.userData.face = backLabel;
@@ -2901,7 +2935,13 @@
       axisRateMinus.visible = speedRow;
       axisRateLabel.visible = speedRow;
       axisRatePlus.visible = speedRow;
-      if (speedRow) paintAxisRate();
+      mountPollMinus.visible = speedRow;
+      mountPollLabel.visible = speedRow;
+      mountPollPlus.visible = speedRow;
+      if (speedRow) {
+        paintAxisRate();
+        paintMountPoll();
+      }
       if (panelMode === "mount") {
         stopButton.position.x = -0.16;
         stopButton.position.y = 0.155;
@@ -2918,10 +2958,15 @@
       if (halt) paintAlertButton(stopButton, "STOP");
       axisStopButton.visible = axisHalt;
       if (axisStopButton.visible) paintAlertButton(axisStopButton, "STOP ACHSE");
+      const skyGoto = onMount && skyPick && !skyPick.blocked && itemHasEquatorial(skyPick) && !halt;
+      skyGotoButton.visible = skyGoto;
+      if (skyGoto) paintTextButton(skyGotoButton, "GOTO PUNKT");
       if (confirming || pairing) {
         goalButton.visible = false;
         trackButton.visible = false;
         backButton.visible = false;
+        skyPointButton.visible = false;
+        skyGotoButton.visible = false;
       }
     }
 
@@ -2945,6 +2990,12 @@
 
     function showQuestGoto() {
       if (!selectedItem || !itemHasEquatorial(selectedItem)) return;
+      if (selectedItem.fromSky && selectedItem.blocked) {
+        questGotoNote = selectedItem.blocked;
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
       questGotoNote = "";
       panelMode = "goto";
       syncPanelButtons();
@@ -2954,12 +3005,143 @@
 
     function cancelQuestGoto() {
       questGotoNote = "";
-      if (selectedItem) showObjectDetail(selectedItem);
+      if (selectedItem && selectedItem.fromSky) showMount();
+      else if (selectedItem) showObjectDetail(selectedItem);
       else showHome();
+    }
+
+    function worldPointToAzAlt(world) {
+      skyLocal.copy(world);
+      sphere.worldToLocal(skyLocal);
+      const radius = skyLocal.length();
+      if (radius < 1) return null;
+      const alt = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(skyLocal.y / radius, -1, 1)));
+      const viewLon = (THREE.MathUtils.radToDeg(Math.atan2(skyLocal.z, skyLocal.x)) + 360) % 360;
+      const az = (viewLon - northOffset + 360) % 360;
+      return { az, alt };
+    }
+
+    function skyPointWhenLabel(iso, frozen) {
+      if (!frozen) return "Zeit live";
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return "Zeit fest";
+      const clock = date.toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit", hour12: false });
+      return `Zeit fest ${clock}`;
+    }
+
+    function skyPointLines() {
+      if (!skyPick) {
+        return skyPointMode ? ["Abzug auf den Himmel übernimmt den Punkt. Keine Fahrt."] : [];
+      }
+      const lines = [
+        `Punkt Az ${fmtMountDeg(skyPick.az, false)}    Höhe ${fmtMountDeg(skyPick.alt, true)}`,
+        `RA ${fmtRa(skyPick.ra)}`,
+        `Dec ${fmtDec(skyPick.dec)}`,
+        skyPick.whenLabel || "Zeit live",
+      ];
+      if (skyPick.blocked) lines.push(skyPick.blocked);
+      else if (skyPointMode) lines.push("Abzug setzt einen neuen Punkt.");
+      return lines;
+    }
+
+    function toggleSkyPointMode() {
+      skyPointMode = !skyPointMode;
+      questGotoNote = skyPointMode ? "Abzug auf den Himmel übernimmt den Punkt." : "";
+      dashboardKey = "";
+      syncPanelButtons();
+      paintDashboard();
+    }
+
+    async function adoptSkyPoint(az, alt) {
+      const serial = ++skyPointSerial;
+      const params = new URLSearchParams({ az: String(az), alt: String(alt) });
+      const when = skyWhenParam();
+      if (when) params.set("when", when);
+      try {
+        const response = await fetch(`/sky/point?${params}`, { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== skyPointSerial) return;
+        if (!response.ok || !data.ok) {
+          skyPick = null;
+          questGotoNote = (data && data.error) || "Punkt nicht auflösbar";
+          dashboardKey = "";
+          syncPanelButtons();
+          paintDashboard();
+          return;
+        }
+        skyPick = {
+          id: "sky-point",
+          kind: "sky",
+          name: "Himmelspunkt",
+          fromSky: true,
+          az: Number(data.az),
+          alt: Number(data.alt),
+          ra: Number(data.ra),
+          dec: Number(data.dec),
+          blocked: data.blocked || "",
+          whenLabel: skyPointWhenLabel(data.when, Boolean(data.frozen)),
+        };
+        questGotoNote = skyPick.blocked || "";
+        adoptNavTarget(skyPick, "sky");
+      } catch (_err) {
+        if (serial !== skyPointSerial) return;
+        skyPick = null;
+        questGotoNote = "Punkt nicht erreichbar";
+      }
+      dashboardKey = "";
+      syncPanelButtons();
+      paintDashboard();
+    }
+
+    async function confirmSkyPointGoto(item) {
+      if (!item || item.blocked || !itemHasEquatorial(item)) {
+        questGotoNote = (item && item.blocked) || "Punkt fehlt";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (!mountCsrf) {
+        questGotoNote = "Zuerst mit dem Code am MeLE koppeln.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      questGotoNote = "GoTo wird gesendet …";
+      dashboardKey = "";
+      paintDashboard();
+      adoptNavTarget(item, "sky");
+      mountView.targetName = "Himmelspunkt";
+      try {
+        const response = await fetch(
+          `/nina/mount/slew?ra=${encodeURIComponent(item.ra)}&dec=${encodeURIComponent(item.dec)}`,
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "X-Astro-Csrf": mountCsrf },
+          },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          questGotoNote = data.error || "GoTo abgelehnt";
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        questGotoNote = "GoTo gesendet. Stillstand erst nach der Montierungsmeldung.";
+        showMount();
+      } catch (err) {
+        questGotoNote = err && err.message ? err.message : "GoTo nicht gesendet";
+        dashboardKey = "";
+        paintDashboard();
+      }
     }
 
     async function confirmQuestGoto() {
       const item = selectedItem;
+      if (item && item.fromSky) {
+        confirmSkyPointGoto(item);
+        return;
+      }
       const target = questTargetOf(item);
       if (!item || !target) return;
       if (!mountCsrf) {
@@ -3010,6 +3192,32 @@
       if (next < 0 || next >= AXIS_RATES.length) return;
       axisRateIndex = next;
       paintAxisRate();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function mountPollText() {
+      const ms = MOUNT_POLL_MS[mountPollIndex];
+      if (ms >= 1000) return "Lage 1 s";
+      const text = (ms / 1000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+      return `Lage ${text.replace(".", ",")} s`;
+    }
+
+    function paintMountPoll() {
+      paintTextButton(mountPollLabel, mountPollText());
+    }
+
+    function applyMountPoll() {
+      if (mountPollTimer) clearInterval(mountPollTimer);
+      mountPollTimer = setInterval(pollMount, MOUNT_POLL_MS[mountPollIndex]);
+    }
+
+    function stepMountPoll(dir) {
+      const next = mountPollIndex + dir;
+      if (next < 0 || next >= MOUNT_POLL_MS.length) return;
+      mountPollIndex = next;
+      applyMountPoll();
+      paintMountPoll();
       dashboardKey = "";
       paintDashboard();
     }
@@ -3889,6 +4097,11 @@
         refreshResolveTarget();
         return;
       }
+      if (navTarget.source === "sky") {
+        navTarget.below = !(Number.isFinite(navTarget.alt) && navTarget.alt > 0);
+        navTarget.stale = false;
+        return;
+      }
       if (navDisplayOff(navTarget)) {
         navTarget.below = false;
         navTarget.stale = true;
@@ -4158,7 +4371,8 @@
 
     function updateSkyAim() {
       placeGreenTelrad();
-      if (!aimActive()) {
+      const pointAim = skyPointMode && panelMode === "mount";
+      if (!aimActive() && !pointAim) {
         hideSkyAim();
         hideNavCue();
         return;
@@ -4182,6 +4396,10 @@
       telrad.visible = true;
       aimDir.copy(hit).normalize();
       updateNavCue(aimDir, hit);
+      if (!aimActive()) {
+        clearSkyCandidate();
+        return;
+      }
       const pick = chooseCandidate(aimDir);
       if (!pick) {
         clearSkyCandidate();
@@ -4222,7 +4440,7 @@
         );
         pointer.ready = ready;
         pointer.buttonHit = false;
-        pointer.line.visible = ready && aimActive();
+        pointer.line.visible = ready && (aimActive() || (skyPointMode && panelMode === "mount"));
         if (!ready) {
           if (source) pointerHits.delete(source);
           continue;
@@ -4412,6 +4630,17 @@
         showQuestGoto();
         return;
       }
+      if (sameHand && hit.userData.action === "quest-sky-point") {
+        toggleSkyPointMode();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-sky-goto") {
+        if (!skyPick || skyPick.blocked) return;
+        selectedItem = skyPick;
+        selectedKey = objectKey(skyPick);
+        showQuestGoto();
+        return;
+      }
       if (sameHand && hit.userData.action === "quest-goto-cancel") {
         cancelQuestGoto();
         return;
@@ -4429,6 +4658,11 @@
         return;
       }
       if (sameHand && hit.userData.action === "quest-axis-hold") return;
+      if (sameHand && hit.userData.action === "quest-poll") {
+        stepMountPoll(hit.userData.dir || 0);
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-poll-hold") return;
       if (sameHand && hit.userData.action === "quest-axis") {
         if (axisMode) leaveAxisMode("");
         else enableAxisMode();
@@ -4485,12 +4719,26 @@
         openSearchHit(hit.userData.item);
         return;
       }
+      if (skyPointMode && panelMode === "mount" && source && !sameHand) {
+        const pointer = pointers.find((item) => item.source === source);
+        if (pointer && pointer.ready && !pointer.buttonHit) {
+          dashboard.updateWorldMatrix(true, true);
+          pointerRaycaster.set(pointer.origin, pointer.direction);
+          const panelHits = pointerRaycaster.intersectObject(dashboardPanel, false);
+          if (!panelHits.length) {
+            const hitPoint = skyHit(pointer.origin, pointer.direction);
+            const horizontal = hitPoint ? worldPointToAzAlt(hitPoint) : null;
+            if (horizontal) adoptSkyPoint(horizontal.az, horizontal.alt);
+          }
+        }
+        return;
+      }
       const aim = activeAim >= 0 ? pointers[activeAim] : null;
-      const skyPick = aimActive() && aim && source === aim.source && !aim.buttonHit
+      const aimedObject = aimActive() && aim && source === aim.source && !aim.buttonHit
         ? findByKey(skyKey) : null;
-      if (skyPick) {
+      if (aimedObject) {
         if (!dashboard.visible) placeDashboard();
-        showObjectDetail(skyPick);
+        showObjectDetail(aimedObject);
         return;
       }
       if (dashboard.visible) {
@@ -4587,7 +4835,14 @@
       mountView.motionLabel = motion && motion.label ? motion.label : "";
       mountView.motionDetail = motion && motion.detail ? motion.detail : "";
       mountView.slewing = Boolean(mount && mount.slewing);
-      if (mountView.motion === "bereit") mountView.targetName = "";
+      if (mountView.motion === "bereit" && !mountView.slewing) {
+        mountView.targetName = "";
+        if (!axisMode && axisStatus === "GESPERRT") {
+          axisStatus = "AUS";
+          axisNote = "Aus";
+        }
+        if (questGotoNote.indexOf("GoTo gesendet") === 0) questGotoNote = "";
+      }
       if (!data || data.api_online === false) mountView.status = "NINA nicht erreichbar";
       else if (!mount || !mount.connected) mountView.status = "Montierung nicht verbunden";
       else if (mountView.motion === "faehrt") mountView.status = "Montierung fährt";
@@ -4627,7 +4882,7 @@
     refreshEnterButton();
     useAppPanorama().then((ok) => { if (ok) loadTexture(); });
     pollMount();
-    setInterval(pollMount, 1000);
+    applyMountPoll();
     renderer.setAnimationLoop((_time, frame) => {
       if (!renderer.xr.isPresenting) {
         applyLook();

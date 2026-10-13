@@ -1,7 +1,7 @@
 # Astro-VR Architektur v1.11 — XR-10c Stufe B2
 
-> Quelle: Totmann in [v1.10](astro-vr-architektur-v1.10.md)
-> Stand: **Implementiert am 2026-10-13, nicht abgenommen.** Die Quest-Feldabnahme bleibt offen.
+> Quelle: Totmann in [v1.10](astro-vr-architektur-v1.10.md). Fortschreibung: [v1.12](astro-vr-architektur-v1.12.md)
+> Stand: **Abgenommen am 2026-10-13.** Feldtest des beschriebenen Umfangs.
 
 XR-10b ist abgenommen. Der Desktop-Stopp vom 2026-10-13 hat mehrmals innerhalb weniger Sekunden gehalten. Diese Seite beschreibt die Quest-Bedienung. Sie löst keine Montierungsbewegung aus.
 
@@ -21,6 +21,8 @@ Im Montierungsblatt steht **MANUELLE ACHSE**, standardmäßig aus. Einschalten b
 
 Die Tafel unterscheidet AUS, BEREIT, BEWEGT, STOPPT, GESPERRT und FEHLER. **STOP** bleibt der GoTo-Abbruch über `slew/stop`. **STOP ACHSE** sendet `move/stop`. Die beiden Knöpfe liegen getrennt.
 
+Neben der Geschwindigkeit steht die Lage-Abfrage. Minus verkürzt sie von 1 s auf 0,5 s und 0,25 s, Plus setzt sie wieder herauf. Der Anfang bleibt 1 s. Sie ändert den Totmann nicht. NINA liefert Azimut und Höhe etwa alle 2 s unverändert weiter. Eine kürzere Abfrage macht den gelben Telrad deshalb nicht feiner und verkürzt den Stopp nur um den Rest bis zur nächsten NINA-Meldung.
+
 Solange der Stick ausgelenkt bleibt, wiederholen sich die Impulse. Ein von der Achse selbst gemeldetes Slewing ist kein GoTo und löst keinen Stopp aus. Loslassen, Verlassen des Blattes, Verlust des rechten Controllers, Ende der XR-Sitzung und ein Verbindungsfehler fordern sofort Rate 0 an. Danach sendet die Quest keine weiteren Impulse dieser Aktivierung. Ein neuer Impuls wartet auf die Mitte und auf den Zustand bereit. Ein Timeout allein setzt nicht bereit.
 
 ## Server
@@ -31,9 +33,19 @@ Jeder Quest-Impuls trägt die Nummer seiner Aktivierung. Stopp und Totmann setze
 
 Der Totmann bleibt 0,4 Sekunden Wiederholung und 1,5 Sekunden bis Rate 0. Es gibt keine Befehlswarteschlange: ein Impuls unterwegs, der nächste erst nach der Antwort. PHD2 verbunden und nicht führend sperrt nicht. Führung, Kalibrierung und ein nicht lesbarer PHD2-Zustand sperren. Beginnt die Führung während der Achse, sendet der Server Rate 0. GoTo und Achse schließen einander aus. Ein Achsen-Stopp ruft `slew/stop` nicht auf.
 
-## Feldtest, noch offen
+## Abnahme
 
-Zuerst die Joysticklesung bei ausgeschaltetem Modus, ohne Auslenkung in den Modus. Danach eine langsame Fahrt nur von Hand: Loslassen, Verbindungsverlust und STOP ACHSE müssen an der Montierung nachvollziehbar sein. Erst dann kann XR-10c abgenommen werden.
+Abgenommen am 2026-10-13 für den getesteten Umfang.
+
+| Feldprüfung | Ergebnis |
+| --- | --- |
+| Gehaltene Joystick-Fahrt einschließlich Richtungswechsel | Bestanden |
+| STOP ACHSE an der realen Montierung | Bestanden |
+| Unterbrechung der Quest und anschließende Wiederaufnahme des Betriebs | Bestanden |
+
+Rate 0 ist gesendet, wenn der Stick losgelassen wird, STOP ACHSE kommt oder die Quest abreißt. Die Montierung hält in endlicher Zeit. Das ist kein sofortiger Stillstand.
+
+Ein Abbruch von NINA blendet den gelben Telrad aus und holt ihn nach der nächsten Lage zurück. Die Zeile „GoTo läuft“ und „Achse GESPERRT“ bleibt danach nicht stehen, sobald die Montierung wieder bereit ist. Die Sprünge des gelben Telrads folgen der NINA-Meldung, etwa alle 2 s. Name, Tour, Parken und Hibernate gehören nicht zu dieser Abnahme. Der nächste Schritt ist die Abnahme von [v1.12](astro-vr-architektur-v1.12.md), nicht ein neues Funktionskapitel.
 
 ## Verwandte Seiten
 
