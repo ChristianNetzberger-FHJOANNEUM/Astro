@@ -329,6 +329,49 @@ def test_search_and_resolve_without_overlay_filters(tmp_path: Path) -> None:
     )
 
 
+def test_polaris_name_does_not_resolve_to_polarissima(tmp_path: Path) -> None:
+    """„Polaris“ ist Teilwort von „Polarissima“ und darf den Südpol-Nebel nicht gewinnen."""
+    db = _build(tmp_path)
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO stars (hip, ra_deg, dec_deg, mag, name, con) VALUES (?,?,?,?,?,?)",
+            (11767, 37.94625, 89.264109, 1.97, "Polaris", "UMi"),
+        )
+        conn.execute(
+            "INSERT INTO dso (key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "NGC2573",
+                "NGC",
+                2573,
+                "NGC2573 Polarissima Australis",
+                "G",
+                25.40554,
+                -89.33453,
+                13.53,
+                "V",
+                None,
+            ),
+        )
+    when = datetime(2026, 10, 12, 22, 0, tzinfo=timezone.utc)
+    hits = search_catalog("Polaris", db_path=db, limit=8)
+    assert hits
+    assert hits[0]["kind"] == "star"
+    assert hits[0]["hip"] == 11767
+    resolved = resolve_catalog_object(
+        "Polaris",
+        latitude_deg=48.25475,
+        longitude_deg=14.36614,
+        when=when,
+        db_path=db,
+    )
+    assert resolved is not None
+    assert resolved["hip"] == 11767
+    assert resolved["dec"] > 80
+
+
 def test_canonical_key_stores_messier_not_ngc_alias(tmp_path: Path) -> None:
     db = _build(tmp_path)
     assert canonical_dso_key("NGC 224", db) == "M31"

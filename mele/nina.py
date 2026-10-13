@@ -194,7 +194,12 @@ def _pier_label(raw: str) -> str:
 
 
 def validate_slew_radec_deg(ra_deg: float, dec_deg: float) -> str:
-    """Leerer String = ok, sonst Fehlermeldung. RA/Dec in Grad (API-Einheit)."""
+    """Leerer String = ok, sonst Fehlermeldung.
+
+    RA und Dec sind Grad, J2000. Katalog, Overlay und Resolve liefern ``ra``
+    bereits in Grad. Hier wird nicht aus Stunden umgerechnet. Die
+    Mount-Telemetrie ``RightAscension`` ist davon getrennt und in Stunden.
+    """
     ra = _finite(ra_deg)
     dec = _finite(dec_deg)
     if ra is None or dec is None:

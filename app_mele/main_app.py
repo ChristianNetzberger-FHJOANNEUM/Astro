@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import asyncio
 import logging
 import sys
@@ -170,10 +171,31 @@ from mele.equipment_profiles import (
     set_active_equipment_profile,
     upsert_equipment_profile,
 )
-from mele.nina_mount_move import get_mount_mover
+from mele.nina_mount_move import QUEST_AXIS_RATE, get_mount_mover, parse_pulse_token, quest_axis_rate
 from mele.weather_server_launch import (
     get_weather_server_app_status,
     start_weather_server_app,
+)
+from mele.mount_access import (
+    COOKIE,
+    CSRF_HEADER,
+    EDGE_HEADER,
+    EDGE_VALUE,
+    SESSION_TTL_S,
+    MountAccess,
+    authorization,
+    machine_addresses,
+)
+from mele.mount_motion import (
+    InstanceBusy,
+    InstanceLock,
+    MountMotion,
+    MountSample,
+    command_outcome,
+    phd2_blocks_axis,
+    phd2_blocks_goto,
+    slew_coordinates_deg,
+    target_block_reason,
 )
 from mele.nina import NinaClient, NinaCommandResult, validate_slew_radec_deg
 from mele.nina_goto_log import save_goto_record
@@ -273,6 +295,14 @@ def run_app(port: int | None = None) -> None:
     preview_dir = settings.horizon_dir / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
     settings.horizon_dir.mkdir(parents=True, exist_ok=True)
+    instance_lock = InstanceLock(settings.horizon_dir / "mele-app.lock")
+    try:
+        instance_lock.acquire()
+    except InstanceBusy:
+        raise SystemExit(
+            "MeLE-App läuft bereits. Eine zweite Instanz hätte eine eigene Bewegungsverwaltung."
+        )
+    atexit.register(instance_lock.release)
     settings.gps_dir.mkdir(parents=True, exist_ok=True)
     weather_dir = weather_dir_for(settings.horizon_dir)
     weather_dir.mkdir(parents=True, exist_ok=True)
@@ -297,6 +327,22 @@ def run_app(port: int | None = None) -> None:
     phd2 = get_shared_phd2_client(host=settings.phd2_host, port=settings.phd2_port)
     phd2.set_fullframe_min_interval(settings.phd2_fullframe_interval_s)
     mount_mover = get_mount_mover(settings.nina_base_url)
+    motion = MountMotion()
+    mount_access = MountAccess(settings.horizon_dir.parent / "mount-pair-code.txt")
+
+    def _axis_phd2_reason() -> str:
+        try:
+            return phd2_blocks_axis(phd2.get_status())
+        except Exception:
+            return "PHD2-Zustand nicht lesbar"
+
+    def _on_axis_halt(result) -> None:
+        if motion.kind_is_goto():
+            return
+        if result.rate0_sent or motion.manual_axis_active():
+            motion.note_axis_stop(result.rate0_sent)
+
+    mount_mover.set_guard(block_probe=_axis_phd2_reason, on_halt=_on_axis_halt)
     ensure_manager_db(settings.astro_manager_db)
     # S2 Idle-Guard: laufende MeLE-Captures (Multi-Frame), nicht nur NINA IsExposing
     _capture_inflight_lock = threading.Lock()
@@ -1361,10 +1407,14 @@ def run_app(port: int | None = None) -> None:
         try:
             status = nina.get_mount_info()
         except Exception as exc:  # noqa: BLE001 — UI darf nie crashen
+            motion.note(MountSample(online=False, connected=False, error=str(exc) or "NinaClient-Fehler"))
             return JSONResponse(
-                {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "mount": None}
+                _motion_body(
+                    {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "mount": None}
+                )
             )
-        return JSONResponse(status.to_dict())
+        motion.note(_mount_sample(status))
+        return JSONResponse(_motion_body(status.to_dict()))
 
     @app.get("/nina/camera")
     def nina_camera() -> JSONResponse:
@@ -1377,12 +1427,70 @@ def run_app(port: int | None = None) -> None:
             )
         return JSONResponse(status.to_dict())
 
+    def _mount_sample(status, age_s: float = 0.0) -> MountSample:
+        mount = status.mount if status is not None else None
+        return MountSample(
+            online=bool(status and status.api_online),
+            connected=bool(mount and mount.connected),
+            slewing=bool(mount and mount.slewing),
+            parked=bool(mount and mount.at_park),
+            age_s=age_s,
+            error="" if status is None else (status.error or ""),
+        )
+
+    def _site_for_goto() -> tuple[float | None, float | None, object]:
+        lat = settings.latitude_deg
+        lon = settings.longitude_deg
+        loc = get_active_location(settings.horizon_dir)
+        if lat is None and loc is not None:
+            lat = loc.latitude_deg
+        if lon is None and loc is not None:
+            lon = loc.longitude_deg
+        profile = None
+        stem = loc.pano_stem if loc is not None else ""
+        if stem:
+            json_path = settings.horizon_dir / f"{stem}.horizon.json"
+            if json_path.is_file():
+                try:
+                    profile = load_profile(json_path)
+                except Exception:
+                    profile = "unreadable"
+        return lat, lon, profile
+
+    def _mount_gate(request: Request) -> JSONResponse | None:
+        verdict = authorization(
+            mount_access,
+            peer=request.client.host if request.client else "",
+            via_edge=request.headers.get(EDGE_HEADER, "") == EDGE_VALUE,
+            local_ips=machine_addresses(),
+            cookie=request.cookies.get(COOKIE, ""),
+            csrf=request.headers.get(CSRF_HEADER, ""),
+            now=time.monotonic(),
+        )
+        if verdict:
+            return None
+        return JSONResponse({"ok": False, "error": "Keine Montierungsberechtigung"}, status_code=401)
+
+    def _local_desktop(request: Request) -> bool:
+        return authorization(
+            mount_access,
+            peer=request.client.host if request.client else "",
+            via_edge=request.headers.get(EDGE_HEADER, "") == EDGE_VALUE,
+            local_ips=machine_addresses(),
+            cookie="",
+            csrf="",
+            now=time.monotonic(),
+        ) == "desktop"
+
+    def _motion_body(payload: dict) -> dict:
+        body = dict(payload)
+        body["motion"] = motion.view()
+        return body
+
     def _phd2_pad_allowed() -> tuple[bool, str]:
-        st = phd2.get_status()
-        if st.connection == "GUIDING" or st.guiding:
-            return False, "Pad deaktiviert während PHD2 Guiding"
-        if st.connection == "CALIBRATING":
-            return False, "Pad deaktiviert während PHD2-Kalibrierung"
+        reason = _axis_phd2_reason()
+        if reason:
+            return False, reason
         try:
             mount = nina.get_mount_info()
         except Exception as exc:  # noqa: BLE001
@@ -1616,35 +1724,133 @@ def run_app(port: int | None = None) -> None:
     @app.post("/nina/mount/move")
     async def nina_mount_move(request: Request) -> JSONResponse:
         """Manuelles Joggen via NINA MoveAxis-WebSocket."""
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
         if not isinstance(body, dict):
             return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
-        # Blocking HTTP/WS nicht auf dem Event-Loop — sonst hängt die ganze UI.
-        allowed, reason = await asyncio.to_thread(_phd2_pad_allowed)
+        token, token_error = parse_pulse_token(body.get("token"))
+        if token_error:
+            return JSONResponse({"ok": False, "error": token_error, "sent": False, "settled": False}, status_code=400)
+        rejected = mount_mover.pulse_rejected(token)
+        if rejected:
+            return JSONResponse(
+                _motion_body({"ok": False, "error": rejected, "sent": False, "settled": False, "pad_allowed": False}),
+                status_code=409,
+            )
+        # Wiederholte Impulse prüfen nur den PHD2-Speicher. Die NINA-Abfrage
+        # bei jedem Impuls würde länger als der Totmann dauern.
+        if motion.manual_axis_active():
+            reason = await asyncio.to_thread(_axis_phd2_reason)
+            allowed = not reason
+        else:
+            allowed, reason = await asyncio.to_thread(_phd2_pad_allowed)
         if not allowed:
-            return JSONResponse({"ok": False, "error": reason, "pad_allowed": False}, status_code=409)
+            if token is not None:
+                mount_mover.retire_pulse(token)
+            if motion.manual_axis_active():
+                result = await asyncio.to_thread(mount_mover.stop)
+                stopped = result.to_dict()
+                stopped["sent"] = result.rate0_sent
+                stopped["settled"] = False
+                stopped["error"] = reason
+                stopped["pad_allowed"] = False
+                return JSONResponse(_motion_body(stopped), status_code=409)
+            return JSONResponse({"ok": False, "error": reason, "pad_allowed": False, "sent": False, "settled": False}, status_code=409)
+        if motion.kind_is_goto():
+            if token is not None:
+                mount_mover.retire_pulse(token)
+            return JSONResponse(
+                _motion_body({"ok": False, "error": "GoTo läuft", "sent": False, "settled": False, "pad_allowed": False}),
+                status_code=409,
+            )
         direction = str(body.get("direction") or "")
+        if token is not None:
+            rate, rate_error = quest_axis_rate(body.get("rate", QUEST_AXIS_RATE))
+            if rate_error or rate is None:
+                return JSONResponse(
+                    {"ok": False, "error": rate_error or "Geschwindigkeit ungültig", "sent": False, "settled": False},
+                    status_code=400,
+                )
+        else:
+            try:
+                rate = float(body.get("rate", QUEST_AXIS_RATE))
+            except (TypeError, ValueError):
+                rate = QUEST_AXIS_RATE
+        started = not motion.manual_axis_active()
+        if started:
+            reserved = motion.reserve_move()
+            if not reserved.ok:
+                return JSONResponse(
+                    _motion_body({"ok": False, "error": reserved.error, "pad_allowed": False}),
+                    status_code=reserved.status,
+                )
+        logger.info("mount/move request direction=%s rate=%s token=%s ws=%s", direction, rate, token, mount_mover.ws_url)
         try:
-            rate = float(body.get("rate", 0.01))
-        except (TypeError, ValueError):
-            rate = 0.01
-        logger.info("mount/move request direction=%s rate=%s ws=%s", direction, rate, mount_mover.ws_url)
-        result = await asyncio.to_thread(mount_mover.move, direction, rate)
+            result = await asyncio.to_thread(mount_mover.move, direction, rate, token)
+        except Exception as exc:  # noqa: BLE001
+            if started:
+                motion.complete_move(False)
+            return JSONResponse(
+                _motion_body({"ok": False, "error": str(exc) or "Achsbewegung fehlgeschlagen", "pad_allowed": True}),
+                status_code=502,
+            )
+        if result.ok:
+            motion.complete_move(True)
+        elif (
+            started
+            and result.error != "Steuerimpuls überholt"
+            and not result.rate0_sent
+            and motion.view()["detail"] == "Achsbewegung aktiv"
+        ):
+            motion.complete_move(False)
         if not result.ok:
             logger.warning("mount/move failed: %s", result.error)
-        status = 200 if result.ok else 502
+        status = 200 if result.ok else (409 if result.error == "Steuerimpuls überholt" else 502)
         payload = result.to_dict()
         payload["ws_url"] = mount_mover.ws_url
-        return JSONResponse(payload, status_code=status)
+        return JSONResponse(_motion_body(payload), status_code=status)
 
     @app.post("/nina/mount/move/stop")
-    async def nina_mount_move_stop() -> JSONResponse:
-        result = await asyncio.to_thread(mount_mover.stop)
-        logger.info("mount/move/stop ok=%s", result.ok)
-        return JSONResponse(result.to_dict())
+    async def nina_mount_move_stop(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
+        token = None
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            token, token_error = parse_pulse_token(payload.get("token"))
+            if token_error:
+                return JSONResponse({"ok": False, "error": token_error, "sent": False, "settled": False}, status_code=400)
+        if motion.kind_is_goto():
+            if token is not None:
+                mount_mover.retire_pulse(token)
+            return JSONResponse(
+                _motion_body(
+                    {
+                        "ok": True,
+                        "sent": False,
+                        "settled": False,
+                        "rate0_sent": False,
+                        "message": "GoTo läuft, Achsen-Stopp nicht gesendet",
+                        "error": "",
+                    }
+                )
+            )
+        result = await asyncio.to_thread(mount_mover.stop, token)
+        body = result.to_dict()
+        body["sent"] = result.rate0_sent
+        body["settled"] = False
+        logger.info("mount/move/stop sent=%s error=%s", result.rate0_sent, result.error)
+        accepted = result.rate0_sent or result.message == "älterer Achsen-Stopp verworfen"
+        return JSONResponse(_motion_body(body), status_code=200 if accepted else 502)
 
     @app.get("/network/wifi")
     def network_wifi() -> JSONResponse:
@@ -1670,12 +1876,84 @@ def run_app(port: int | None = None) -> None:
             )
         return JSONResponse(status.to_dict())
 
+    @app.get("/mount-session/code")
+    def mount_session_code(request: Request) -> JSONResponse:
+        """Kopplungscode. Nur die lokale Desktop-Verbindung, nie über Caddy."""
+        if not _local_desktop(request):
+            return JSONResponse({"ok": False, "error": "Nur am MeLE"}, status_code=404)
+        code = mount_access.issue_code(time.monotonic())
+        return JSONResponse({"ok": True, "code": code})
+
+    @app.get("/mount-session")
+    def mount_session_status(request: Request) -> JSONResponse:
+        token = request.cookies.get(COOKIE, "")
+        left = mount_access.expires_in(token, time.monotonic())
+        return JSONResponse({"ok": True, "paired": left > 0, "expires_in_s": round(left)})
+
+    @app.post("/mount-session/pair")
+    async def mount_session_pair(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        offered = str(body.get("code") or "") if isinstance(body, dict) else ""
+        paired = mount_access.pair(offered, time.monotonic())
+        if paired is None:
+            return JSONResponse({"ok": False, "error": "Code ungültig"}, status_code=401)
+        token, csrf, life = paired
+        response = JSONResponse({"ok": True, "csrf": csrf, "expires_in_s": round(life)})
+        response.set_cookie(
+            COOKIE,
+            token,
+            max_age=int(SESSION_TTL_S),
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            path="/",
+        )
+        return response
+
     @app.post("/nina/mount/slew")
-    def nina_mount_slew(ra: float | None = None, dec: float | None = None) -> JSONResponse:
+    def nina_mount_slew(
+        request: Request,
+        ra: float | None = None,
+        dec: float | None = None,
+        target: str | None = None,
+    ) -> JSONResponse:
         """GoTo: RA/Dec in Grad (J2000), waitForResult=false, kein center/rotate.
 
-        Ruft NINA GET /equipment/mount/slew auf. Kein automatischer Retry.
+        ``target`` wird unmittelbar vor dem Schwenk serverseitig neu aufgelöst.
+        Katalog-RA bleibt Grad. Ruft NINA GET /equipment/mount/slew auf.
         """
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
+        if target and str(target).strip():
+            lat, lon, profile = _site_for_goto()
+            if profile == "unreadable":
+                return JSONResponse(
+                    _motion_body({"ok": False, "api_online": True, "message": "", "error": "Gartenmaske nicht lesbar", "status_code": 409, "request": None}),
+                    status_code=409,
+                )
+            if lat is None or lon is None:
+                return JSONResponse(
+                    _motion_body({"ok": False, "api_online": True, "message": "", "error": "Standort fehlt", "status_code": 409, "request": None}),
+                    status_code=409,
+                )
+            resolved = resolve_catalog_object(
+                str(target).strip(),
+                latitude_deg=float(lat),
+                longitude_deg=float(lon),
+                when=datetime.now(timezone.utc),
+                profile=profile,
+            )
+            if not resolved or resolved.get("ra") is None or resolved.get("dec") is None:
+                return JSONResponse(
+                    _motion_body({"ok": False, "api_online": True, "message": "", "error": "Objekt nicht auflösbar", "status_code": 409, "request": None}),
+                    status_code=409,
+                )
+            ra = float(resolved["ra"])
+            dec = float(resolved["dec"])
         problem = validate_slew_radec_deg(
             float("nan") if ra is None else float(ra),
             float("nan") if dec is None else float(dec),
@@ -1693,92 +1971,109 @@ def run_app(port: int | None = None) -> None:
                 status_code=400,
             )
         try:
+            phd2_status = phd2.get_status()
+            guiding_block = phd2_blocks_goto(phd2_status)
+        except Exception:
+            guiding_block = "PHD2-Zustand nicht lesbar"
+        if guiding_block:
+            return JSONResponse(
+                _motion_body({"ok": False, "api_online": True, "message": "", "error": guiding_block, "status_code": 409, "request": None}),
+                status_code=409,
+            )
+        lat, lon, profile = _site_for_goto()
+        if profile == "unreadable":
+            return JSONResponse(
+                _motion_body({"ok": False, "api_online": True, "message": "", "error": "Gartenmaske nicht lesbar", "status_code": 409, "request": None}),
+                status_code=409,
+            )
+        if lat is None or lon is None:
+            return JSONResponse(
+                _motion_body({"ok": False, "api_online": True, "message": "", "error": "Standort fehlt", "status_code": 409, "request": None}),
+                status_code=409,
+            )
+        blocked = target_block_reason(
+            float(ra), float(dec), float(lat), float(lon), datetime.now(timezone.utc), profile
+        )
+        if blocked:
+            return JSONResponse(
+                _motion_body({"ok": False, "api_online": True, "message": "", "error": blocked, "status_code": 409, "request": None}),
+                status_code=409,
+            )
+        try:
             status = nina.get_mount_info()
         except Exception as exc:  # noqa: BLE001
+            motion.note(MountSample(online=False, connected=False, error=str(exc) or "Mount-Status nicht lesbar"))
             return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": False,
-                    "message": "",
-                    "error": str(exc) or "Mount-Status nicht lesbar",
-                    "status_code": None,
-                    "request": None,
-                },
+                _motion_body({"ok": False, "api_online": False, "message": "", "error": str(exc) or "Mount-Status nicht lesbar", "status_code": None, "request": None}),
                 status_code=502,
             )
-        if not status.api_online:
+        sample = _mount_sample(status)
+        if sample.parked and sample.online and sample.connected:
+            motion.note(sample)
             return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": False,
-                    "message": "",
-                    "error": status.error or "NINA Offline",
-                    "status_code": None,
-                    "request": None,
-                },
-                status_code=502,
-            )
-        if status.mount is None or not status.mount.connected:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": True,
-                    "message": "",
-                    "error": "Mount disconnected",
-                    "status_code": 409,
-                    "request": None,
-                },
+                _motion_body({"ok": False, "api_online": True, "message": "", "error": "Mount parked", "status_code": 409, "request": None}),
                 status_code=409,
             )
-        if status.mount.at_park:
+        reserved = motion.reserve_goto(sample)
+        if not reserved.ok:
             return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": True,
-                    "message": "",
-                    "error": "Mount parked",
-                    "status_code": 409,
-                    "request": None,
-                },
-                status_code=409,
+                _motion_body({"ok": False, "api_online": status.api_online, "message": "", "error": reserved.error, "status_code": reserved.status, "request": None}),
+                status_code=reserved.status,
             )
+        ra_deg, dec_deg = slew_coordinates_deg(float(ra), float(dec))
         try:
-            result = nina.slew_to_radec(float(ra), float(dec), wait_for_result=False)
+            result = nina.slew_to_radec(ra_deg, dec_deg, wait_for_result=False)
+            outcome = command_outcome(result.ok, result.api_online)
+            error_text = result.error
         except Exception as exc:  # noqa: BLE001
+            result = None
+            outcome = "unclear"
+            error_text = str(exc) or "Slew-Aufruf fehlgeschlagen"
+        follow = motion.complete_goto(reserved.generation, outcome)
+        if follow.restop:
+            try:
+                again = nina.abort_slew()
+                motion.complete_stop(command_outcome(again.ok, again.api_online))
+            except Exception:
+                motion.complete_stop("unclear")
+        if follow.error:
             return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": False,
-                    "message": "",
-                    "error": str(exc) or "Slew-Aufruf fehlgeschlagen",
-                    "status_code": None,
-                    "request": None,
-                },
+                _motion_body({"ok": False, "api_online": outcome != "unclear", "message": "", "error": follow.error, "status_code": follow.status, "request": None}),
+                status_code=follow.status,
+            )
+        if result is None:
+            return JSONResponse(
+                _motion_body({"ok": False, "api_online": False, "message": "", "error": error_text, "status_code": None, "request": None}),
                 status_code=502,
             )
-        code = 200 if result.ok else (result.status_code or 502)
-        if code < 400:
-            code = 200 if result.ok else 502
-        return JSONResponse(result.to_dict(), status_code=code if not result.ok else 200)
+        code = 200 if result.ok else 502
+        return JSONResponse(_motion_body(result.to_dict()), status_code=code)
 
     @app.post("/nina/mount/slew/stop")
-    def nina_mount_slew_stop() -> JSONResponse:
-        """Abort: NINA GET /equipment/mount/slew/stop. Unabhaengig vom Slew-HTTP."""
+    def nina_mount_slew_stop(request: Request) -> JSONResponse:
+        """STOP hat Vorrang und wartet nicht auf einen offenen GoTo-Start."""
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
+        motion.begin_stop()
         try:
             result = nina.abort_slew()
+            outcome = command_outcome(result.ok, result.api_online)
         except Exception as exc:  # noqa: BLE001
+            motion.complete_stop("unclear")
             return JSONResponse(
-                {
-                    "ok": False,
-                    "api_online": False,
-                    "message": "",
-                    "error": str(exc) or "Stop fehlgeschlagen",
-                    "status_code": None,
-                    "request": None,
-                },
+                _motion_body({"ok": False, "api_online": False, "message": "", "error": str(exc) or "Stop fehlgeschlagen", "status_code": None, "request": None}),
                 status_code=502,
             )
-        return JSONResponse(result.to_dict(), status_code=200 if result.ok else (result.status_code or 502))
+        follow = motion.complete_stop(outcome)
+        if follow.error:
+            body = result.to_dict()
+            body["ok"] = False
+            body["error"] = follow.error
+            return JSONResponse(_motion_body(body), status_code=follow.status)
+        body = result.to_dict()
+        body["settled"] = False
+        return JSONResponse(_motion_body(body), status_code=200)
 
     @app.post("/nina/goto-log")
     async def nina_goto_log(request: Request) -> JSONResponse:
@@ -4166,12 +4461,15 @@ def run_app(port: int | None = None) -> None:
     # Default reconnect_timeout=3s: Chrome drosselt Hintergrund-Tabs (360/Guiding/Wetter).
     # Nach >3s ohne Pong loescht NiceGUI den Client → index() neu, Panorama wird neu geladen.
     # Observing-Workflow: langer Timeout, damit Hauptfenster beim Tab-Wechsel erhalten bleibt.
-    ui.run(
-        root=index,
-        title="MeLE Astro-Computer",
-        port=port,
-        host=settings.ui_host,
-        show=True,
-        reload=False,
-        reconnect_timeout=600.0,
-    )
+    try:
+        ui.run(
+            root=index,
+            title="MeLE Astro-Computer",
+            port=port,
+            host=settings.ui_host,
+            show=True,
+            reload=False,
+            reconnect_timeout=600.0,
+        )
+    finally:
+        instance_lock.release()

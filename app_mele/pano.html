@@ -59,6 +59,16 @@
       color: #e2e8f0; background: #1f4e5f; border: 0; border-radius: 4px;
       padding: 7px 10px; cursor: pointer; font-size: 13px; }
     #nina button.stop { background: #be123c; font-weight: 700; }
+    #mount-stop {
+      position: absolute; z-index: 4; left: 50%; bottom: 16px; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+    }
+    #mount-stop button {
+      color: #fff; background: #be123c; border: 0; border-radius: 6px;
+      padding: 10px 18px; font-size: 15px; font-weight: 700; cursor: pointer;
+    }
+    #mount-stop button:disabled { opacity: .38; cursor: not-allowed; }
+    #mount-stop p { margin: 0; font-size: 12px; text-shadow: 0 0 4px #020617; }
     #nina button:disabled, #info .goto-row button:disabled { opacity: .38; cursor: not-allowed; }
     #info .goto-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     #goto-confirm { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
@@ -273,6 +283,7 @@
       <summary id="nina-title"><span class="led" aria-hidden="true"></span><span id="nina-title-text">NINA / GTi</span></summary>
       <dl id="nina-dl"></dl>
       <p id="nina-goto-status" style="margin:8px 0 0;white-space:pre-wrap;"></p>
+      <p id="mount-pair-code" class="hint-mini"></p>
       <label class="debug"><input id="chk-mount-trail" type="checkbox"> Mount-Spur (Debug)</label>
       <div class="row">
         <button id="btn-slew-stop" class="stop" type="button" disabled>STOP</button>
@@ -330,6 +341,10 @@
         <button id="btn-goto-no" type="button">Abbrechen</button>
       </div>
     </div>
+  </div>
+  <div id="mount-stop">
+    <button id="btn-mount-stop" type="button" disabled>STOP MONTIERUNG</button>
+    <p id="mount-stop-note"></p>
   </div>
   <div id="labels"></div>
   <div id="track-labels"></div>
@@ -4442,10 +4457,24 @@
       btn.disabled = !ok;
     }
 
+    function motionNeedsStop(data) {
+      const state = data && data.motion && data.motion.state;
+      return state === "faehrt" || state === "stoppt" || state === "unklar";
+    }
+
     function syncStopButton() {
-      const btn = document.getElementById("btn-slew-stop");
       const slewing = !!(lastNinaStatus && lastNinaStatus.mount && lastNinaStatus.mount.slewing);
-      btn.disabled = !(stopArmed || slewing || gotoPhase === "commanded" || gotoPhase === "slewing");
+      const state = lastNinaStatus && lastNinaStatus.motion && lastNinaStatus.motion.state;
+      if (state === "bereit" && !slewing && gotoPhase !== "commanded" && gotoPhase !== "slewing") {
+        stopArmed = false;
+      }
+      const armed = stopArmed || slewing || motionNeedsStop(lastNinaStatus)
+        || gotoPhase === "commanded" || gotoPhase === "slewing";
+      document.getElementById("btn-slew-stop").disabled = !armed;
+      document.getElementById("btn-mount-stop").disabled = !armed;
+      const note = document.getElementById("mount-stop-note");
+      const motion = lastNinaStatus && lastNinaStatus.motion;
+      note.textContent = motion && motion.label ? motion.label : "";
     }
 
     function setGotoStatus(text) {
@@ -4556,8 +4585,12 @@
       try {
         const response = await fetch("/nina/mount/slew/stop", { method: "POST" });
         const data = await response.json();
-        if (!data.ok) {
-          setGotoStatus(`STOP fehlgeschlagen: ${data.error || data.message || "unbekannt"}`);
+        const motion = data.motion || {};
+        const motionText = motion.label
+          ? `\nZustand: ${motion.label}${motion.detail && motion.detail !== motion.label ? ` (${motion.detail})` : ""}`
+          : "";
+        if (!response.ok || !data.ok) {
+          setGotoStatus(`STOP nicht bestätigt: ${data.error || data.message || "unbekannt"}${motionText}`);
           return;
         }
         gotoPhase = "stopped";
@@ -4566,7 +4599,11 @@
           drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "stop");
         }
         const saved = await finalizeGotoDiag("stopped", "none");
-        setGotoStatus(formatDiagStatus(`STOP: ${data.message || "Stopped slew"}`, saved && saved.metrics));
+        setGotoStatus(formatDiagStatus(
+          `STOP gesendet. Stillstand ist damit nicht bestätigt.${motionText}\n`
+          + "Bereit erst nach einer neuen Meldung mit slewing=false.",
+          saved && saved.metrics,
+        ));
       } catch (err) {
         setGotoStatus(`STOP fehlgeschlagen: ${err.message || err}`);
       } finally {
@@ -4662,6 +4699,9 @@
         drawMountMarker(mount.azimuth_deg, mount.altitude_deg, "sample");
         noteSlewFromTelemetry(mount);
       }
+      if (data && data.motion && data.motion.label) {
+        rows.push(["Zustand", data.motion.label]);
+      }
       rows.forEach(([key, value]) => {
         const dt = document.createElement("dt");
         dt.textContent = key;
@@ -4688,10 +4728,28 @@
       }
     }
 
+    async function pollPairCode() {
+      const el = document.getElementById("mount-pair-code");
+      if (!el) return;
+      try {
+        const response = await fetch("/mount-session/code", { cache: "no-store" });
+        if (!response.ok) {
+          el.textContent = "";
+          return;
+        }
+        const data = await response.json();
+        el.textContent = data.code ? `Quest-Code ${data.code}` : "";
+      } catch (_err) {
+        el.textContent = "";
+      }
+    }
+
     function startNinaPolling() {
       clearInterval(ninaTimer);
       pollNinaMount();
+      pollPairCode();
       ninaTimer = setInterval(pollNinaMount, 1000);
+      setInterval(pollPairCode, 15000);
     }
 
     let wifiTimer = null;
@@ -4779,6 +4837,7 @@
     document.getElementById("btn-goto-yes").addEventListener("click", executeGoto);
     document.getElementById("btn-goto-no").addEventListener("click", hideGotoConfirm);
     document.getElementById("btn-slew-stop").addEventListener("click", executeStop);
+    document.getElementById("btn-mount-stop").addEventListener("click", executeStop);
     document.getElementById("chk-mount-trail").addEventListener("change", () => {
       if (!mountTrailEnabled()) {
         const mount = lastNinaStatus && lastNinaStatus.mount;

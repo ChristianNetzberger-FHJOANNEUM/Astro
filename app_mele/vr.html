@@ -328,6 +328,23 @@
       return segments;
     }
 
+    function makeMountLabelTexture() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 64;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "rgba(2, 6, 23, 0.55)";
+      ctx.fillRect(8, 8, 112, 48);
+      ctx.fillStyle = "#facc15";
+      ctx.font = "bold 36px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("GTi", 64, 32);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
     function makeLabelTexture(name) {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
@@ -885,16 +902,52 @@
     const testHoverColor = 0xfbbf24;
     const objectsButton = makeTextButton("OBJEKTE", "objects", -0.16, 0.05, 0.30, 0.09);
     const skyMenuButton = makeTextButton("HIMMEL", "himmel", 0.16, 0.05, 0.30, 0.09);
-    const prefsButton = makeTextButton("EINSTELLUNGEN", "prefs", 0, -0.06, 0.30, 0.09);
+    const prefsButton = makeTextButton("EINSTELLUNGEN", "prefs", -0.16, -0.06, 0.30, 0.09);
+    const mountButton = makeTextButton("MONTIERUNG", "mount", 0.16, -0.06, 0.30, 0.09);
     paintMenuButton(objectsButton, "OBJEKTE", "Liste und Details");
     paintMenuButton(skyMenuButton, "HIMMEL", "Anzeige und Zeit");
     paintMenuButton(prefsButton, "EINSTELLUNGEN", "VR-Preferences");
+    paintMenuButton(mountButton, "MONTIERUNG", "Position der Montierung");
     const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
     backButton.visible = false;
     const goalButton = makeTextButton("ZIEL FINDEN", "nav-goal", -0.16, -0.152, 0.30, 0.040);
     goalButton.visible = false;
     const trackButton = makeTextButton("TAGESBAHN", "day-track", 0.16, -0.152, 0.30, 0.040);
     trackButton.visible = false;
+    const gotoButton = makeTextButton("GOTO", "quest-goto", 0, -0.108, 0.36, 0.040);
+    gotoButton.visible = false;
+    const gotoCancelButton = makeTextButton("ABBRECHEN", "quest-goto-cancel", -0.16, -0.16, 0.28, 0.044);
+    gotoCancelButton.visible = false;
+    const gotoConfirmButton = makeTextButton("GOTO BESTÄTIGEN", "quest-goto-confirm", 0.16, -0.16, 0.30, 0.044);
+    gotoConfirmButton.visible = false;
+    const stopButton = makeTextButton("STOP", "quest-stop", 0, 0.148, 0.34, 0.040);
+    stopButton.visible = false;
+    const axisButton = makeTextButton("MANUELLE ACHSE", "quest-axis", 0, -0.155, 0.42, 0.040);
+    axisButton.visible = false;
+    const axisStopButton = makeTextButton("STOP ACHSE", "quest-axis-stop", 0.16, 0.155, 0.28, 0.040);
+    axisStopButton.visible = false;
+    const axisRateMinus = makeTextButton("−", "quest-axis-rate", -0.22, -0.108, 0.08, 0.040);
+    axisRateMinus.userData.dir = -1;
+    axisRateMinus.visible = false;
+    const axisRateLabel = makeTextButton("0,01 °/s", "quest-axis-hold", 0, -0.108, 0.24, 0.040);
+    axisRateLabel.visible = false;
+    const axisRatePlus = makeTextButton("+", "quest-axis-rate", 0.22, -0.108, 0.08, 0.040);
+    axisRatePlus.userData.dir = 1;
+    axisRatePlus.visible = false;
+    const pairButton = makeTextButton("KOPPELN", "quest-pair", 0, -0.108, 0.28, 0.040);
+    pairButton.visible = false;
+    const pairDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map((digit, index) => {
+      const col = index === 9 ? 1 : index % 3;
+      const row = index === 9 ? 3 : Math.floor(index / 3);
+      const button = makeTextButton(digit, "pair-digit", -0.12 + col * 0.12, 0.09 - row * 0.042, 0.10, 0.038);
+      button.userData.digit = digit;
+      button.visible = false;
+      return button;
+    });
+    const pairClearButton = makeTextButton("LÖSCHEN", "pair-clear", -0.12, -0.10, 0.18, 0.040);
+    pairClearButton.visible = false;
+    const pairSubmitButton = makeTextButton("FERTIG", "pair-submit", 0.12, -0.10, 0.18, 0.040);
+    pairSubmitButton.visible = false;
     const dragHandle = makeTextButton("ZIEHEN", "drag", 0, 0.191, 0.64, 0.034);
     const keyboardTestButton = makeTextButton("SUCHEN", "kb-test", -0.24, -0.128, 0.16, 0.040);
     keyboardTestButton.visible = false;
@@ -991,9 +1044,23 @@
       objectsButton,
       skyMenuButton,
       prefsButton,
+      mountButton,
       backButton,
       goalButton,
       trackButton,
+      gotoButton,
+      gotoCancelButton,
+      gotoConfirmButton,
+      stopButton,
+      axisButton,
+      axisStopButton,
+      axisRateMinus,
+      axisRateLabel,
+      axisRatePlus,
+      pairButton,
+      pairClearButton,
+      pairSubmitButton,
+      ...pairDigits,
       dragHandle,
       keyboardTestButton,
       searchPrevButton,
@@ -1159,6 +1226,22 @@
     const greenTelrad = new THREE.Group();
     greenTelrad.visible = false;
     scene.add(greenTelrad);
+    const mountColor = 0xfacc15;
+    const mountTelrad = new THREE.Group();
+    mountTelrad.visible = false;
+    scene.add(mountTelrad);
+    const mountLabel = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: makeMountLabelTexture(),
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }));
+    mountLabel.raycast = () => {};
+    mountLabel.renderOrder = 4;
+    mountLabel.visible = false;
+    mountLabel.frustumCulled = false;
+    mountLabel.scale.set(14, 7, 1);
+    scene.add(mountLabel);
     const navArrow = makeNavArrow();
     navArrow.visible = false;
     scene.add(navArrow);
@@ -1191,6 +1274,43 @@
       source: "",
       query: "",
     };
+    const mountView = {
+      valid: false,
+      az: null,
+      alt: null,
+      status: "keine Daten",
+      motion: "",
+      motionLabel: "",
+      motionDetail: "",
+      slewing: false,
+      targetName: "",
+      lines: ["Noch keine Position"],
+      stamp: "",
+      seenAt: null,
+    };
+    let mountCsrf = "";
+    let mountPaired = false;
+    let pairEntry = "";
+    let questGotoNote = "";
+    const AXIS_DEADZONE = 0.2;
+    const AXIS_RATES = [0.005, 0.01, 0.02, 0.05, 0.1, 0.5];
+    const AXIS_PULSE_MS = 400;
+    const AXIS_PROFILES = ["oculus-touch", "meta-quest-touch-plus", "generic-thumbstick", "generic-trigger"];
+    let axisRateIndex = 1;
+    let axisMode = false;
+    let axisArmed = false;
+    let axisToken = 0;
+    let axisDirection = "";
+    let axisStatus = "AUS";
+    let axisNote = "Aus";
+    let axisReadout = "Joystick —";
+    let axisPulseAt = 0;
+    let axisBusy = false;
+    let axisStopToken = 0;
+    let axisPanelKey = "";
+    const mountPoint = new THREE.Vector3();
+    let mountSerial = 0;
+    let mountBusy = false;
     const navPoint = new THREE.Vector3();
     const navTargetDir = new THREE.Vector3();
     const navPerp = new THREE.Vector3();
@@ -1700,6 +1820,7 @@
     }
 
     function showHome() {
+      if (axisMode && panelMode === "mount") leaveAxisMode("");
       panelMode = "home";
       panelReturn = "home";
       selectedItem = null;
@@ -1712,6 +1833,14 @@
 
     function showHimmel() {
       panelMode = "himmel";
+      panelReturn = "home";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function showMount() {
+      panelMode = "mount";
       panelReturn = "home";
       syncPanelButtons();
       dashboardKey = "";
@@ -2456,6 +2585,64 @@
         dashboardTexture.needsUpdate = true;
         return;
       }
+      if (panelMode === "mount") {
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#facc15";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Montierung", 48, 108);
+        ctx.fillStyle = "#fde68a";
+        ctx.font = "bold 26px sans-serif";
+        ctx.fillText(`Achse ${axisStatus}    ${axisRateText()}    ${axisReadout}`, 48, 152);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "22px sans-serif";
+        ctx.fillText(axisNote || "", 48, 184);
+        mountView.lines.forEach((line, index) => {
+          const y = 224 + index * 26;
+          if (y > 400) return;
+          ctx.fillStyle = index === 0 ? "#fde68a" : "#e2e8f0";
+          ctx.font = index === 0 ? "bold 24px sans-serif" : "22px sans-serif";
+          ctx.fillText(line, 48, y);
+        });
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
+      if (panelMode === "goto" && selectedItem) {
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#fecaca";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Teleskop wirklich bewegen?", 48, 28);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "30px sans-serif";
+        const lines = [
+          selectedItem.name || selectedItem.id || "Objekt",
+          `RA ${fmtRa(selectedItem.ra)}`,
+          `Dec ${fmtDec(selectedItem.dec)}`,
+          mountView.status || "Montierung",
+        ];
+        lines.forEach((line, index) => ctx.fillText(line, 48, 84 + index * 40));
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "26px sans-serif";
+        ctx.fillText(questGotoNote || "GOTO BESTÄTIGEN startet die Fahrt. ABBRECHEN nicht.", 48, 280);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
+      if (panelMode === "pair") {
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 36px sans-serif";
+        ctx.fillText("Quest koppeln", 48, 24);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "32px sans-serif";
+        ctx.fillText(pairEntry ? pairEntry.split("").join(" ") : "Code vom MeLE", 48, 78);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "26px sans-serif";
+        ctx.fillText(questGotoNote || "Sechs Ziffern, dann FERTIG.", 48, 130);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
       if (panelMode === "detail" && selectedItem) {
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
@@ -2496,6 +2683,12 @@
         ? `search|${searchQuery}|${searchPage}|${searchNote}|${searchHits.map((hit) => hit.key || hit.id).join(",")}`
         : panelMode === "track"
         ? `track|${trackItemKey}|${trackNote}|${skyClockLabel()}|${siteStem}`
+        : panelMode === "mount"
+        ? `mount|${mountView.lines.join("|")}|${questGotoNote}|${axisStatus}|${axisNote}|${axisReadout}|${axisRateIndex}`
+        : panelMode === "goto"
+        ? `goto|${selectedKey}|${mountView.status}|${questGotoNote}|${mountPaired}`
+        : panelMode === "pair"
+        ? `pair|${pairEntry}|${questGotoNote}`
         : (panelMode === "detail" && selectedItem
           ? `detail|${detailLines(selectedItem, selectedMissing).join("|")}`
           : `home|${dashboardSections().map((section) => section.title + section.lines.join("|")).join("||")}|${skyStars}|${overlayStateText}`);
@@ -2542,6 +2735,23 @@
         size -= 2;
         ctx.font = `bold ${size}px sans-serif`;
       }
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+      mesh.userData.texture.needsUpdate = true;
+    }
+
+    function paintAlertButton(mesh, text) {
+      const canvas = mesh.userData.canvas;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#9f1239";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#fecdd3";
+      ctx.lineWidth = 8;
+      ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+      ctx.fillStyle = "#fff1f2";
+      ctx.font = "bold 42px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillText(text, canvas.width / 2, canvas.height / 2);
       mesh.userData.texture.needsUpdate = true;
     }
@@ -2644,7 +2854,8 @@
       objectsButton.visible = home;
       skyMenuButton.visible = home;
       prefsButton.visible = home;
-      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track";
+      mountButton.visible = home;
+      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount";
       const backLabel = panelMode === "search" ? "LISTE" : "ZURÜCK";
       if (backButton.userData.face !== backLabel) {
         backButton.userData.face = backLabel;
@@ -2671,6 +2882,491 @@
       for (const button of skyControls) button.visible = himmel;
       if (prefs) refreshPrefLabels();
       if (himmel) paintHimmelButtons();
+      const confirming = panelMode === "goto";
+      const pairing = panelMode === "pair";
+      gotoButton.visible = panelMode === "detail" && itemHasEquatorial(selectedItem);
+      gotoCancelButton.visible = confirming || pairing;
+      gotoConfirmButton.visible = confirming;
+      pairButton.visible = (panelMode === "mount" || confirming) && !mountPaired;
+      for (const digit of pairDigits) digit.visible = pairing;
+      pairClearButton.visible = pairing;
+      pairSubmitButton.visible = pairing;
+      const axisLabel = axisMode ? "ACHSE AUS" : "MANUELLE ACHSE";
+      if (axisButton.userData.face !== axisLabel) {
+        axisButton.userData.face = axisLabel;
+        paintTextButton(axisButton, axisLabel);
+      }
+      axisButton.visible = panelMode === "mount";
+      const speedRow = panelMode === "mount" && mountPaired;
+      axisRateMinus.visible = speedRow;
+      axisRateLabel.visible = speedRow;
+      axisRatePlus.visible = speedRow;
+      if (speedRow) paintAxisRate();
+      if (panelMode === "mount") {
+        stopButton.position.x = -0.16;
+        stopButton.position.y = 0.155;
+        axisStopButton.position.x = 0.16;
+        axisStopButton.position.y = 0.155;
+      } else {
+        stopButton.position.x = 0;
+        stopButton.position.y = 0.148;
+      }
+      const axisFault = mountView.motionDetail === "Rate 0 nicht gesendet";
+      const axisHalt = axisMode || mountView.motionLabel === "Achsbewegung aktiv" || axisFault;
+      const halt = mountView.motionLabel === "GoTo aktiv" || (stopNeeded() && !axisHalt);
+      stopButton.visible = halt;
+      if (halt) paintAlertButton(stopButton, "STOP");
+      axisStopButton.visible = axisHalt;
+      if (axisStopButton.visible) paintAlertButton(axisStopButton, "STOP ACHSE");
+      if (confirming || pairing) {
+        goalButton.visible = false;
+        trackButton.visible = false;
+        backButton.visible = false;
+      }
+    }
+
+    function stopNeeded() {
+      return mountView.motion === "faehrt" || mountView.motion === "stoppt" || mountView.motion === "unklar" || mountView.slewing;
+    }
+
+    function questTargetOf(item) {
+      return catalogQueryOf(item);
+    }
+
+    async function refreshMountSession() {
+      try {
+        const response = await fetch("/mount-session", { cache: "no-store", credentials: "same-origin" });
+        const data = await response.json();
+        mountPaired = Boolean(response.ok && data && data.paired && mountCsrf);
+      } catch (_err) {
+        mountPaired = false;
+      }
+    }
+
+    function showQuestGoto() {
+      if (!selectedItem || !itemHasEquatorial(selectedItem)) return;
+      questGotoNote = "";
+      panelMode = "goto";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function cancelQuestGoto() {
+      questGotoNote = "";
+      if (selectedItem) showObjectDetail(selectedItem);
+      else showHome();
+    }
+
+    async function confirmQuestGoto() {
+      const item = selectedItem;
+      const target = questTargetOf(item);
+      if (!item || !target) return;
+      if (!mountCsrf) {
+        questGotoNote = "Zuerst mit dem Code am MeLE koppeln.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      questGotoNote = "GoTo wird gesendet …";
+      dashboardKey = "";
+      paintDashboard();
+      adoptNavTarget(item, item.fromSearch ? "resolve" : "overlay");
+      mountView.targetName = item.name || item.id || target;
+      try {
+        const response = await fetch(`/nina/mount/slew?target=${encodeURIComponent(target)}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-Astro-Csrf": mountCsrf },
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          questGotoNote = data.error || "GoTo abgelehnt";
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        questGotoNote = "GoTo gesendet. Stillstand erst nach der Montierungsmeldung.";
+        showMount();
+      } catch (err) {
+        questGotoNote = err && err.message ? err.message : "GoTo nicht gesendet";
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    function axisRateText() {
+      const value = AXIS_RATES[axisRateIndex];
+      const text = Number(value).toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+      return `${text.replace(".", ",")} °/s`;
+    }
+
+    function paintAxisRate() {
+      paintTextButton(axisRateLabel, axisRateText());
+    }
+
+    function stepAxisRate(dir) {
+      const next = axisRateIndex + dir;
+      if (next < 0 || next >= AXIS_RATES.length) return;
+      axisRateIndex = next;
+      paintAxisRate();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function questStickDirection(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
+      const ax = Math.abs(x);
+      const ay = Math.abs(y);
+      if (ax < AXIS_DEADZONE && ay < AXIS_DEADZONE) return "";
+      if (ax >= ay) return x > 0 ? "east" : "west";
+      return y > 0 ? "north" : "south";
+    }
+
+    function axisDirectionLabel(direction) {
+      if (direction === "east") return "RA Ost";
+      if (direction === "west") return "RA West";
+      if (direction === "north") return "Dec Nord";
+      if (direction === "south") return "Dec Süd";
+      return "Mitte";
+    }
+
+    function questThumbstick(pad) {
+      if (!pad || pad.mapping !== "xr-standard" || !pad.axes) return null;
+      if (pad.axes.length >= 4) {
+        const x = Number(pad.axes[2]);
+        const y = -Number(pad.axes[3]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return { x: x, y: y };
+      }
+      if (pad.axes.length >= 2) {
+        const x = Number(pad.axes[0]);
+        const y = Number(pad.axes[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return { x: x, y: y };
+      }
+      return null;
+    }
+
+    function rightAxisGamepad(session) {
+      const sources = session && session.inputSources ? Array.from(session.inputSources) : [];
+      for (const source of sources) {
+        if (!source || source.handedness !== "right") continue;
+        const pad = source.gamepad;
+        if (!questThumbstick(pad)) continue;
+        const profiles = source.profiles || [];
+        if (profiles.length && !profiles.some((name) => AXIS_PROFILES.indexOf(name) >= 0)) continue;
+        return pad;
+      }
+      return null;
+    }
+
+    function leaveAxisMode(note) {
+      if (!axisMode) return;
+      const token = axisToken;
+      axisMode = false;
+      axisArmed = false;
+      axisDirection = "";
+      axisStatus = note ? "FEHLER" : "AUS";
+      axisNote = note || "Aus";
+      if (token) requestAxisStop(token, false);
+      dashboardKey = "";
+    }
+
+    function enableAxisMode() {
+      if (!mountCsrf || !mountPaired) {
+        axisStatus = "GESPERRT";
+        axisNote = "Zuerst koppeln.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (mountView.motionLabel === "GoTo aktiv" || mountView.slewing) {
+        axisStatus = "GESPERRT";
+        axisNote = "GoTo läuft.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (mountView.motion === "unklar" || mountView.motion === "faehrt" || mountView.motion === "stoppt") {
+        axisStatus = "GESPERRT";
+        axisNote = mountView.motionDetail || mountView.status || "Zustand nicht frei.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      axisMode = true;
+      axisArmed = false;
+      axisDirection = "";
+      axisStatus = "BEREIT";
+      axisNote = "Joystick zuerst in die Mitte.";
+      dashboardKey = "";
+      syncPanelButtons();
+      paintDashboard();
+    }
+
+    async function requestAxisStop(token, force) {
+      if (!token) return;
+      if (!force && token === axisStopToken) return;
+      axisStopToken = token;
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+        const response = await fetch("/nina/mount/move/stop", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify({ token: token }),
+        });
+        const data = await response.json();
+        if (token !== axisToken && axisToken) return;
+        if (data && data.message === "älterer Achsen-Stopp verworfen") return;
+        if (data && data.message === "GoTo läuft, Achsen-Stopp nicht gesendet") {
+          axisStatus = "GESPERRT";
+          axisNote = data.message;
+          dashboardKey = "";
+          return;
+        }
+        if (!response.ok || !data.rate0_sent) {
+          axisStatus = "FEHLER";
+          axisNote = (data && (data.error || data.message)) || "STOP ACHSE nicht bestätigt";
+          dashboardKey = "";
+          return;
+        }
+        if (axisMode) axisStatus = "STOPPT";
+        axisNote = "Rate 0 gesendet. Stillstand ist nicht bestätigt.";
+      } catch (_err) {
+        if (token !== axisToken && axisToken) return;
+        axisStatus = "FEHLER";
+        axisNote = "STOP ACHSE nicht gesendet";
+      }
+      dashboardKey = "";
+    }
+
+    async function sendAxisPulse(token, direction) {
+      if (axisBusy) return;
+      if (token !== axisToken || !axisMode || !axisArmed) return;
+      axisBusy = true;
+      axisPulseAt = performance.now();
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+        const response = await fetch("/nina/mount/move", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify({ direction: direction, rate: AXIS_RATES[axisRateIndex], token: token }),
+        });
+        const data = await response.json();
+        if (token !== axisToken || !axisMode) return;
+        if (!response.ok || !data.ok) {
+          const error = (data && data.error) || "Achse abgelehnt";
+          axisArmed = false;
+          axisDirection = "";
+          if (error.indexOf("PHD2") >= 0 || error.indexOf("GoTo") >= 0) {
+            axisStatus = "GESPERRT";
+          } else if (error.indexOf("überholt") >= 0 || error.indexOf("Stopp") >= 0) {
+            axisStatus = "STOPPT";
+          } else {
+            axisStatus = "FEHLER";
+            requestAxisStop(token, true);
+          }
+          axisNote = error;
+          return;
+        }
+        if (axisDirection === direction && axisArmed) {
+          axisStatus = "BEWEGT";
+          axisNote = axisDirectionLabel(direction);
+        }
+      } catch (_err) {
+        if (token !== axisToken || !axisMode) return;
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = "FEHLER";
+        axisNote = "Verbindung unterbrochen";
+        requestAxisStop(token, true);
+      } finally {
+        axisBusy = false;
+        dashboardKey = "";
+      }
+    }
+
+    function noteAxisPanel() {
+      const key = `${axisStatus}|${axisNote}|${axisReadout}`;
+      if (key === axisPanelKey) return;
+      axisPanelKey = key;
+      dashboardKey = "";
+    }
+
+    function pollAxisStick() {
+      const session = renderer.xr.getSession();
+      const pad = rightAxisGamepad(session);
+      if (!pad) {
+        axisReadout = "Rechter Joystick nicht erkannt";
+        if (axisMode) leaveAxisMode("Rechter Controller weg. Achse gestoppt.");
+        noteAxisPanel();
+        return;
+      }
+      const stick = questThumbstick(pad);
+      const direction = stick ? questStickDirection(stick.x, stick.y) : "";
+      const sx = stick ? stick.x.toFixed(2).replace(".", ",") : "—";
+      const sy = stick ? stick.y.toFixed(2).replace(".", ",") : "—";
+      axisReadout = `Joystick ${axisDirectionLabel(direction)}  ${sx} / ${sy}`;
+      if (!axisMode) {
+        noteAxisPanel();
+        return;
+      }
+      if (!axisArmed) {
+        if (mountView.motion === "stoppt") {
+          axisStatus = "STOPPT";
+          axisNote = "Warten auf Bereit.";
+          noteAxisPanel();
+          return;
+        }
+        if (mountView.motion === "unklar" || mountView.slewing || mountView.motionLabel === "GoTo aktiv") {
+          axisStatus = "GESPERRT";
+          axisNote = mountView.motionDetail || mountView.status || "Zustand nicht frei.";
+          noteAxisPanel();
+          return;
+        }
+        if (!direction && mountView.motion === "bereit") {
+          axisArmed = true;
+          axisToken += 1;
+          axisStatus = "BEREIT";
+          axisNote = "Mitte erkannt. Auslenken bewegt langsam.";
+          noteAxisPanel();
+          return;
+        }
+        axisStatus = "BEREIT";
+        axisNote = "Joystick zuerst in die Mitte.";
+        noteAxisPanel();
+        return;
+      }
+      if (mountView.motionDetail === "Rate 0 nicht gesendet") {
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = "FEHLER";
+        axisNote = "Rate 0 nicht gesendet";
+        noteAxisPanel();
+        return;
+      }
+      if (mountView.motion === "faehrt" && mountView.motionLabel !== "Achsbewegung aktiv" && mountView.motionLabel !== "GoTo aktiv") {
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = "GESPERRT";
+        axisNote = "Andere Bewegung aktiv.";
+        noteAxisPanel();
+        return;
+      }
+      if (mountView.motionLabel === "GoTo aktiv") {
+        const token = axisToken;
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = "GESPERRT";
+        axisNote = "GoTo läuft.";
+        requestAxisStop(token, true);
+        noteAxisPanel();
+        return;
+      }
+      if (!direction) {
+        if (axisDirection) {
+          const token = axisToken;
+          axisDirection = "";
+          axisArmed = false;
+          axisStatus = "STOPPT";
+          axisNote = "Joystick Mitte. STOP ACHSE.";
+          requestAxisStop(token, false);
+        }
+        noteAxisPanel();
+        return;
+      }
+      if (mountView.motion === "stoppt" || mountView.motion === "unklar") {
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = mountView.motion === "unklar" ? "FEHLER" : "STOPPT";
+        axisNote = mountView.motion === "unklar" ? (mountView.motionDetail || "Zustand unklar.") : "Warten auf Bereit.";
+        noteAxisPanel();
+        return;
+      }
+      const now = performance.now();
+      if (direction === axisDirection && now - axisPulseAt < AXIS_PULSE_MS) {
+        noteAxisPanel();
+        return;
+      }
+      axisDirection = direction;
+      sendAxisPulse(axisToken, direction);
+      noteAxisPanel();
+    }
+
+    async function requestMountStop() {
+      questGotoNote = "STOP wird gesendet …";
+      try {
+        const headers = {};
+        if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+        const response = await fetch("/nina/mount/slew/stop", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+        });
+        const data = await response.json();
+        const label = data.motion && data.motion.label ? data.motion.label : "";
+        if (!response.ok || !data.ok) {
+          questGotoNote = `${data.error || "STOP nicht bestätigt"}${label ? ` · ${label}` : ""}`;
+        } else {
+          questGotoNote = `STOP gesendet. Stillstand ist nicht bestätigt.${label ? ` · ${label}` : ""}`;
+        }
+      } catch (err) {
+        questGotoNote = err && err.message ? err.message : "STOP nicht gesendet";
+      }
+      if (!dashboard.visible) placeDashboard();
+      if (panelMode === "home" || panelMode === "detail" || panelMode === "goto") showMount();
+      else {
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    function showPair() {
+      if (axisMode) leaveAxisMode("");
+      pairEntry = "";
+      questGotoNote = "";
+      panelMode = "pair";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    async function submitPair() {
+      if (pairEntry.length !== 6) {
+        questGotoNote = "Sechs Ziffern vom MeLE-Bildschirm.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      try {
+        const response = await fetch("/mount-session/pair", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: pairEntry }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok || !data.csrf) {
+          questGotoNote = data.error || "Kopplung abgelehnt";
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        mountCsrf = data.csrf;
+        mountPaired = true;
+        pairEntry = "";
+        questGotoNote = "Gekoppelt.";
+        showMount();
+      } catch (err) {
+        questGotoNote = err && err.message ? err.message : "Kopplung nicht gesendet";
+        dashboardKey = "";
+        paintDashboard();
+      }
     }
 
     function skyClockLabel() {
@@ -3082,6 +3778,48 @@
       turn.renderOrder = 7;
       navTurn.add(turn);
       navReachedDrawn = false;
+      fillMountTelrad();
+    }
+
+    function fillMountTelrad() {
+      const rings = mountTelrad.children.slice();
+      for (const child of rings) {
+        mountTelrad.remove(child);
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+      for (const halfDeg of vrTune.telradHalfDeg) {
+        const ring = makeRing(
+          vrTune.shellRadius * Math.tan(THREE.MathUtils.degToRad(halfDeg)),
+          mountColor,
+        );
+        ring.renderOrder = 4;
+        mountTelrad.add(ring);
+      }
+    }
+
+    function hideMountTelrad() {
+      mountTelrad.visible = false;
+      mountLabel.visible = false;
+    }
+
+    function placeMountTelrad() {
+      if (!mountView.valid || !Number.isFinite(mountView.az) || !Number.isFinite(mountView.alt)) {
+        hideMountTelrad();
+        return;
+      }
+      mountPoint.copy(azAltToVec(mountView.az, mountView.alt, vrTune.shellRadius));
+      sphere.localToWorld(mountPoint);
+      if (mountPoint.lengthSq() < 1) {
+        hideMountTelrad();
+        return;
+      }
+      mountTelrad.position.copy(mountPoint);
+      mountTelrad.lookAt(0, 0, 0);
+      mountTelrad.visible = true;
+      tangentUp(mountPoint, navLocalY);
+      mountLabel.position.copy(mountPoint).addScaledVector(navLocalY, navOuterReach(8));
+      mountLabel.visible = true;
     }
 
     function paintGreen(reached) {
@@ -3612,6 +4350,10 @@
         showPrefs();
         return;
       }
+      if (sameHand && hit.userData.action === "mount") {
+        showMount();
+        return;
+      }
       if (sameHand && hit.userData.action === "prefs-page") {
         prefsPage = hit.userData.page;
         syncPanelButtons();
@@ -3664,6 +4406,62 @@
       }
       if (sameHand && hit.userData.action === "sky-ngc-min") {
         stepNgcMin(hit.userData.dir || 0);
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-goto") {
+        showQuestGoto();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-goto-cancel") {
+        cancelQuestGoto();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-goto-confirm") {
+        confirmQuestGoto();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-stop") {
+        requestMountStop();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-axis-rate") {
+        stepAxisRate(hit.userData.dir || 0);
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-axis-hold") return;
+      if (sameHand && hit.userData.action === "quest-axis") {
+        if (axisMode) leaveAxisMode("");
+        else enableAxisMode();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-axis-stop") {
+        axisArmed = false;
+        axisDirection = "";
+        axisStatus = "STOPPT";
+        axisNote = "STOP ACHSE wird gesendet.";
+        requestAxisStop(axisToken, true);
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (sameHand && hit.userData.action === "quest-pair") {
+        showPair();
+        return;
+      }
+      if (sameHand && hit.userData.action === "pair-digit") {
+        if (pairEntry.length < 6) pairEntry += hit.userData.digit || "";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (sameHand && hit.userData.action === "pair-clear") {
+        pairEntry = "";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (sameHand && hit.userData.action === "pair-submit") {
+        submitPair();
         return;
       }
       if (sameHand && hit.userData.action === "day-track") {
@@ -3721,9 +4519,115 @@
       refreshDashboard();
     }
 
+    function mountClock(date) {
+      if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+      return date.toLocaleTimeString("de-AT", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    }
+
+    function fmtMountDeg(value, signed) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      const text = Math.abs(number).toFixed(2).replace(".", ",");
+      if (!signed) return `${number.toFixed(2).replace(".", ",")}°`;
+      return `${number >= 0 ? "+" : "−"}${text}°`;
+    }
+
+    function syncMountAngleLine() {
+      const lines = mountView.lines.filter((line) => !String(line).startsWith("Abstand Ziel"));
+      const angle = mountTargetAngle();
+      if (Number.isFinite(angle)) lines.push(`Abstand Ziel–Montierung: ${angle.toFixed(1).replace(".", ",")}°`);
+      mountView.lines = lines;
+    }
+
+    function mountTargetAngle() {
+      if (!mountView.valid || !Number.isFinite(mountView.az) || !Number.isFinite(mountView.alt)) return null;
+      if (!navTarget.active || navTarget.pending || navTarget.stale) return null;
+      if (!Number.isFinite(navTarget.az) || !Number.isFinite(navTarget.alt)) return null;
+      const fromMount = azAltToVec(mountView.az, mountView.alt, 1).normalize();
+      const fromTarget = azAltToVec(navTarget.az, navTarget.alt, 1).normalize();
+      return angleDeg(fromMount, fromTarget);
+    }
+
+    function paintMountLines(mount) {
+      const lines = [mountView.status];
+      if (!mountView.valid || !mount) {
+        lines.push(mountView.seenAt ? `Zuletzt ${mountClock(mountView.seenAt)}` : "Noch keine Position");
+        mountView.lines = lines;
+        return;
+      }
+      const ra = mount.right_ascension_string || (Number.isFinite(Number(mount.right_ascension_hours))
+        ? `${Number(mount.right_ascension_hours).toFixed(3).replace(".", ",")} h`
+        : "—");
+      const dec = mount.declination_string || fmtMountDeg(mount.declination_deg, true);
+      lines.push(`RA ${ra}`);
+      lines.push(`Dec ${dec}`);
+      lines.push(`Az ${fmtMountDeg(mount.azimuth_deg, false)}    Höhe ${fmtMountDeg(mount.altitude_deg, true)}`);
+      const tracking = mount.tracking_enabled ? (mount.tracking_mode || "an") : "aus";
+      lines.push(`Tracking ${tracking}    Slew ${mount.slewing ? "ja" : "nein"}`);
+      if (mountView.targetName && (mountView.motion === "faehrt" || mountView.motion === "stoppt")) {
+        lines.push(`Ziel ${mountView.targetName}`);
+      }
+      if (questGotoNote) lines.push(questGotoNote);
+      lines.push(`${mount.at_park ? "geparkt" : "nicht geparkt"}    Pier ${mount.side_of_pier || "—"}`);
+      lines.push(`Stand ${mountClock(mountView.seenAt)}`);
+      const angle = mountTargetAngle();
+      if (Number.isFinite(angle)) {
+        lines.push(`Abstand Ziel–Montierung: ${angle.toFixed(1).replace(".", ",")}°`);
+      }
+      mountView.lines = lines;
+    }
+
+    function applyMountStatus(data) {
+      const mount = data && data.mount;
+      const az = mount ? Number(mount.azimuth_deg) : NaN;
+      const alt = mount ? Number(mount.altitude_deg) : NaN;
+      const valid = Boolean(data && data.api_online && mount && mount.connected && Number.isFinite(az) && Number.isFinite(alt));
+      const motion = data && data.motion ? data.motion : null;
+      mountView.motion = motion && motion.state ? motion.state : "";
+      mountView.motionLabel = motion && motion.label ? motion.label : "";
+      mountView.motionDetail = motion && motion.detail ? motion.detail : "";
+      mountView.slewing = Boolean(mount && mount.slewing);
+      if (mountView.motion === "bereit") mountView.targetName = "";
+      if (!data || data.api_online === false) mountView.status = "NINA nicht erreichbar";
+      else if (!mount || !mount.connected) mountView.status = "Montierung nicht verbunden";
+      else if (mountView.motion === "faehrt") mountView.status = "Montierung fährt";
+      else if (mountView.motion === "stoppt") mountView.status = "STOP läuft";
+      else if (mountView.motion === "unklar") mountView.status = (motion && motion.label) || "Zustand unklar";
+      else if (mountView.motion === "bereit") mountView.status = "Bereit";
+      else if (!Number.isFinite(az) || !Number.isFinite(alt)) mountView.status = "Azimut oder Höhe fehlt";
+      else mountView.status = "verbunden";
+      mountView.valid = valid;
+      mountView.az = valid ? az : null;
+      mountView.alt = valid ? alt : null;
+      if (valid) mountView.seenAt = new Date();
+      if (!valid) hideMountTelrad();
+      paintMountLines(valid ? mount : null);
+      syncPanelButtons();
+      if (panelMode === "mount" || panelMode === "goto") dashboardKey = "";
+    }
+
+    async function pollMount() {
+      if (mountBusy) return;
+      mountBusy = true;
+      const serial = ++mountSerial;
+      try {
+        const response = await fetch("/nina/mount", { cache: "no-store" });
+        const data = await response.json();
+        if (serial !== mountSerial) return;
+        applyMountStatus(response.ok ? data : { api_online: false, error: "Status nicht lesbar", mount: null });
+      } catch (_err) {
+        if (serial !== mountSerial) return;
+        applyMountStatus({ api_online: false, error: "NINA nicht erreichbar", mount: null });
+      } finally {
+        if (serial === mountSerial) mountBusy = false;
+      }
+    }
+
     applyLook();
     refreshEnterButton();
     useAppPanorama().then((ok) => { if (ok) loadTexture(); });
+    pollMount();
+    setInterval(pollMount, 1000);
     renderer.setAnimationLoop((_time, frame) => {
       if (!renderer.xr.isPresenting) {
         applyLook();
@@ -3735,7 +4639,13 @@
         updatePointers();
         moveDraggedDashboard();
       }
+      if (axisMode && (!renderer.xr.isPresenting || panelMode !== "mount")) {
+        leaveAxisMode(renderer.xr.isPresenting ? "" : "XR-Sitzung beendet");
+      }
+      if (renderer.xr.isPresenting && panelMode === "mount") pollAxisStick();
       if (skyView.seeing) applyMessierSeeing(performance.now());
+      placeMountTelrad();
+      syncMountAngleLine();
       refreshDashboard();
       renderer.render(scene, camera);
     });

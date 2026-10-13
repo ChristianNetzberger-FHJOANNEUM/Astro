@@ -39,7 +39,7 @@ Die Plattform soll später Panoramen, eine Galerie und Club-Vorführungen tragen
 - Veröffentlichte Panoramen behalten die bestehende Nordkonvention, damit nicht eine zweite Orientierung entsteht.
 - Vorschauen und exportierte JPEG/PNG/WebP, keine RAW- oder FITS-Dateien als Web-Textur.
 - Die Quest-Galerie (XR-2 bis XR-4) und die öffentliche Galerie dürfen dieselben veröffentlichten Bilder meinen. Sie teilen sich nicht den Programmcode der MeLE-Steuerung.
-- Raumschiff und Planetarium für Clubs bleiben die experimentellen Stufen XR-9 und XR-10 beziehungsweise eine spätere Lesefassung davon. Sie sind nicht Teil der ersten Website.
+- Raumschiff und Planetarium für Clubs bleiben die experimentellen Stufen XR-9 und XR-20 beziehungsweise eine spätere Lesefassung davon. Sie sind nicht Teil der ersten Website. XR-10 ist die Montierungsintegration und gehört nicht dazu.
 
 Lupinum kann DNS und, falls der Vertrag Webspace hergibt, die öffentliche Seite hosten. Ob Webspace für eine weitere Site im bestehenden Vertrag liegt, ist `OFFEN`.
 

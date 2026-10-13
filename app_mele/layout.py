@@ -231,6 +231,14 @@ def build_ui(
                     "Horizont-/Standort-Werkzeuge rechts ein- oder ausblenden (Bild bleibt sichtbar)"
                 )
                 state.refs["tools_toggle"] = tools_toggle
+                ui.label("").props("id=mount-pair-code").classes("text-caption text-weight-medium")
+                ui.timer(1.0, lambda: ui.run_javascript(
+                    "if(!window.__astroPairPoll){const tick=async()=>{const el=document.getElementById('mount-pair-code');"
+                    "if(!el)return;try{const r=await fetch('/mount-session/code',{cache:'no-store'});"
+                    "if(!r.ok){el.textContent='';return;}const d=await r.json();"
+                    "el.textContent=d.code?('Quest '+d.code):'';}catch(e){el.textContent='';}};"
+                    "window.__astroPairPoll=setInterval(tick,15000);tick();}"
+                ), once=True)
                 ui.button("360-Ansicht", icon="360", on_click=on_open_pano).props("flat dense").tooltip(
                     "Neues Fenster: Klick auf Sterne, Anzeige-Prefs, Mausrad zoomt. Lokal, kein Internet."
                 )

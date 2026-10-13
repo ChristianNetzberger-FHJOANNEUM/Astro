@@ -64,5 +64,5 @@ Geprüft: M13 bei MESSIER AUS, NGC 7009 bei NGC AUS, ein IC-Objekt (vorgegeben w
 ## Verwandte Seiten
 
 - [Astro-VR Architektur v1.4](astro-vr-architektur-v1.4.md)
-- [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md) — XR-9a Tagesbahn, Quest-Abnahme offen
+- [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md) — XR-9a Tagesbahn, auf der Quest bestätigt
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)

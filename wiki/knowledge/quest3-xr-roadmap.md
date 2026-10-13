@@ -5,7 +5,7 @@
 
 Verbindung und der erste Panorama-Viewer: [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md) (ADR-VR-001 bis ADR-VR-003). Diese Seite wiederholt das nicht. Sie hält nur fest, welche späteren Wege offen bleiben, ohne die `mele_app` dafür umzubauen.
 
-Die Stufen heißen hier **XR-1 bis XR-10**. Die Buchstaben Q1–Q3 in der Feldnetz-Spec bedeuten etwas anderes (Browser bereits bestätigt, Panorama als erste VR-Version, Steuerung erst danach). Dieselbe Nummer nicht für zwei Dinge verwenden.
+Die gegenwärtigen Stufen heißen **XR-1 bis XR-10**. **XR-20** ist die ferne Simulation und gehört nicht in diese Reihe. Die Buchstaben Q1–Q3 in der Feldnetz-Spec bedeuten etwas anderes (Browser bereits bestätigt, Panorama als erste VR-Version, Steuerung erst danach). Dieselbe Nummer nicht für zwei Dinge verwenden.
 
 ## Zwei Richtungen
 
@@ -47,7 +47,8 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 | XR-7 | Schwebende Statuspanels: Wetter, Montierung, Guiding, Vorschau. Nur lesen | mittel | `GEPLANT` |
 | XR-8 | Zuerst Konzept: Inventar der Desktop-Werkzeuge und Panelgruppen. Keine Gerätebefehle vor der Abstimmung | später | `KONZEPT` |
 | XR-9 | Eigenes Raumschiff oder eine Brücke | experimentell | `EXPERIMENTELL` |
-| XR-10 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
+| XR-10 | Montierungsintegration über NINA. Zuerst nur lesen, Steuerung erst nach eigener Sperre | jetzt | XR-10a und XR-10b abgenommen. XR-10c B2 implementiert, nicht abgenommen. Parken später |
+| XR-20 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
 
 XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
 
@@ -55,9 +56,9 @@ XR-6a, der dünne erste Schnitt von XR-6, ist abgenommen: Sterne bis mag 5,5 im 
 
 XR-3b, Telrad und Himmelsauswahl, ist auf der Quest abgenommen: [Astro-VR Architektur v0.8](astro-vr-architektur-v0.8.md). XR-3c, die Einstellungen im Dashboard, ist auf der Quest abgenommen: [Astro-VR Architektur v0.9](astro-vr-architektur-v0.9.md).
 
-XR-8a liegt in [Astro-VR Desktop-Inventar v0.1](astro-vr-desktop-inventar-v0.1.md). XR-8b ist freigegeben: [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md). XR-8c, die Übersicht mit OBJEKTE, HIMMEL und EINSTELLUNGEN, ist auf der Quest abgenommen: [Astro-VR Architektur v1.0](astro-vr-architektur-v1.0.md). XR-8d, Sterne, Sternbilder, Messier, Grenzhelligkeit und die Zeit im Himmel-Panel, ist auf der Quest bestätigt: [Astro-VR Architektur v1.1](astro-vr-architektur-v1.1.md). XR-8e, die persönliche NGC-Auswahl, ist auf der Quest bestätigt: [Astro-VR Architektur v1.2](astro-vr-architektur-v1.2.md). XR-8f, grüner Ziel-Telrad, Richtungspfeil und Winkelabstand, ist auf der Quest bestätigt: [Astro-VR Architektur v1.3](astro-vr-architektur-v1.3.md). XR-8g.1, die Systemtastatur über `dom-overlay`, ist auf der Quest bestätigt: [Astro-VR Architektur v1.4](astro-vr-architektur-v1.4.md). XR-8g.2, die Katalogsuche im OBJEKTE-Panel, ist auf der Quest bestätigt: [Astro-VR Architektur v1.5](astro-vr-architektur-v1.5.md). XR-9a, die Tagesbahn eines Objekts, ist implementiert, die Quest-Abnahme ist offen: [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md). Die Quest bleibt der Viewer. Guiding, SynScan und die Session-Verwaltung bleiben in der App. Gerätebefehle bleiben aus. GoTo bleibt zweistufig. Die Mehrclient-Sperre fehlt in `POST /nina/mount/slew`.
+XR-8a liegt in [Astro-VR Desktop-Inventar v0.1](astro-vr-desktop-inventar-v0.1.md). XR-8b ist freigegeben: [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md). XR-8c, die Übersicht mit OBJEKTE, HIMMEL und EINSTELLUNGEN, ist auf der Quest abgenommen: [Astro-VR Architektur v1.0](astro-vr-architektur-v1.0.md). XR-8d, Sterne, Sternbilder, Messier, Grenzhelligkeit und die Zeit im Himmel-Panel, ist auf der Quest bestätigt: [Astro-VR Architektur v1.1](astro-vr-architektur-v1.1.md). XR-8e, die persönliche NGC-Auswahl, ist auf der Quest bestätigt: [Astro-VR Architektur v1.2](astro-vr-architektur-v1.2.md). XR-8f, grüner Ziel-Telrad, Richtungspfeil und Winkelabstand, ist auf der Quest bestätigt: [Astro-VR Architektur v1.3](astro-vr-architektur-v1.3.md). XR-8g.1, die Systemtastatur über `dom-overlay`, ist auf der Quest bestätigt: [Astro-VR Architektur v1.4](astro-vr-architektur-v1.4.md). XR-8g.2, die Katalogsuche im OBJEKTE-Panel, ist auf der Quest bestätigt: [Astro-VR Architektur v1.5](astro-vr-architektur-v1.5.md). XR-9a, die Tagesbahn eines Objekts, ist auf der Quest bestätigt: [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md). XR-10 ist die Montierungsintegration. XR-10a, die lesende Anzeige mit gelbem Telrad, ist am 2026-10-12 auf der Quest abgenommen: [Astro-VR Architektur v1.7](astro-vr-architektur-v1.7.md). XR-10b ist am 2026-10-13 abgenommen. Der Quest-Feldtest vom 2026-10-12 (Kopplung, mehrere GoTo, STOP) und die Polaris-Auflösung als HIP 11767 am 2026-10-13 tragen die Abnahme: [Astro-VR Architektur v1.9](astro-vr-architektur-v1.9.md). Der Kopplungscode bleibt fest. Parken ist später und ist nicht SynScan-Hibernate. GoTo und STOP auf Port 8443 brauchen die Kopplung. XR-10c Stufe B1 hat am 2026-10-13 am Desktop gehalten: die Achse stoppte mehrmals innerhalb weniger Sekunden, ohne Guiding bei Tageslicht: [Astro-VR Architektur v1.10](astro-vr-architektur-v1.10.md). Stufe B2 ist implementiert und nicht abgenommen: [Astro-VR Architektur v1.11](astro-vr-architektur-v1.11.md). GoTo bleibt zweistufig. Eine gehaltene Achse stoppt bei Loslassen und bei ausbleibenden Impulsen. Ein laufendes GoTo läuft nach dem Verlust der Quest weiter.
 
-XR-9 hat zwei denkbare Modi, beide außerhalb der App: Simulation ohne Teleskop, oder eine Brücke, die MeLE-Daten nur anzeigt. Die Sonnensystemsimulation ist nicht Teil des Cockpits, sondern XR-10.
+XR-9 hat zwei denkbare Modi, beide außerhalb der App: Simulation ohne Teleskop, oder eine Brücke, die MeLE-Daten nur anzeigt. Die Sonnensystemsimulation ist nicht Teil des Cockpits, sondern XR-20.
 
 ## Werkzeuge
 
@@ -69,7 +70,7 @@ Native Engines nur für Richtung C, als eigenes Projekt:
 |---|---|---|
 | Three.js, WebXR | XR-1 bis XR-8 | kostenlos (MIT / offener Standard) |
 | Meta Immersive Web SDK | später prüfen | SDK kostenlos, API und Lizenz vor dem Einbau neu lesen |
-| Unity Personal + Meta XR SDK | Kandidat für XR-9 | Personal innerhalb der dann gültigen Grenzen; vor Veröffentlichung neu prüfen |
+| Unity Personal + Meta XR SDK | Kandidat für XR-9 und XR-20 | Personal innerhalb der dann gültigen Grenzen; vor Veröffentlichung neu prüfen |
 | Godot + OpenXR | Alternative zu Unity | kostenlos (MIT); Quest-Plugins vorher prüfen |
 | Unreal | nicht der Einstieg | kostenloser Start, kommerzielle Grenzen lizenzabhängig; schwere Assets für die Quest-GPU |
 | Blender | Modelle, Export glTF/GLB | kostenlos; keine VR-Laufzeit |
@@ -95,7 +96,7 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 - Ob Session-Previews für XR-2 schon die richtige Größe und Deckung haben.
 - WCS-Quelle, sobald XR-5 konkret wird. Im Repo gibt es sie noch nicht.
 - Meta Immersive Web SDK gegen Three r170, sobald XR-3 mehr als ein eigener Raycaster wäre.
-- Unity- oder Godot-Lizenz und Quest-Entwicklermodus, sobald XR-9 ein eigenes Projekt wird.
+- Unity- oder Godot-Lizenz und Quest-Entwicklermodus, sobald XR-9 oder XR-20 ein eigenes Projekt wird.
 
 ## Verwandte Seiten
 
@@ -115,7 +116,8 @@ Gekaufte Modelle, Plugins, Cloud und eine Store-Veröffentlichung können Geld k
 - [Astro-VR Architektur v1.3](astro-vr-architektur-v1.3.md) — XR-8f Zielführung, auf der Quest bestätigt
 - [Astro-VR Architektur v1.4](astro-vr-architektur-v1.4.md) — XR-8g.1 Systemtastatur, auf der Quest bestätigt
 - [Astro-VR Architektur v1.5](astro-vr-architektur-v1.5.md) — XR-8g.2 Katalogsuche, auf der Quest bestätigt
-- [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md) — XR-9a Tagesbahn, Quest-Abnahme offen
+- [Astro-VR Architektur v1.6](astro-vr-architektur-v1.6.md) — XR-9a Tagesbahn, auf der Quest bestätigt
+- [Astro-VR Architektur v1.7](astro-vr-architektur-v1.7.md) — XR-10a auf der Quest abgenommen
 - [Astro-VR Panelkonzept v0.1](astro-vr-panelkonzept-v0.1.md) — XR-8b, für XR-8c freigegeben
 - [MeLE Feldnetz, Reiserouter und Quest 3](mele-feldnetz-quest-spec.md)
 - [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md)

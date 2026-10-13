@@ -1,7 +1,7 @@
 # Astro-VR Architektur v1.6 — XR-9a Tagesbahn
 
 > Quelle: abgenommene Katalogsuche in [v1.5](astro-vr-architektur-v1.5.md)
-> Stand: **Implementiert, Quest-Abnahme offen.** `app_mele/vr.html` und `GET /sky-track` auf Port 8443. Keine neue Python-Route, keine Chart-Bibliothek, kein GoTo.
+> Stand: **Auf der Quest bestätigt** am 2026-10-12. `app_mele/vr.html` und `GET /sky-track` auf Port 8443. Keine neue Python-Route, keine Chart-Bibliothek, kein GoTo. Fortschreibung: [v1.7](astro-vr-architektur-v1.7.md).
 
 XR-8g.2 bleibt. Suche, Telrade, Pfeil, Winkel, Messier, NGC, TYPEN, Unruhe, LIVE und die Tafelgröße sind unverändert. NINA, SynScan, GoTo und Aufnahme bleiben unberührt. Eine Mindesthöhe von 25° ist nicht eingebaut.
 
@@ -43,22 +43,14 @@ handle @sky_track {
 
 ## Quest-Abnahme
 
-Die Phase ist erst nach diesem Lauf abgeschlossen. Vorher die App neu starten und die Quest-Seite neu öffnen.
+Auf der Quest bestätigt am 2026-10-12.
 
-1. M13 suchen und das Detail öffnen.
-2. TAGESBAHN öffnen.
-3. Die Bahn am Himmel prüfen: Nacht türkis, unter dem Horizont blasser.
-4. Die Höhenkurve, die Zeitachse und die Höhenachse lesen.
-5. Maximale Höhe und Kulmination prüfen.
-6. Das Nachtfenster prüfen.
-7. ZURÜCK führt zum Detail, die Bahn am Himmel bleibt.
-8. ZIEL FINDEN setzt den grünen Telrad.
-9. LIVE und +1 h: die weiße Marke wandert auf der Bahn.
-10. Ein Objekt unter dem Horizont: die Bahn wird nicht über den Horizont gehoben.
-11. Katalogsuche und Telrade bleiben benutzbar.
-12. Es werden keine Gerätebefehle ausgelöst.
+Geprüft: Höhenkurve, Kulmination, Nachtfenster, Nacht türkis, Dämmerung gelb, Tag orange, blasse Fortsetzung unter dem Horizont, Stundenmarken auf der Bahn und keine Marke bei Höhe bis 0°, Bahn bleibt bei geschlossener oder verschobener Tafel und bei LIVE sowie +1 h. ZIEL FINDEN, Katalogsuche und Telrade blieben benutzbar. Es wurden keine Gerätebefehle ausgelöst.
+
+Zusätzlich zur Spec und ebenfalls bestätigt: ZIEHEN, Himmels-Schalter lokal auf der Quest mit LIVE immer beim Start an, Panorama-Helligkeit Foto von 0 bis 100, Stern als hellblaue Scheibe mit Kreuz, Doppelstern als gelbe und rote Scheibe.
 
 ## Verwandte Seiten
 
 - [Astro-VR Architektur v1.5](astro-vr-architektur-v1.5.md)
+- [Astro-VR Architektur v1.7](astro-vr-architektur-v1.7.md) — XR-10a auf der Quest abgenommen
 - [Quest 3 — XR-Roadmap](quest3-xr-roadmap.md)

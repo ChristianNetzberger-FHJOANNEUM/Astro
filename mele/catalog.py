@@ -692,6 +692,21 @@ def search_catalog(
                 if star is not None:
                     _add(_star_hit(star))
 
+        # Exakter Sternname vor Teilworten in DSO-Namen („Polaris“ ≠ „Polarissima“).
+        if len(hits) < limit and raw.strip():
+            for star in conn.execute(
+                """
+                SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                WHERE name = ? COLLATE NOCASE
+                ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END, name
+                LIMIT ?
+                """,
+                (raw.strip(), limit),
+            ):
+                _add(_star_hit(star))
+                if len(hits) >= limit:
+                    break
+
         # 2) Key-Prefix / Name
         for row in conn.execute(
             """
@@ -840,6 +855,20 @@ def resolve_catalog_object(
                 star = conn.execute(
                     "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars WHERE hip=? LIMIT 1",
                     (int(norm[3:]),),
+                ).fetchone()
+                if star is not None:
+                    hit = _star_hit(star)
+            if hit is None and raw.strip():
+                # Exakter Sternname vor der Teilwortsuche. Sonst gewinnt
+                # „Polarissima Australis“, weil „Polaris“ darin vorkommt.
+                star = conn.execute(
+                    """
+                    SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                    WHERE name = ? COLLATE NOCASE
+                    ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END, name
+                    LIMIT 1
+                    """,
+                    (raw.strip(),),
                 ).fetchone()
                 if star is not None:
                     hit = _star_hit(star)

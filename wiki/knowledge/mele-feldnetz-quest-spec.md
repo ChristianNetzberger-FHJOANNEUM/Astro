@@ -183,7 +183,7 @@ Nicht vorziehen. Reihenfolge nach dem ersten erfolgreichen Quest-Test:
 
 Sternkatalog, RA/Dec nach Azimut/Höhe und Ephemeriden bleiben die vorhandenen MeLE-Funktionen. Stellarium darf später optional Objekte und Texte liefern. Es wird nicht ins WebXR eingebettet, ist keine Laufzeitvoraussetzung und steuert die Montierung nicht.
 
-Galerie, Planetarium, Steuerzentrale und ein separates Raumschiff stehen in der [Quest-3-XR-Roadmap](quest3-xr-roadmap.md). Das ist eine Roadmap, kein Auftrag. Version 1 bleibt das Panorama. Die Roadmap-Stufen heißen XR-1 bis XR-10, damit sie nicht mit Q1 auf dieser Seite verwechselt werden.
+Galerie, Planetarium, Steuerzentrale und ein separates Raumschiff stehen in der [Quest-3-XR-Roadmap](quest3-xr-roadmap.md). Das ist eine Roadmap, kein Auftrag. Version 1 bleibt das Panorama. Die Roadmap-Stufen heißen XR-1 bis XR-10, die ferne Simulation XR-20, damit sie nicht mit Q1 auf dieser Seite verwechselt werden.
 
 Mond- und Planetenmodelle sowie eine freie Weltraumsicht sind eine eigene spätere Stufe. Ein Foto liefert die dafür nötige Oberflächenzuordnung nicht mit.
 
