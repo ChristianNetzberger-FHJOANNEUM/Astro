@@ -1695,6 +1695,7 @@
     let imagingCapturingSessionId = null;
     /** Abbruch-Flag für Multi-Frame-Capture-Lauf */
     let imagingCaptureAbort = false;
+    let imagingJobWatching = false;
     /** null | "capture" | "preview" — Sanduhr neben ▶ */
     let imagingBusyPhase = null;
     let imagingCaptureRunStartedAt = null;
@@ -2179,7 +2180,9 @@
       if (capturing) {
         capBtn.title = busyTip || "Capture stoppen";
         capBtn.textContent = "⏹";
-        capBtn.addEventListener("click", () => { imagingCaptureAbort = true; });
+        capBtn.addEventListener("click", () => {
+          fetch("/astro/capture/stop", { method: "POST" });
+        });
       } else {
         capBtn.title = (done ? "Weiter capturen" : "NINA Capture-Lauf") + remainHint;
         capBtn.textContent = "▶";
@@ -2566,6 +2569,7 @@
         imagingSelectedSessionId = null;
       }
       renderSelectedSessionDetail();
+      void attachRunningCaptureJob();
 
       if (!imagingSessionEditing) {
         if (!document.getElementById("img-session-local").value && imagingSuggestedLocal) {
@@ -2645,103 +2649,104 @@
       return Math.max(1, target - done);
     }
 
+    function panoSetStatus(text) {
+      const el = document.getElementById("img-status");
+      if (el) el.textContent = text;
+    }
+
+    async function readCaptureJob() {
+      const response = await fetch("/astro/capture/status", { cache: "no-store" });
+      return response.json().catch(() => ({}));
+    }
+
+    async function watchCaptureJob(jobId) {
+      while (true) {
+        const data = await readCaptureJob();
+        const job = data && data.job;
+        if (!job || job.job_id !== jobId) {
+          panoSetStatus("Aufnahmeauftrag unterbrochen. Nach einem MeLE-Neustart wird keine Serie fortgesetzt.");
+          return data;
+        }
+        const file = job.current_file ? ` · ${job.current_file}` : "";
+        const count = `${job.saved}/${job.planned} gespeichert`;
+        if (job.state === "running") panoSetStatus(`Aufnahme: ${count}${file}`);
+        else if (job.state === "stop_requested") panoSetStatus(`Stopp nach dem aktuellen Bild · ${count}${file}`);
+        else if (job.state === "completed") panoSetStatus(`Fertig: ${count}${file}`);
+        else if (job.state === "stopped") panoSetStatus(`Gestoppt: ${count}${file}`);
+        else if (job.state === "failed") panoSetStatus(`${job.error || "Aufnahme fehlgeschlagen"} · ${count}`);
+        if (job.state === "running" || job.state === "stop_requested") {
+          await sleepMs(1000);
+          continue;
+        }
+        return data;
+      }
+    }
+
+    async function attachRunningCaptureJob() {
+      if (imagingJobWatching) return;
+      let data;
+      try { data = await readCaptureJob(); } catch (_) { return; }
+      const job = data && data.job;
+      if (!job || (job.state !== "running" && job.state !== "stop_requested")) return;
+      imagingJobWatching = true;
+      imagingCapturingSessionId = job.session_id;
+      imagingSelectedSessionId = job.session_id;
+      renderSelectedSessionDetail();
+      try {
+        await watchCaptureJob(job.job_id);
+      } finally {
+        imagingCapturingSessionId = null;
+        imagingJobWatching = false;
+        imagingBusyPhase = null;
+        renderSelectedSessionDetail();
+      }
+    }
+
     async function captureImagingSession(session) {
       if (!imagingCatalogKey || !session || !session.id) return;
-      if (imagingCapturingSessionId) return;
-      imagingCapturingSessionId = session.id;
-      imagingCaptureAbort = false;
+      if (imagingJobWatching || imagingCapturingSessionId) return;
+      const total = imagingFramesRemaining(session);
+      imagingJobWatching = true;
       imagingBusyPhase = "capture";
       imagingSelectedSessionId = session.id;
-      const total = imagingFramesRemaining(session);
-      let lastData = null;
-      let completedThisRun = 0;
-      startCaptureRunTimer(session);
+      imagingCapturingSessionId = session.id;
       renderSelectedSessionDetail();
-      document.getElementById("img-status").textContent =
-        total > 1
-          ? `Capture-Lauf: ${total} Frame(s), Preview nur am Ende…`
-          : "NINA Capture läuft…";
+      startCaptureRunTimer(session);
       try {
-        for (let i = 0; i < total; i++) {
-          if (imagingCaptureAbort) {
-            document.getElementById("img-status").textContent =
-              `Capture abgebrochen nach ${completedThisRun}/${total} Frame(s).`;
-            break;
-          }
-          const isLast = i === total - 1;
-          // Bei mehreren Frames: Preview nur vom letzten (kein Delay dazwischen)
-          const makePreview = total === 1 || isLast;
-          document.getElementById("img-status").textContent =
-            `Capture ${i + 1}/${total}` +
-            (makePreview ? " (+ Preview)…" : "…");
-          imagingBusyPhase = "capture";
-          updateCaptureRunStats();
-
-          const response = await fetch("/astro/nina/capture", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              catalog_key: imagingCatalogKey,
-              display_name: imagingDisplayName || "",
-              session_id: session.id,
-              profile_id: session.profile_id,
-              exposure_s: session.exposure_s,
-              gain: session.gain,
-              local_path: session.local_path || imagingSuggestedLocal,
-              archive_path: session.archive_path || imagingSuggestedArchive,
-              frames: 1,
-              make_preview: makePreview,
-            }),
-          });
-          const data = await response.json();
-          lastData = data;
-          if (!response.ok || !data.ok) {
-            document.getElementById("img-status").textContent =
-              (data.error || data.capture?.error || "Capture fehlgeschlagen") +
-              ` (nach ${completedThisRun}/${total})`;
-            break;
-          }
-          completedThisRun += 1;
-          if (data.session) {
-            const idx = imagingSessionsCache.findIndex(
-              (x) => String(x.id) === String(session.id)
-            );
-            if (idx >= 0) imagingSessionsCache[idx] = data.session;
-            else session.frames_completed = data.session.frames_completed;
-          }
-          updateCaptureRunStats();
+        const response = await fetch("/astro/capture/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            catalog_key: imagingCatalogKey,
+            display_name: imagingDisplayName || "",
+            session_id: session.id,
+            exposure_s: session.exposure_s,
+            gain: session.gain,
+            iso: session.iso,
+            frames: total,
+            image_type: "LIGHT",
+            local_path: session.local_path || imagingSuggestedLocal,
+            archive_path: session.archive_path || imagingSuggestedArchive,
+          }),
+        });
+        const started = await response.json().catch(() => ({}));
+        if (!response.ok || !started.ok || !started.job) {
+          panoSetStatus(started.error || "Aufnahmeauftrag abgelehnt");
+          return;
         }
-
-        if (completedThisRun > 0) {
-          const st = captureRunStatsSnapshot(
-            imagingSessionsCache.find((x) => String(x.id) === String(session.id)) || session
-          );
-          const n = lastData?.session?.frames_completed;
-          const folder = lastData?.session_folder || "";
-          let status =
-            `Capture-Lauf ${completedThisRun}/${total}` +
-            (imagingCaptureAbort ? " (abgebrochen)" : "") +
-            ` → ${imagingDisplayName || imagingCatalogKey}` +
-            (folder ? ` [${folder}]` : "") +
-            (n != null ? ` (Session: ${n})` : "");
-          if (st.tpfS != null) status += ` · ${st.tpfS.toFixed(1)} s/Fr`;
-          if (lastData?.preview && lastData.preview.ok) status += " · Preview ok";
-          else if (lastData?.preview_error) status += ` · Preview: ${lastData.preview_error}`;
-          document.getElementById("img-status").textContent = status;
+        const data = await watchCaptureJob(started.job.job_id);
+        const job = data && data.job;
+        if (job && job.saved > 0) {
           imagingBusyPhase = "preview";
-          await refreshImaging();
           renderSelectedSessionDetail();
-          await waitForSessionPreview(session.id, {
-            attempts: lastData?.preview && lastData.preview.ok ? 2 : 16,
-            delayMs: 2000,
-          });
+          await waitForSessionPreview(session.id, { attempts: 8, delayMs: 2000 });
         }
       } catch (err) {
-        document.getElementById("img-status").textContent = String(err.message || err);
+        panoSetStatus(String(err.message || err));
       } finally {
         stopCaptureRunTimer();
         imagingCapturingSessionId = null;
-        imagingCaptureAbort = false;
+        imagingJobWatching = false;
         imagingBusyPhase = null;
         renderSelectedSessionDetail();
       }

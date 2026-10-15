@@ -337,6 +337,9 @@
     let imagingSelectedSessionId = null;
     let imagingCapturingSessionId = null;
     let imagingCaptureAbort = false;
+    let imagingJobWatching = false;
+    let imagingCaptureEpoch = "";
+    let imagingJobStatusText = "";
     let imagingBusyPhase = null;
     /** Capture-Lauf-Telemetrie (Elapsed / Frames / s pro Frame) */
     let imagingCaptureRunStartedAt = null;
@@ -860,7 +863,9 @@
       if (capturing) {
         capBtn.textContent = "⏹ Stop";
         capBtn.title = "Capture-Lauf abbrechen (nach aktuellem Frame)";
-        capBtn.addEventListener("click", () => { imagingCaptureAbort = true; });
+        capBtn.addEventListener("click", () => {
+          fetch("/astro/capture/stop", { method: "POST" });
+        });
       } else {
         capBtn.textContent = "▶ Capture" + remainHint;
         if (isClosed) {
@@ -1206,6 +1211,7 @@
         if (token !== imagingLoadToken) return;
         renderImaging(data);
         setStatus("");
+        void attachRunningCaptureJob();
         try {
           const bc = new BroadcastChannel("mele-imaging");
           bc.postMessage({ type: "loaded", key: catalogKey, name: imagingDisplayName });
@@ -1444,216 +1450,175 @@
       );
     }
 
-    async function capturePhase(session, imageType, total, { makePreviewOnLast }) {
-      let completedThisRun = 0;
-      let lastData = null;
-      for (let i = 0; i < total; i++) {
-        if (imagingCaptureAbort) break;
-        const isLast = i === total - 1;
-        const makePreview = !!makePreviewOnLast && (total === 1 || isLast);
-        const label = imageType === "DARK" ? "Dark" : "Light";
-        setStatus(`${label} ${i + 1}/${total}` + (makePreview ? " (+ Preview)…" : "…"));
-        imagingBusyPhase = "capture";
-        updateCaptureRunStats();
-
-        const frameStartedAt = Date.now();
-        const frameTiming = { sawExposing: false, exposeEndedAt: null };
-        if (imagingCapturePhasePollAbort) imagingCapturePhasePollAbort.abort();
-        imagingCapturePhasePollAbort = new AbortController();
-        const pollPromise = pollNinaCameraPhase(
-          imagingCapturePhasePollAbort.signal,
-          frameTiming
-        );
-
-        let response;
-        let data;
-        try {
-          response = await fetch("/astro/nina/capture", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              catalog_key: imagingCatalogKey,
-              display_name: imagingDisplayName || "",
-              session_id: session.id,
-              profile_id: session.profile_id,
-              exposure_s: session.exposure_s,
-              gain: session.gain,
-              local_path: session.local_path || imagingSuggestedLocal,
-              archive_path: session.archive_path || imagingSuggestedArchive,
-              frames: 1,
-              image_type: imageType,
-              make_preview: makePreview,
-            }),
-          });
-          data = await response.json();
-        } finally {
-          imagingCapturePhasePollAbort.abort();
-          imagingCapturePhasePollAbort = null;
-          try { await pollPromise; } catch (_) { /* ignore abort */ }
-        }
-
-        const frameEndedAt = Date.now();
-        const exposeEnd = frameTiming.exposeEndedAt
-          || (frameTiming.sawExposing ? frameEndedAt : null);
-        let exposeS = null;
-        let postS = null;
-        if (exposeEnd != null) {
-          exposeS = (exposeEnd - frameStartedAt) / 1000;
-          postS = (frameEndedAt - exposeEnd) / 1000;
-        } else if (session.exposure_s != null) {
-          const planned = Number(session.exposure_s);
-          const totalS = (frameEndedAt - frameStartedAt) / 1000;
-          exposeS = Math.min(planned, totalS);
-          postS = Math.max(0, totalS - exposeS);
-        }
-        recordFrameTiming(exposeS, postS);
-        imagingCaptureLive.ninaPhase = "";
-        updateCaptureRunStats();
-
-        lastData = data;
-        if (!response.ok || !data.ok) {
-          setStatus(
-            (data.error || data.capture?.error || "Capture fehlgeschlagen") +
-            ` (nach ${completedThisRun}/${total} ${label})`
-          );
-          return { ok: false, completedThisRun, lastData, aborted: false };
-        }
-        completedThisRun += 1;
-        if (data.session) {
-          const idx = imagingSessionsCache.findIndex(
-            (x) => String(x.id) === String(session.id)
-          );
-          if (idx >= 0) imagingSessionsCache[idx] = data.session;
-          session = data.session;
-        }
-        updateCaptureRunStats();
-        renderSelectedSessionDetail();
+    function applyJobProgress(job) {
+      const s = imagingSessionsCache.find((x) => String(x.id) === String(job.session_id));
+      if (!s || job.session_completed == null) return;
+      if (job.image_type === "DARK") s.darks_completed = job.session_completed;
+      else {
+        s.lights_completed = job.session_completed;
+        s.frames_completed = job.session_completed;
       }
-      return {
-        ok: completedThisRun > 0 && !imagingCaptureAbort,
-        completedThisRun,
-        lastData,
-        aborted: imagingCaptureAbort,
-        session,
-      };
+      updateCaptureRunStats();
+    }
+
+    function jobProgressText(job) {
+      const label = job.image_type === "DARK" ? "Darks" : "Lights";
+      const file = job.current_file ? ` · ${job.current_file}` : "";
+      const count = `${job.saved}/${job.planned} gespeichert`;
+      if (job.state === "stop_requested") return `${label}: Stopp nach dem aktuellen Bild · ${count}${file}`;
+      if (job.state === "running") return `${label}: ${count}${file}`;
+      if (job.state === "completed") return `${label} fertig: ${count}${file}`;
+      if (job.state === "stopped") return `${label} gestoppt: ${count}${file}`;
+      if (job.state === "failed") return `${job.error || "Aufnahme fehlgeschlagen"} · ${count}${file}`;
+      return `${label}: ${job.state} · ${count}`;
+    }
+
+    async function readCaptureJob() {
+      const response = await fetch("/astro/capture/status", { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      return data;
+    }
+
+    async function watchCaptureJob(jobId) {
+      while (true) {
+        const data = await readCaptureJob();
+        const job = data && data.job;
+        const epochGone = imagingCaptureEpoch && data.process_epoch && data.process_epoch !== imagingCaptureEpoch;
+        if (!job || job.job_id !== jobId || epochGone) {
+          imagingJobStatusText = "Aufnahmeauftrag unterbrochen. Nach einem MeLE-Neustart wird keine Serie fortgesetzt.";
+          setStatus(imagingJobStatusText);
+          return data;
+        }
+        applyJobProgress(job);
+        imagingJobStatusText = jobProgressText(job);
+        setStatus(imagingJobStatusText);
+        if (job.state === "running" || job.state === "stop_requested") {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        return data;
+      }
+    }
+
+    async function postCaptureStart(session, imageType, frames) {
+      const response = await fetch("/astro/capture/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          catalog_key: imagingCatalogKey,
+          display_name: imagingDisplayName || "",
+          session_id: session.id,
+          exposure_s: session.exposure_s,
+          gain: session.gain,
+          iso: session.iso,
+          frames,
+          image_type: imageType,
+          local_path: session.local_path || imagingSuggestedLocal,
+          archive_path: session.archive_path || imagingSuggestedArchive,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    }
+
+    async function runCaptureJob(session, imageType, frames) {
+      const started = await postCaptureStart(session, imageType, frames);
+      if (!started.response.ok || !started.data.ok || !started.data.job) {
+        imagingJobStatusText = started.data.error || "Aufnahmeauftrag abgelehnt";
+        setStatus(imagingJobStatusText);
+        return started.data;
+      }
+      imagingCaptureEpoch = started.data.process_epoch || "";
+      imagingCapturingSessionId = session.id;
+      imagingSelectedSessionId = session.id;
+      renderSelectedSessionDetail();
+      startCaptureRunTimer(session, imageType);
+      if (imagingCapturePhasePollAbort) imagingCapturePhasePollAbort.abort();
+      imagingCapturePhasePollAbort = new AbortController();
+      const pollPromise = pollNinaCameraPhase(imagingCapturePhasePollAbort.signal, { sawExposing: false, exposeEndedAt: null });
+      try {
+        return await watchCaptureJob(started.data.job.job_id);
+      } finally {
+        imagingCapturePhasePollAbort.abort();
+        try { await pollPromise; } catch (_) { /* abort */ }
+      }
+    }
+
+    async function attachRunningCaptureJob() {
+      if (imagingJobWatching) return;
+      let data;
+      try {
+        data = await readCaptureJob();
+      } catch (_) {
+        return;
+      }
+      const job = data && data.job;
+      if (!job || (job.state !== "running" && job.state !== "stop_requested")) return;
+      if (imagingCatalogKey && job.catalog_key && job.catalog_key !== imagingCatalogKey) return;
+      imagingJobWatching = true;
+      imagingCaptureEpoch = data.process_epoch || "";
+      imagingCapturingSessionId = job.session_id;
+      imagingSelectedSessionId = job.session_id;
+      const session = imagingSessionsCache.find((x) => String(x.id) === String(job.session_id)) || { id: job.session_id };
+      renderSelectedSessionDetail();
+      startCaptureRunTimer(session, job.image_type);
+      try {
+        await watchCaptureJob(job.job_id);
+      } finally {
+        stopCaptureRunTimer();
+        imagingCapturingSessionId = null;
+        imagingJobWatching = false;
+        imagingBusyPhase = null;
+        const note = imagingJobStatusText;
+        await refreshImaging();
+        if (note) setStatus(note);
+      }
     }
 
     async function captureImagingSession(session) {
       if (!imagingCatalogKey || !session || !session.id) return;
-      if (imagingCapturingSessionId) return;
-      imagingCapturingSessionId = session.id;
-      imagingCaptureAbort = false;
+      if (imagingJobWatching || imagingCapturingSessionId) return;
+      imagingJobWatching = true;
       imagingBusyPhase = "capture";
       imagingSelectedSessionId = session.id;
-
       let current = session;
-      const lightsTotal = imagingFramesRemaining(current, "LIGHT");
-      const darksNeededInitially = remainingCount(
-        sessionDarks(current).done,
-        sessionDarks(current).planned
-      );
-      let lastData = null;
-      let lightsDone = 0;
-      let darksDone = 0;
-
-      if (lightsTotal > 0) startCaptureRunTimer(current, "LIGHT");
-      renderSelectedSessionDetail();
-
       try {
+        const lightsTotal = imagingFramesRemaining(current, "LIGHT");
+        const darksNeededInitially = remainingCount(
+          sessionDarks(current).done,
+          sessionDarks(current).planned
+        );
         if (lightsTotal > 0) {
-          setStatus(
-            lightsTotal > 1
-              ? `Lights-Lauf: ${lightsTotal} Frame(s)…`
-              : "NINA Light-Capture…"
-          );
-          const lightResult = await capturePhase(current, "LIGHT", lightsTotal, {
-            makePreviewOnLast: true,
-          });
-          lastData = lightResult.lastData;
-          lightsDone = lightResult.completedThisRun;
-          if (lightResult.session) current = lightResult.session;
-          if (!lightResult.ok && lightResult.completedThisRun === 0) {
-            /* Fehler schon gesetzt */
-          } else if (imagingCaptureAbort) {
-            setStatus(`Capture abgebrochen nach ${lightsDone} Light(s).`);
-          }
+          const lightData = await runCaptureJob(current, "LIGHT", lightsTotal);
+          const lightJob = lightData && lightData.job;
+          if (!lightJob || lightJob.state !== "completed") return;
+          imagingCapturingSessionId = null;
+          renderSelectedSessionDetail();
+          const cached = imagingSessionsCache.find((x) => String(x.id) === String(session.id));
+          if (cached) current = cached;
         }
-
-        // Darks: nach Lights (oder wenn Lights schon fertig) + Confirm
-        if (!imagingCaptureAbort) {
-          const darksTotal = remainingCount(
-            sessionDarks(current).done,
-            sessionDarks(current).planned
-          );
-          if (darksTotal > 0) {
-            const coverOk = confirmCoverTubeForDarks(darksTotal);
-            if (!coverOk) {
-              setStatus(
-                (lightsDone > 0 ? `Lights ${lightsDone} ok. ` : "") +
-                "Darks übersprungen (Tubus nicht bestätigt)."
-              );
-            } else {
-              startCaptureRunTimer(current, "DARK");
-              setStatus(`Darks-Lauf: ${darksTotal} Frame(s)…`);
-              const darkResult = await capturePhase(current, "DARK", darksTotal, {
-                makePreviewOnLast: false,
-              });
-              lastData = darkResult.lastData || lastData;
-              darksDone = darkResult.completedThisRun;
-              if (darkResult.session) current = darkResult.session;
-              if (imagingCaptureAbort) {
-                setStatus(
-                  `Darks abgebrochen nach ${darksDone}/${darksTotal}` +
-                  (lightsDone ? ` (Lights ${lightsDone})` : "")
-                );
-              }
-            }
+        const darksTotal = remainingCount(sessionDarks(current).done, sessionDarks(current).planned);
+        if (darksTotal > 0 && (lightsTotal <= 0 || darksNeededInitially > 0)) {
+          if (!confirmCoverTubeForDarks(darksTotal)) {
+            imagingJobStatusText = "Darks übersprungen (Tubus nicht bestätigt).";
+            setStatus(imagingJobStatusText);
+            return;
           }
-        }
-
-        if (lightsDone > 0 || darksDone > 0) {
-          const st = captureRunStatsSnapshot(
-            imagingSessionsCache.find((x) => String(x.id) === String(session.id)) || current
-          );
-          let status =
-            `Capture L${lightsDone}` +
-            (darksDone ? ` D${darksDone}` : "") +
-            (imagingCaptureAbort ? " (abgebrochen)" : "") +
-            (lastData?.session_folder ? ` [${lastData.session_folder}]` : "");
-          if (st.tpfS != null && (lightsDone > 0 || darksDone > 0)) {
-            status += ` · ${st.tpfS.toFixed(1)} s/Fr`;
-          }
-          if (lastData?.preview_error) status += ` · Preview: ${lastData.preview_error}`;
-          if (darksNeededInitially > 0 && darksDone === 0 && !imagingCaptureAbort) {
-            /* already messaged */
-          } else if (!imagingCaptureAbort) {
-            setStatus(status);
-          }
-          imagingBusyPhase = "preview";
-          await refreshImaging();
-          if (lightsDone > 0) {
-            for (let i = 0; i < 12; i++) {
-              const wrap = $("img-session-preview");
-              await loadSessionPreview(session.id, wrap, { color: imagingPreviewColor });
-              if (wrap.querySelector("img")) break;
-              await new Promise((r) => setTimeout(r, 2000));
-            }
-          }
-        } else if (!imagingCaptureAbort) {
-          const L = sessionLights(current);
-          const D = sessionDarks(current);
-          if (remainingCount(L.done, L.planned) <= 0 && remainingCount(D.done, D.planned) <= 0) {
-            setStatus("Nichts mehr zu capturen (Lights/Darks fertig).");
-          }
+          await runCaptureJob(current, "DARK", darksTotal);
+        } else if (lightsTotal <= 0 && darksTotal <= 0) {
+          imagingJobStatusText = "Nichts mehr zu capturen (Lights/Darks fertig).";
+          setStatus(imagingJobStatusText);
         }
       } catch (err) {
         setStatus(String(err.message || err));
       } finally {
         stopCaptureRunTimer();
         imagingCapturingSessionId = null;
-        imagingCaptureAbort = false;
+        imagingJobWatching = false;
         imagingBusyPhase = null;
-        renderSelectedSessionDetail();
+        const note = imagingJobStatusText;
+        await refreshImaging();
+        if (note) setStatus(note);
       }
     }
 

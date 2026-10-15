@@ -817,6 +817,83 @@ def create_session(
     return _session_from_row(row)
 
 
+class SessionCreateError(ValueError):
+    """Die Quest darf Pfade und fremde Profile nicht selbst festlegen."""
+
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        status: int = 409,
+        profiles: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.profiles = profiles or []
+
+
+def create_object_session(
+    *,
+    catalog_key: str,
+    display_name: str = "",
+    profile_id: int | None = None,
+    db_path: Path | None = None,
+    local_root: Path,
+    archive_root: Path,
+) -> ImagingSession:
+    """Session für ein Objekt. Profil und Ordner kommen vom Server."""
+    key = str(catalog_key or "").strip()
+    if not key:
+        raise SessionCreateError("Objekt fehlt.", "params", 400)
+    profiles = list_profiles(key, db_path=db_path)
+    if profile_id is None:
+        if len(profiles) > 1:
+            raise SessionCreateError(
+                "Mehrere Profile. Eines auswählen.",
+                "profile_ambiguous",
+                409,
+                [
+                    {"id": int(profile.id), "label": profile.label, "catalog_key": profile.catalog_key}
+                    for profile in profiles
+                ],
+            )
+        chosen = None if not profiles else int(profiles[0].id)
+    else:
+        profile = get_profile(int(profile_id), db_path=db_path)
+        if profile is None or profile.catalog_key != key:
+            raise SessionCreateError("Profil gehört nicht zum Objekt.", "profile_mismatch", 409)
+        chosen = int(profile.id)
+    session = create_session(
+        catalog_key=key,
+        profile_id=chosen,
+        local_path="",
+        archive_path="",
+        db_path=db_path,
+        apply_profile=True,
+    )
+    name = str(display_name or "").strip() or None
+    local_path = suggested_local_session_dir(
+        key,
+        local_root=local_root,
+        display_name=name,
+        session_id=session.id,
+    )
+    archive_path = suggested_archive_session_dir(
+        key,
+        archive_root=archive_root,
+        display_name=name,
+        session_id=session.id,
+    )
+    return update_session_paths(
+        session.id,
+        local_path=str(local_path),
+        archive_path=str(archive_path),
+        notes=session.notes,
+        db_path=db_path,
+    )
+
+
 def get_session(session_id: int, *, db_path: Path | None = None) -> ImagingSession | None:
     with _connect(db_path) as conn:
         row = conn.execute(

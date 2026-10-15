@@ -227,6 +227,29 @@ def test_parse_camera_connected() -> None:
     assert status.camera.cooler_on is True
     assert status.camera.camera_state == "Idle"
     assert status.camera.last_download_time_s == 2.45
+    assert status.camera.gains == ()
+    assert "gains" in status.camera.to_dict()
+    assert status.camera.to_dict()["gains"] == []
+
+
+def test_parse_camera_gains_are_whole_iso_steps() -> None:
+    from mele.nina import parse_camera_payload
+
+    status = parse_camera_payload(
+        {
+            "Response": {
+                "Connected": True,
+                "Name": "DC-S5M2X",
+                "DeviceId": "Lumix",
+                "Gain": 125,
+                "Gains": [100, 125.0, 160, "200", 0, -1, 1.5, True],
+            },
+            "Success": True,
+            "StatusCode": 200,
+        }
+    )
+    assert status.camera is not None
+    assert status.camera.gains == (100, 125, 160, 200)
 
 
 def test_capture_builds_query(monkeypatch: pytest.MonkeyPatch) -> None:

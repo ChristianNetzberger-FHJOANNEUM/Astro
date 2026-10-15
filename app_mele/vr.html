@@ -908,6 +908,10 @@
     paintMenuButton(skyMenuButton, "HIMMEL", "Anzeige und Zeit");
     paintMenuButton(prefsButton, "EINSTELLUNGEN", "VR-Preferences");
     paintMenuButton(mountButton, "MONTIERUNG", "Position der Montierung");
+    const cameraButton = makeTextButton("KAMERA", "camera", 0, -0.16, 0.30, 0.07);
+    paintMenuButton(cameraButton, "KAMERA", "Aufnahmeauftrag");
+    const cameraDetailButton = makeTextButton("KAMERA", "camera", 0.22, -0.205, 0.16, 0.05);
+    cameraDetailButton.visible = false;
     const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
     const skyPointButton = makeTextButton("HIMMELSPUNKT", "quest-sky-point", -0.16, -0.205, 0.28, 0.040);
     skyPointButton.visible = false;
@@ -960,7 +964,8 @@
     pairClearButton.visible = false;
     const pairSubmitButton = makeTextButton("FERTIG", "pair-submit", 0.12, -0.10, 0.18, 0.040);
     pairSubmitButton.visible = false;
-    const dragHandle = makeTextButton("ZIEHEN", "drag", 0, 0.191, 0.64, 0.034);
+    const dragHandle = makeTextButton("ZIEHEN", "drag", -0.10, 0.205, 0.40, 0.046);
+    const closeButton = makeTextButton("SCHLIESSEN", "close-panel", 0.22, 0.205, 0.22, 0.046);
     const keyboardTestButton = makeTextButton("SUCHEN", "kb-test", -0.24, -0.128, 0.16, 0.040);
     keyboardTestButton.visible = false;
     const searchPrevButton = makeTextButton("ZURÜCK", "search-page", 0.00, -0.128, 0.16, 0.040);
@@ -1052,11 +1057,127 @@
     const skyNgcMinMinus = addSkyControl("−", "sky-ngc-min", 0.02, -0.136, 0.07, 0.040, { dir: -1 });
     const skyNgcMinLabel = addSkyControl("≥ 1", "sky-hold", 0.12, -0.136, 0.10, 0.040);
     const skyNgcMinPlus = addSkyControl("+", "sky-ngc-min", 0.23, -0.136, 0.07, 0.040, { dir: 1 });
+    function makeCameraStep(label, action, x, y, dir) {
+      const button = makeTextButton(label, action, x, y, 0.07, 0.040);
+      button.userData.dir = dir;
+      button.visible = false;
+      return button;
+    }
+    const camExpMinus = makeCameraStep("−", "cam-exp", -0.24, 0.055, -1);
+    const camExpLabel = makeTextButton("— s", "cam-hold", -0.08, 0.055, 0.20, 0.040);
+    camExpLabel.visible = false;
+    const camExpPlus = makeCameraStep("+", "cam-exp", 0.10, 0.055, 1);
+    const camIsoMinus = makeCameraStep("−", "cam-iso", -0.24, 0.000, -1);
+    const camIsoLabel = makeTextButton("ISO —", "cam-hold", -0.08, 0.000, 0.20, 0.040);
+    camIsoLabel.visible = false;
+    const camIsoPlus = makeCameraStep("+", "cam-iso", 0.10, 0.000, 1);
+    const camCountMinus = makeCameraStep("−", "cam-count", -0.24, -0.055, -1);
+    const camCountLabel = makeTextButton("— Bilder", "cam-hold", -0.08, -0.055, 0.20, 0.040);
+    camCountLabel.visible = false;
+    const camCountPlus = makeCameraStep("+", "cam-count", 0.10, -0.055, 1);
+    const camLightsButton = makeTextButton("LIGHTS", "cam-lights", -0.15, 0.108, 0.26, 0.040);
+    camLightsButton.visible = false;
+    const camDarksButton = makeTextButton("DARKS", "cam-darks", 0.15, 0.108, 0.26, 0.040);
+    camDarksButton.visible = false;
+    const camProfileButton = makeTextButton("PROFIL", "cam-profile", -0.16, -0.115, 0.28, 0.044);
+    camProfileButton.visible = false;
+    const camStartButton = makeTextButton("AUFNAHME", "cam-start", 0.16, -0.115, 0.28, 0.044);
+    camStartButton.visible = false;
+    const camStopButton = makeTextButton("STOP", "cam-stop", 0, -0.115, 0.36, 0.044);
+    camStopButton.visible = false;
+    const camCoverButton = makeTextButton("TUBUS ABGEDECKT", "cam-cover", 0, -0.055, 0.46, 0.048);
+    camCoverButton.visible = false;
+    const camSkipDarksButton = makeTextButton("OHNE DARKS", "cam-skip-darks", 0, -0.115, 0.36, 0.044);
+    camSkipDarksButton.visible = false;
+    const camMonitorButton = makeTextButton("MONITOR", "cam-monitor", 0, 0.155, 0.28, 0.036);
+    camMonitorButton.visible = false;
+    const cameraControls = [
+      camLightsButton, camDarksButton, camMonitorButton,
+      camExpMinus, camExpLabel, camExpPlus,
+      camIsoMinus, camIsoLabel, camIsoPlus,
+      camCountMinus, camCountLabel, camCountPlus,
+      camProfileButton, camStartButton, camStopButton,
+      camCoverButton, camSkipDarksButton,
+    ];
+    const monitor = new THREE.Group();
+    const monitorCanvas = document.createElement("canvas");
+    monitorCanvas.width = 1024;
+    monitorCanvas.height = 360;
+    const monitorTexture = new THREE.CanvasTexture(monitorCanvas);
+    monitorTexture.colorSpace = THREE.SRGBColorSpace;
+    const monitorStats = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.62, 0.20),
+      new THREE.MeshBasicMaterial({
+        map: monitorTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.FrontSide,
+      }),
+    );
+    monitorStats.position.set(0, -0.16, 0);
+    monitorStats.renderOrder = 10;
+    monitor.add(monitorStats);
+    const monitorImage = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.62, 0.34),
+      new THREE.MeshBasicMaterial({
+        color: 0x111827,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.FrontSide,
+      }),
+    );
+    monitorImage.position.set(0, 0.08, 0);
+    monitorImage.renderOrder = 10;
+    monitor.add(monitorImage);
+    function makeMonitorButton(label, action, x, y, width, height) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 512;
+      canvas.height = 96;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(width, height),
+        new THREE.MeshBasicMaterial({
+          map: texture,
+          color: testRest,
+          transparent: true,
+          depthTest: false,
+          depthWrite: false,
+          side: THREE.FrontSide,
+        }),
+      );
+      mesh.position.set(x, y, 0.004);
+      mesh.renderOrder = 11;
+      mesh.userData.action = action;
+      mesh.userData.canvas = canvas;
+      mesh.userData.texture = texture;
+      monitor.add(mesh);
+      paintTextButton(mesh, label);
+      return mesh;
+    }
+    const monitorDragButton = makeMonitorButton("ZIEHEN", "monitor-drag", -0.12, 0.28, 0.30, 0.046);
+    const monitorHideButton = makeMonitorButton("AUS", "monitor-hide", 0.18, 0.28, 0.18, 0.046);
+    const monitorButtons = [monitorDragButton, monitorHideButton];
+    monitor.visible = false;
+    scene.add(monitor);
+    let monitorMap = null;
+    const sessionRows = [];
+    for (let index = 0; index < 6; index += 1) {
+      const row = makeTextButton("", "session-pick", 0, 0.10 - index * 0.046, 0.56, 0.040);
+      row.visible = false;
+      sessionRows.push(row);
+    }
+    const sessionNewButton = makeTextButton("＋ NEUE SESSION", "session-new", 0, -0.16, 0.42, 0.044);
+    sessionNewButton.visible = false;
     const pointerButtons = [
       objectsButton,
       skyMenuButton,
       prefsButton,
       mountButton,
+      cameraButton,
+      cameraDetailButton,
       backButton,
       skyPointButton,
       skyGotoButton,
@@ -1079,11 +1200,15 @@
       pairSubmitButton,
       ...pairDigits,
       dragHandle,
+      closeButton,
       keyboardTestButton,
       searchPrevButton,
       searchNextButton,
       ...objectRows,
       ...skyControls,
+      ...cameraControls,
+      ...sessionRows,
+      sessionNewButton,
       ...prefTabs,
       ...prefRows.flatMap((row) => row.widgets),
       prefReset,
@@ -1108,6 +1233,29 @@
     let detailNote = "";
     let panelMode = "home";
     let panelReturn = "home";
+    let cameraReturn = "home";
+    let sessionsReturn = "home";
+    let sessionRowsData = [];
+    let sessionPickMode = "session";
+    let sessionNote = "";
+    let cameraPollTimer = null;
+    let cameraView = null;
+    let cameraNote = "";
+    let cameraDraft = {
+      session_id: null,
+      catalog_key: "",
+      exposure_s: null,
+      iso: null,
+      gain: null,
+      frames: 1,
+      light_frames: 1,
+      dark_frames: 0,
+      image_type: "LIGHT",
+      session_label: "",
+    };
+    let cameraDarksPrompt = false;
+    let cameraLightJobId = null;
+    let savedSessionRow = null;
     let selectedItem = null;
     let selectedKey = "";
     let selectedMissing = false;
@@ -1117,6 +1265,13 @@
     let lastNgc = [];
     let skyBytes = 0;
     const pointerHits = new Map();
+    const monitorHits = new Map();
+    const monitorSources = ["light_preview", "phd2_fullframe", "phd2_star", "plate_solve"];
+    let monitorSource = "light_preview";
+    let monitorSessionId = null;
+    let monitorImageId = "";
+    let monitorPlaced = false;
+    let dragGroup = null;
     const pointerRaycaster = new THREE.Raycaster();
     let hoveredButton = null;
     const pointers = [0, 1].map((index) => {
@@ -1872,6 +2027,479 @@
       paintDashboard();
     }
 
+    function showCamera() {
+      if (panelMode === "sessions") cameraReturn = "sessions";
+      else cameraReturn = panelMode === "detail" ? "detail" : "home";
+      panelMode = "camera";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+      void pollCamera();
+      if (cameraPollTimer) clearInterval(cameraPollTimer);
+      cameraPollTimer = setInterval(() => {
+        if (panelMode === "camera") void pollCamera();
+      }, 1000);
+    }
+
+    function remainingFrames(session, imageType) {
+      const dark = imageType === "DARK";
+      if (!session) return dark ? 0 : 1;
+      const planned = dark ? session.darks_planned : session.lights_planned;
+      const done = Number((dark ? session.darks_completed : session.lights_completed) || 0);
+      if (planned == null || Number(planned) <= 0) return dark ? 0 : 1;
+      return Math.max(0, Number(planned) - done);
+    }
+
+    function rememberFrameCount() {
+      const count = Math.max(cameraDraft.image_type === "DARK" ? 0 : 1, Number(cameraDraft.frames) || 0);
+      cameraDraft.frames = count;
+      if (cameraDraft.image_type === "DARK") cameraDraft.dark_frames = count;
+      else cameraDraft.light_frames = count;
+    }
+
+    function selectFrameType(next) {
+      rememberFrameCount();
+      cameraDraft.image_type = next;
+      const stored = next === "DARK" ? cameraDraft.dark_frames : cameraDraft.light_frames;
+      cameraDraft.frames = stored != null ? Number(stored) : (next === "DARK" ? 0 : 1);
+    }
+
+    function frameTypeColor(button) {
+      if (button !== camLightsButton && button !== camDarksButton) return null;
+      const dark = cameraDraft.image_type === "DARK";
+      if (button === camDarksButton) return dark ? 0x38bdf8 : testRest;
+      return dark ? testRest : 0x38bdf8;
+    }
+
+    function paintFrameTypeButtons() {
+      const lights = frameTypeColor(camLightsButton);
+      const darks = frameTypeColor(camDarksButton);
+      if (camLightsButton !== hoveredButton && lights != null) camLightsButton.material.color.setHex(lights);
+      if (camDarksButton !== hoveredButton && darks != null) camDarksButton.material.color.setHex(darks);
+    }
+
+    function leaveCamera() {
+      if (cameraPollTimer) {
+        clearInterval(cameraPollTimer);
+        cameraPollTimer = null;
+      }
+      if (cameraReturn === "sessions") showSessions();
+      else if (cameraReturn === "detail" && selectedItem) showObjectDetail(selectedItem);
+      else showHome();
+    }
+
+    async function closeCameraSession() {
+      if (cameraLockedNow()) {
+        cameraNote = "Aufnahme läuft.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      const sessionId = cameraDraft.session_id;
+      if (sessionId) monitorSessionId = sessionId;
+      if (!sessionId) {
+        leaveCamera();
+        return;
+      }
+      const headers = { "Content-Type": "application/json" };
+      if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+      try {
+        const response = await fetch("/astro/capture/session-close", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+          cameraNote = "Zuerst an der Montierung koppeln.";
+        } else if (!response.ok || data.ok === false) {
+          cameraNote = data.error || "Session nicht gespeichert";
+        } else {
+          const weather = data.weather && data.weather.export_status;
+          const samples = data.weather && data.weather.sample_count;
+          cameraNote = weather
+            ? `Session gespeichert · Wetter ${weather}${samples != null ? ` (${samples})` : ""}`
+            : "Session gespeichert";
+          const closed = data.session || {};
+          savedSessionRow = {
+            id: sessionId,
+            catalog_key: closed.catalog_key || cameraDraft.catalog_key || catalogQueryOf(selectedItem),
+            started_utc: closed.started_utc || closed.session_start_utc || "",
+            lifecycle_status: "closed",
+            saved: true,
+            note: cameraNote,
+          };
+          cameraDraft.session_id = null;
+          cameraDarksPrompt = false;
+          leaveCamera();
+          return;
+        }
+      } catch (err) {
+        cameraNote = "Session nicht gespeichert";
+      }
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    function sessionDateText(session) {
+      const raw = String(session.started_utc || "").slice(0, 10);
+      const parts = raw.split("-");
+      return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : "ohne Datum";
+    }
+
+    function sessionRowLabel(session, sessions) {
+      const raw = String(session.started_utc || "").slice(0, 10);
+      const date = sessionDateText(session);
+      const same = sessions.filter((row) => String(row.started_utc || "").slice(0, 10) === raw).length;
+      const code = `s${String(session.id).padStart(5, "0")}`;
+      return same > 1 ? `Session vom ${date} · ${code}` : `Session vom ${date}`;
+    }
+
+    function adoptSessionDraft(session) {
+      cameraDraft = {
+        session_id: session.id,
+        catalog_key: session.catalog_key || catalogQueryOf(selectedItem),
+        exposure_s: session.exposure_s,
+        iso: session.iso,
+        gain: session.gain,
+        frames: remainingFrames(session, "LIGHT"),
+        light_frames: remainingFrames(session, "LIGHT"),
+        dark_frames: remainingFrames(session, "DARK"),
+        image_type: "LIGHT",
+        session_label: `Session vom ${sessionDateText(session)}`,
+      };
+    }
+
+    function paintSessionRows() {
+      const profiles = sessionPickMode === "profile";
+      sessionRows.forEach((row, index) => {
+        const item = sessionRowsData[index];
+        if (!item || panelMode !== "sessions") {
+          row.visible = false;
+          row.userData.session = null;
+          row.userData.profileId = null;
+          return;
+        }
+        row.visible = true;
+        if (profiles) {
+          row.userData.action = "session-profile";
+          row.userData.profileId = item.id;
+          row.userData.session = null;
+          paintTextButton(row, item.label || `Profil ${item.id}`);
+          return;
+        }
+        row.userData.action = "session-pick";
+        row.userData.session = item;
+        row.userData.profileId = null;
+        const saved = item.saved ? " · gespeichert" : "";
+        paintTextButton(row, `${sessionRowLabel(item, sessionRowsData)}${saved}`);
+      });
+      sessionNewButton.visible = panelMode === "sessions" && !profiles && Boolean(catalogQueryOf(selectedItem));
+    }
+
+    function showSessions() {
+      panelMode = "sessions";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+      void loadQuestSessions();
+    }
+
+    async function openCameraEntry() {
+      sessionsReturn = panelMode === "detail" ? "detail" : "home";
+      try {
+        const response = await fetch("/astro/capture/status", { cache: "no-store", credentials: "same-origin" });
+        const data = await response.json().catch(() => ({}));
+        const state = data && data.job && data.job.state;
+        if (state === "running" || state === "stop_requested") {
+          showCamera();
+          return;
+        }
+      } catch (_err) {
+        sessionNote = "";
+      }
+      showSessions();
+    }
+
+    async function loadQuestSessions() {
+      const key = catalogQueryOf(selectedItem);
+      sessionPickMode = "session";
+      if (!key) {
+        sessionRowsData = [];
+        sessionNote = "Objekt auf der Quest wählen.";
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      try {
+        const response = await fetch(`/astro/sessions?catalog_key=${encodeURIComponent(key)}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          sessionRowsData = [];
+          sessionNote = data.error || "Sessions nicht lesbar";
+        } else {
+          const rows = Array.isArray(data.sessions) ? data.sessions : [];
+          sessionRowsData = rows.filter((row) => String(row.lifecycle_status || "open") !== "closed");
+          if (savedSessionRow && savedSessionRow.catalog_key === key) {
+            sessionRowsData = sessionRowsData.filter((row) => row.id !== savedSessionRow.id);
+            sessionRowsData.unshift(savedSessionRow);
+          }
+          sessionNote = savedSessionRow && savedSessionRow.catalog_key === key && savedSessionRow.note
+            ? savedSessionRow.note
+            : (sessionRowsData.length > sessionRows.length
+              ? "Weitere offene Sessions am Desktop."
+              : "");
+          sessionRowsData = sessionRowsData.slice(0, sessionRows.length);
+        }
+      } catch (_err) {
+        sessionRowsData = [];
+        sessionNote = "Sessions nicht lesbar";
+      }
+      if (panelMode === "sessions") {
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    async function createQuestSession(profileId) {
+      const key = catalogQueryOf(selectedItem);
+      if (!key) {
+        sessionNote = "Objekt auf der Quest wählen.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      const headers = { "Content-Type": "application/json" };
+      if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+      const body = {
+        catalog_key: key,
+        display_name: selectedItem ? (selectedItem.name || "") : "",
+      };
+      if (profileId != null) body.profile_id = profileId;
+      try {
+        const response = await fetch("/astro/sessions", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify(body),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+          sessionNote = "Zuerst an der Montierung koppeln.";
+        } else if (data.code === "profile_ambiguous") {
+          sessionPickMode = "profile";
+          sessionRowsData = Array.isArray(data.profiles) ? data.profiles : [];
+          sessionNote = data.error || "Mehrere Profile. Eines auswählen.";
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        } else if (!response.ok || data.ok === false || !data.session) {
+          sessionNote = data.error || "Session nicht erstellt";
+        } else {
+          adoptSessionDraft(data.session);
+          cameraNote = "Session erstellt";
+          showCamera();
+          return;
+        }
+      } catch (_err) {
+        sessionNote = "Session nicht erstellt";
+      }
+      if (panelMode === "sessions") {
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    function cameraLockedNow() {
+      return Boolean(cameraView && cameraView.locked);
+    }
+
+    function paintCameraLabels() {
+      const exp = cameraView && cameraView.locked && cameraView.job
+        ? cameraView.job.exposure_s
+        : cameraDraft.exposure_s;
+      const iso = cameraView && cameraView.locked && cameraView.job
+        ? cameraView.job.iso
+        : cameraDraft.iso;
+      const gain = cameraView && cameraView.locked && cameraView.job
+        ? cameraView.job.gain
+        : cameraDraft.gain;
+      const frames = cameraView && cameraView.locked && cameraView.job
+        ? cameraView.job.planned
+        : cameraDraft.frames;
+      paintTextButton(camExpLabel, exp != null ? `${exp} s` : "— s");
+      const isoText = iso != null ? `ISO ${iso}` : (gain != null ? `Gain ${gain}` : "ISO —");
+      paintTextButton(camIsoLabel, isoText);
+      paintTextButton(camCountLabel, frames != null ? `${frames} Bilder` : "— Bilder");
+    }
+
+    function stepList(steps, current, dir) {
+      const list = Array.isArray(steps) ? steps.map(Number).filter((n) => Number.isFinite(n)) : [];
+      if (!list.length) return current;
+      const value = Number(current);
+      if (!Number.isFinite(value)) return dir < 0 ? list[list.length - 1] : list[0];
+      if (dir > 0) {
+        const next = list.find((step) => step > value + 1e-9);
+        return next == null ? list[list.length - 1] : next;
+      }
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        if (list[index] < value - 1e-9) return list[index];
+      }
+      return list[0];
+    }
+
+    function noteFinishedLights(data) {
+      if (!data) return;
+      const job = data && data.job;
+      if (data && data.locked && job && job.image_type !== "DARK") cameraLightJobId = job.job_id;
+      if (!job || data.locked || job.job_id !== cameraLightJobId) return;
+      cameraLightJobId = null;
+      if (job.state === "completed" && job.image_type !== "DARK" && Number(job.planned) === 1) {
+        monitorSessionId = job.session_id || cameraDraft.session_id;
+        placeMonitor();
+      }
+      if (job.state !== "completed" || job.image_type === "DARK") return;
+      const darks = Number(cameraDraft.dark_frames || 0);
+      if (darks < 1) return;
+      cameraDarksPrompt = true;
+      cameraDraft.image_type = "LIGHT";
+      cameraNote = `Lights fertig. Bitte den Tubus abdecken, kein Licht. Danach ${darks} Darks.`;
+    }
+
+    function applyCameraContext(data) {
+      noteFinishedLights(data);
+      cameraView = data || null;
+      const session = data && data.session;
+      if (data && !data.locked && session && data.session_code === "ok") {
+        if (cameraDraft.session_id == null) {
+          cameraDraft = {
+            session_id: session.id,
+            catalog_key: session.catalog_key || "",
+            exposure_s: session.exposure_s,
+            iso: session.iso,
+            gain: session.gain,
+            frames: remainingFrames(session, "LIGHT"),
+            light_frames: remainingFrames(session, "LIGHT"),
+            dark_frames: remainingFrames(session, "DARK"),
+            image_type: "LIGHT",
+            session_label: `Session vom ${sessionDateText(session)}`,
+          };
+        }
+      }
+      if (panelMode === "camera") {
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    async function pollCamera() {
+      const key = catalogQueryOf(selectedItem);
+      const query = key ? `?catalog_key=${encodeURIComponent(key)}` : "";
+      try {
+        const response = await fetch(`/astro/capture/context${query}`, { cache: "no-store", credentials: "same-origin" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+          cameraNote = data.error || "Kamerastatus nicht lesbar";
+          if (panelMode === "camera") {
+            dashboardKey = "";
+            paintDashboard();
+          }
+          return;
+        }
+        applyCameraContext(data);
+      } catch (err) {
+        cameraNote = "Kamerastatus nicht lesbar";
+        if (panelMode === "camera") {
+          dashboardKey = "";
+          paintDashboard();
+        }
+      }
+    }
+
+    function adoptCameraProfile() {
+      if (cameraLockedNow()) return;
+      const profile = cameraView && cameraView.profile;
+      if (!profile) {
+        cameraNote = (cameraView && cameraView.profile_message) || "Kein Profil.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      cameraDraft.exposure_s = profile.exposure_s;
+      cameraDraft.iso = profile.iso;
+      cameraDraft.gain = profile.gain;
+      cameraDraft.frames = profile.frames != null ? Number(profile.frames) : cameraDraft.frames;
+      cameraNote = "Profil übernommen. Gespeichert wird es nicht.";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    async function startCameraCapture() {
+      if (cameraLockedNow()) return;
+      const key = catalogQueryOf(selectedItem) || cameraDraft.catalog_key;
+      if (!cameraDraft.session_id || !key) {
+        cameraNote = "Keine Session gewählt.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      const headers = { "Content-Type": "application/json" };
+      if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+      try {
+        const response = await fetch("/astro/capture/start", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify({
+            catalog_key: key,
+            display_name: selectedItem ? (selectedItem.name || "") : "",
+            session_id: cameraDraft.session_id,
+            exposure_s: cameraDraft.exposure_s,
+            gain: cameraDraft.gain,
+            iso: cameraDraft.iso,
+            frames: cameraDraft.frames,
+            image_type: cameraDraft.image_type === "DARK" ? "DARK" : "LIGHT",
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) cameraNote = "Zuerst an der Montierung koppeln.";
+        else if (!response.ok || data.ok === false) cameraNote = data.error || "Start abgelehnt";
+        else cameraNote = "";
+      } catch (err) {
+        cameraNote = "Start nicht gesendet";
+      }
+      await pollCamera();
+    }
+
+    async function stopCameraCapture() {
+      const headers = {};
+      if (mountCsrf) headers["X-Astro-Csrf"] = mountCsrf;
+      try {
+        const response = await fetch("/astro/capture/stop", {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) cameraNote = "Zuerst an der Montierung koppeln.";
+        else if (!response.ok || data.ok === false) cameraNote = data.error || "Stopp abgelehnt";
+        else cameraNote = "Stopp nach dem aktuellen Bild.";
+      } catch (err) {
+        cameraNote = "Stopp nicht gesendet";
+      }
+      await pollCamera();
+    }
+
     function showObjectList() {
       panelMode = "list";
       panelReturn = "home";
@@ -2465,6 +3093,15 @@
         closeDayTrack();
         return;
       }
+      if (panelMode === "camera") {
+        void closeCameraSession();
+        return;
+      }
+      if (panelMode === "sessions") {
+        if (sessionsReturn === "detail" && selectedItem) showObjectDetail(selectedItem);
+        else showHome();
+        return;
+      }
       if (panelMode === "search") {
         showObjectList();
         return;
@@ -2610,6 +3247,61 @@
         dashboardTexture.needsUpdate = true;
         return;
       }
+      if (panelMode === "sessions") {
+        const objectName = (selectedItem && (selectedItem.name || catalogQueryOf(selectedItem))) || "kein Objekt";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Sessions", 48, 28);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "24px sans-serif";
+        ctx.fillText(objectName, 48, 78);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "22px sans-serif";
+        if (sessionNote) ctx.fillText(String(sessionNote).slice(0, 90), 48, 112);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
+      if (panelMode === "camera") {
+        const job = cameraView && cameraView.job;
+        const cam = cameraView && cameraView.camera;
+        const session = cameraView && cameraView.session;
+        const linked = cam && cam.connected ? "Kamera verbunden" : "Kamera nicht verbunden";
+        const objectName = (job && job.catalog_key)
+          || (selectedItem && (selectedItem.name || selectedKey))
+          || "kein Objekt";
+        const sessionText = cameraView && cameraView.locked && session
+          ? `Session s${String(session.id).padStart(5, "0")}`
+          : (cameraDraft.session_label || ((cameraView && cameraView.session_message) || "keine Session"));
+        const shownExp = cameraView && cameraView.locked && job ? job.exposure_s : cameraDraft.exposure_s;
+        const shownIso = cameraView && cameraView.locked && job ? job.iso : cameraDraft.iso;
+        const shownGain = cameraView && cameraView.locked && job ? job.gain : cameraDraft.gain;
+        const shownFrames = cameraView && cameraView.locked && job ? job.planned : cameraDraft.frames;
+        const shownType = cameraView && cameraView.locked && job && job.image_type === "DARK"
+          ? "DARKS"
+          : (cameraDraft.image_type === "DARK" ? "DARKS" : "LIGHTS");
+        const paramText = `${shownType}  ·  ${shownExp != null ? shownExp + " s" : "— s"}  ·  ${shownIso != null ? "ISO " + shownIso : (shownGain != null ? "Gain " + shownGain : "ISO —")}  ·  ${shownFrames != null ? shownFrames + " Bilder" : "—"}`;
+        const stateText = job ? `${job.state}  ${job.saved}/${job.planned}` : "idle";
+        const fileText = job && job.current_file ? job.current_file : "";
+        const errText = cameraNote || (job && job.error) || (cam && cam.error) || "";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Kamera", 48, 28);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "24px sans-serif";
+        ctx.fillText(`${linked}  ·  ${objectName}`, 48, 78);
+        ctx.fillText(`${sessionText}  ·  ${stateText}`, 48, 112);
+        ctx.fillText(paramText, 48, 146);
+        if (fileText) ctx.fillText(fileText, 48, 180);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "22px sans-serif";
+        if (errText) ctx.fillText(String(errText).slice(0, 80), 48, 214);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
       if (panelMode === "mount") {
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
@@ -2711,6 +3403,10 @@
         ? `track|${trackItemKey}|${trackNote}|${skyClockLabel()}|${siteStem}`
         : panelMode === "mount"
         ? `mount|${mountView.lines.join("|")}|${questGotoNote}|${axisStatus}|${axisNote}|${axisReadout}|${axisRateIndex}|${skyPointMode}|${skyPick ? `${skyPick.ra}|${skyPick.dec}|${skyPick.blocked}|${skyPick.whenLabel}` : ""}`
+        : panelMode === "sessions"
+        ? `sessions|${sessionNote}|${sessionPickMode}|${sessionRowsData.map((row) => row.id).join(",")}|${catalogQueryOf(selectedItem)}`
+        : panelMode === "camera"
+        ? `camera|${cameraNote}|${cameraDraft.exposure_s}|${cameraDraft.iso}|${cameraDraft.gain}|${cameraDraft.frames}|${cameraView && cameraView.job ? cameraView.job.state : ""}|${cameraView && cameraView.locked}|${cameraView && cameraView.session_code}|${selectedKey}`
         : panelMode === "goto"
         ? `goto|${selectedKey}|${mountView.status}|${questGotoNote}|${mountPaired}`
         : panelMode === "pair"
@@ -2816,7 +3512,10 @@
     function setHoveredButton(button) {
       if (hoveredButton === button) return;
       if (hoveredButton) {
-        hoveredButton.material.color.setHex(prefTabs.includes(hoveredButton) ? tabColor(hoveredButton) : testRest);
+        const frameColor = frameTypeColor(hoveredButton);
+        hoveredButton.material.color.setHex(
+          frameColor != null ? frameColor : (prefTabs.includes(hoveredButton) ? tabColor(hoveredButton) : testRest)
+        );
       }
       hoveredButton = button;
       if (hoveredButton) hoveredButton.material.color.setHex(testHoverColor);
@@ -2875,13 +3574,32 @@
     }
 
     function syncPanelButtons() {
+      dragHandle.visible = true;
+      closeButton.visible = true;
       const prefs = panelMode === "prefs";
       const home = panelMode === "home";
       objectsButton.visible = home;
       skyMenuButton.visible = home;
       prefsButton.visible = home;
       mountButton.visible = home;
-      backButton.visible = panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount";
+      cameraButton.visible = home;
+      cameraDetailButton.visible = panelMode === "detail";
+      const onCamera = panelMode === "camera";
+      const cameraLocked = Boolean(cameraView && cameraView.locked);
+      const cameraPrompt = onCamera && cameraDarksPrompt && !cameraLocked;
+      for (const button of cameraControls) {
+        if (button === camCoverButton || button === camSkipDarksButton) continue;
+        button.visible = onCamera && !cameraLocked && !cameraPrompt && button !== camStopButton;
+      }
+      camCoverButton.visible = cameraPrompt;
+      camSkipDarksButton.visible = cameraPrompt;
+      camStopButton.visible = onCamera && cameraLocked;
+      if (onCamera) {
+        paintCameraLabels();
+        paintFrameTypeButtons();
+      }
+      paintSessionRows();
+      backButton.visible = (panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount" || panelMode === "camera" || panelMode === "sessions") && !cameraPrompt;
       const onMount = panelMode === "mount";
       backButton.position.x = onMount ? 0.16 : 0;
       skyPointButton.visible = onMount;
@@ -4432,6 +5150,7 @@
         return;
       }
       if (dashboard.visible) dashboard.updateWorldMatrix(true, true);
+      if (monitor.visible) monitor.updateWorldMatrix(true, true);
       for (const pointer of pointers) {
         const index = pointers.indexOf(pointer);
         const source = pointer.source;
@@ -4442,7 +5161,10 @@
         pointer.buttonHit = false;
         pointer.line.visible = ready && (aimActive() || (skyPointMode && panelMode === "mount"));
         if (!ready) {
-          if (source) pointerHits.delete(source);
+          if (source) {
+            pointerHits.delete(source);
+            monitorHits.delete(source);
+          }
           continue;
         }
         live.add(source);
@@ -4464,24 +5186,45 @@
         }
         if (!dashboard.visible) {
           pointerHits.delete(source);
-          continue;
-        }
-        pointerRaycaster.set(pointer.origin, pointer.direction);
-        const hits = pointerRaycaster.intersectObjects(pointerButtons, false);
-        let button = null;
-        for (const hit of hits) {
-          const object = hit.object;
-          if (object.visible && object.userData.action && object.parent === dashboard) {
-            button = object;
-            break;
+        } else {
+          pointerRaycaster.set(pointer.origin, pointer.direction);
+          const hits = pointerRaycaster.intersectObjects(pointerButtons, false);
+          let button = null;
+          for (const hit of hits) {
+            const object = hit.object;
+            if (object.visible && object.userData.action && object.parent === dashboard) {
+              button = object;
+              break;
+            }
+          }
+          if (button) {
+            pointer.buttonHit = true;
+            pointerHits.set(source, button);
+            nextHover = button;
+          } else {
+            pointerHits.delete(source);
           }
         }
-        if (button) {
-          pointer.buttonHit = true;
-          pointerHits.set(source, button);
-          nextHover = button;
+        if (monitor.visible) {
+          pointerRaycaster.set(pointer.origin, pointer.direction);
+          const hits = pointerRaycaster.intersectObjects(monitorButtons, false);
+          let button = null;
+          for (const hit of hits) {
+            const object = hit.object;
+            if (object.visible && object.userData.action && object.parent === monitor) {
+              button = object;
+              break;
+            }
+          }
+          if (button) {
+            pointer.buttonHit = true;
+            monitorHits.set(source, button);
+            if (!nextHover) nextHover = button;
+          } else {
+            monitorHits.delete(source);
+          }
         } else {
-          pointerHits.delete(source);
+          monitorHits.delete(source);
         }
       }
       if (movedIndex >= 0) {
@@ -4494,10 +5237,10 @@
       for (const source of pointerHits.keys()) {
         if (!live.has(source)) pointerHits.delete(source);
       }
-      if (!dashboard.visible) {
-        pointerHits.clear();
-        nextHover = null;
+      for (const source of monitorHits.keys()) {
+        if (!live.has(source)) monitorHits.delete(source);
       }
+      if (!dashboard.visible) pointerHits.clear();
       setHoveredButton(nextHover);
       updateSkyAim();
     }
@@ -4506,31 +5249,48 @@
       const source = event && event.inputSource;
       if (!dragSource && dragArm === source) dragArm = null;
       const pointer = pointers.find((item) => item.source === source);
-      if (!pointer || !pointer.ready || !dashboard.visible) return;
+      if (!pointer || !pointer.ready) return;
+      if (!dashboard.visible && !monitor.visible) return;
       pointerRaycaster.set(pointer.origin, pointer.direction);
-      const hits = pointerRaycaster.intersectObject(dragHandle, false);
-      if (!hits.length || !dragHandle.visible) return;
-      dashboard.updateMatrixWorld(true);
-      dragLocal.copy(dashboard.worldToLocal(hits[0].point.clone()));
-      dragDistance = hits[0].distance;
+      let choice = null;
+      if (dashboard.visible) {
+        const hits = pointerRaycaster.intersectObjects([closeButton, dragHandle], false);
+        const top = hits.find((item) => item.object.visible);
+        if (top && top.object === dragHandle) choice = { group: dashboard, hit: top };
+      }
+      if (monitor.visible) {
+        const hits = pointerRaycaster.intersectObjects([monitorHideButton, monitorDragButton], false);
+        const top = hits.find((item) => item.object.visible);
+        if (top && top.object === monitorDragButton && (!choice || top.distance < choice.hit.distance)) {
+          choice = { group: monitor, hit: top };
+        }
+      }
+      if (!choice) return;
+      dragGroup = choice.group;
+      dragGroup.updateMatrixWorld(true);
+      dragLocal.copy(dragGroup.worldToLocal(choice.hit.point.clone()));
+      dragDistance = choice.hit.distance;
       dragSource = source;
       dragArm = source;
     }
 
     function moveDraggedDashboard() {
-      if (!dragSource) return;
+      if (!dragSource || !dragGroup) return;
       const pointer = pointers.find((item) => item.source === dragSource);
       if (!pointer || !pointer.ready) return;
       renderer.xr.getCamera().getWorldPosition(dragHead);
       dragRayPoint.copy(pointer.origin).addScaledVector(pointer.direction, dragDistance);
-      dashboard.lookAt(dragHead);
-      dashboard.updateMatrixWorld(true);
-      dragGrabWorld.copy(dragLocal).applyMatrix4(dashboard.matrixWorld);
-      dashboard.position.add(dragRayPoint.sub(dragGrabWorld));
+      dragGroup.lookAt(dragHead);
+      dragGroup.updateMatrixWorld(true);
+      dragGrabWorld.copy(dragLocal).applyMatrix4(dragGroup.matrixWorld);
+      dragGroup.position.add(dragRayPoint.sub(dragGrabWorld));
     }
 
     function onDragEnd(event) {
-      if (event && event.inputSource === dragSource) dragSource = null;
+      if (event && event.inputSource === dragSource) {
+        dragSource = null;
+        dragGroup = null;
+      }
     }
 
     function onSelect(event) {
@@ -4538,6 +5298,15 @@
       if (dragArm && source === dragArm) {
         dragArm = null;
         dragSource = null;
+        dragGroup = null;
+        return;
+      }
+      const monitorHit = source && monitor.visible ? monitorHits.get(source) : null;
+      if (
+        monitorHit && monitorHit.visible && monitorHit.parent === monitor && monitorHit.userData.action
+      ) {
+        if (source) monitorHits.delete(source);
+        if (monitorHit.userData.action === "monitor-hide") hideMonitor();
         return;
       }
       const now = performance.now();
@@ -4548,6 +5317,10 @@
         hit && hit.visible && hit.parent === dashboard && hit.userData.action && dashboard.visible
       );
       if (source && !sameHand) pointerHits.delete(source);
+      if (sameHand && hit.userData.action === "close-panel") {
+        hideDashboard();
+        return;
+      }
       if (sameHand && hit.userData.action === "objects") {
         showObjectList();
         return;
@@ -4570,6 +5343,121 @@
       }
       if (sameHand && hit.userData.action === "mount") {
         showMount();
+        return;
+      }
+      if (sameHand && hit.userData.action === "camera") {
+        openCameraEntry();
+        return;
+      }
+      if (sameHand && hit.userData.action === "session-pick" && hit.userData.session) {
+        if (hit.userData.session.saved || hit.userData.session.lifecycle_status === "closed") {
+          sessionNote = hit.userData.session.note || "Session ist gespeichert.";
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        adoptSessionDraft(hit.userData.session);
+        cameraNote = "";
+        showCamera();
+        return;
+      }
+      if (sameHand && hit.userData.action === "session-profile") {
+        void createQuestSession(hit.userData.profileId);
+        return;
+      }
+      if (sameHand && hit.userData.action === "session-new") {
+        void createQuestSession(null);
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-monitor") {
+        if (cameraDraft.session_id != null) monitorSessionId = cameraDraft.session_id;
+        placeMonitor();
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-exp") {
+        if (!cameraLockedNow()) {
+          cameraDraft.exposure_s = stepList(cameraView && cameraView.exposure_steps_s, cameraDraft.exposure_s, hit.userData.dir);
+          cameraNote = "";
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+        }
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-iso") {
+        if (!cameraLockedNow()) {
+          const steps = cameraView && cameraView.iso_steps;
+          const adjustable = cameraView && cameraView.iso_adjustable === true && steps && steps.length > 1;
+          if (!adjustable) {
+            cameraNote = steps && steps.length ? "ISO fest vom Profil." : "Keine ISO-Stufen vom Server.";
+          } else {
+            cameraDraft.iso = stepList(steps, cameraDraft.iso, hit.userData.dir);
+            cameraDraft.gain = cameraDraft.iso;
+            cameraNote = "";
+          }
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+        }
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-count") {
+        if (!cameraLockedNow()) {
+          const min = cameraDraft.image_type === "DARK" ? 0 : ((cameraView && cameraView.frame_min) || 1);
+          const max = (cameraView && cameraView.frame_max) || 999;
+          const next = Number(cameraDraft.frames || 0) + Number(hit.userData.dir || 0);
+          cameraDraft.frames = Math.min(max, Math.max(min, next));
+          rememberFrameCount();
+          cameraNote = "";
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+        }
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-profile") {
+        adoptCameraProfile();
+        return;
+      }
+      if (sameHand && (hit.userData.action === "cam-lights" || hit.userData.action === "cam-darks")) {
+        if (!cameraLockedNow() && !cameraDarksPrompt) {
+          selectFrameType(hit.userData.action === "cam-darks" ? "DARK" : "LIGHT");
+          cameraNote = "";
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+        }
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-cover") {
+        cameraDarksPrompt = false;
+        cameraDraft.image_type = "DARK";
+        cameraDraft.frames = Number(cameraDraft.dark_frames || 0);
+        cameraNote = "";
+        if (cameraDraft.frames < 1) {
+          cameraNote = "Keine Darks gewählt.";
+          syncPanelButtons();
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        void startCameraCapture();
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-skip-darks") {
+        cameraDarksPrompt = false;
+        cameraNote = "Darks übersprungen.";
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-start") {
+        void startCameraCapture();
+        return;
+      }
+      if (sameHand && hit.userData.action === "cam-stop") {
+        void stopCameraCapture();
         return;
       }
       if (sameHand && hit.userData.action === "prefs-page") {
@@ -4741,13 +5629,18 @@
         showObjectDetail(aimedObject);
         return;
       }
-      if (dashboard.visible) {
-        dashboard.visible = false;
-        resetObjectPanel();
-        clearPointerHits();
-        return;
-      }
+      if (dashboard.visible) return;
       placeDashboard();
+    }
+
+    function hideDashboard() {
+      dashboard.visible = false;
+      if (dragGroup !== monitor) {
+        dragSource = null;
+        dragArm = null;
+        dragGroup = null;
+      }
+      clearPointerHits();
     }
 
     function placeDashboard() {
@@ -4765,6 +5658,139 @@
       dashboardPlaced = true;
       dashboardKey = "";
       refreshDashboard();
+    }
+
+    function hideMonitor() {
+      monitor.visible = false;
+      if (dragGroup === monitor) {
+        dragSource = null;
+        dragArm = null;
+        dragGroup = null;
+      }
+      monitorHits.clear();
+    }
+
+    function placeMonitor() {
+      const sid = monitorSessionId || cameraDraft.session_id;
+      if (sid != null) monitorSessionId = sid;
+      if (!monitorPlaced) {
+        if (dashboardPlaced) {
+          const offset = new THREE.Vector3(0.86, 0, 0);
+          dashboard.updateMatrixWorld(true);
+          dashboard.localToWorld(offset);
+          monitor.position.copy(offset);
+          monitor.quaternion.copy(dashboard.quaternion);
+        } else {
+          const xrCamera = renderer.xr.getCamera();
+          const headPos = new THREE.Vector3();
+          const headQuat = new THREE.Quaternion();
+          xrCamera.getWorldPosition(headPos);
+          xrCamera.getWorldQuaternion(headQuat);
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(headQuat);
+          monitor.position.copy(headPos).addScaledVector(forward, 1.75).addScaledVector(right, 0.7);
+          monitor.lookAt(headPos);
+        }
+        monitorPlaced = true;
+      }
+      monitor.visible = true;
+      void refreshMonitor();
+    }
+
+    function paintMonitor(text, bins) {
+      const ctx = monitorCanvas.getContext("2d");
+      ctx.clearRect(0, 0, monitorCanvas.width, monitorCanvas.height);
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, monitorCanvas.width, monitorCanvas.height);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "28px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const lines = String(text || "").split("\n");
+      lines.forEach((line, index) => ctx.fillText(line, 24, 16 + index * 34));
+      const counts = Array.isArray(bins) ? bins : [];
+      if (!counts.length) {
+        monitorTexture.needsUpdate = true;
+        return;
+      }
+      const peak = counts.reduce((max, count) => Math.max(max, Math.log1p(Number(count) || 0)), 0) || 1;
+      const left = 24;
+      const top = 200;
+      const width = monitorCanvas.width - 48;
+      const height = 140;
+      const bar = width / counts.length;
+      ctx.fillStyle = "#7dd3fc";
+      counts.forEach((count, index) => {
+        const share = Math.log1p(Number(count) || 0) / peak;
+        const barHeight = Math.max(1, share * height);
+        ctx.fillRect(left + index * bar, top + height - barHeight, Math.max(1, bar - 1), barHeight);
+      });
+      monitorTexture.needsUpdate = true;
+    }
+
+    async function refreshMonitor() {
+      if (!monitor.visible) return;
+      const sid = monitorSessionId || cameraDraft.session_id;
+      if (!sid) {
+        paintMonitor("LIGHT-PREVIEW\nKeine Session", null);
+        return;
+      }
+      try {
+        const response = await fetch(
+          `/astro/capture/preview?session_id=${encodeURIComponent(sid)}&source=${encodeURIComponent(monitorSource)}`,
+          { cache: "no-store", credentials: "same-origin" },
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!monitor.visible) return;
+        if (!response.ok || data.ok === false) {
+          paintMonitor(`LIGHT-PREVIEW\n${data.error || "Preview folgt"}`, null);
+          return;
+        }
+        const analysis = data.analysis || null;
+        const name = data.image_id || data.file_name || "";
+        if (data.preview_ready && data.preview_url && name && name !== monitorImageId) {
+          monitorImageId = name;
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            canvas.getContext("2d").drawImage(img, 0, 0);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.needsUpdate = true;
+            monitorImage.material.map = texture;
+            monitorImage.material.transparent = true;
+            monitorImage.material.color.setHex(0xffffff);
+            monitorImage.material.needsUpdate = true;
+            if (monitorMap) monitorMap.dispose();
+            monitorMap = texture;
+          };
+          img.onerror = () => {
+            paintMonitor(`${name}\nBild nicht geladen`, null);
+          };
+          img.src = data.preview_url;
+        }
+        const sourceName = monitorSources.includes(data.source) ? data.source : monitorSource;
+        if (!analysis) {
+          paintMonitor(`${sourceName}\n${name}\nStatistik folgt`, null);
+          return;
+        }
+        const sat = Number(analysis.saturated_fraction);
+        const satText = Number.isFinite(sat) ? `${(sat * 100).toFixed(3)} %` : "—";
+        paintMonitor(
+          [
+            sourceName,
+            name,
+            `Median ${Math.round(Number(analysis.background_median) || 0)}   Rauschen ${Math.round(Number(analysis.background_noise) || 0)}`,
+            `Max ${Math.round(Number(analysis.max_raw) || 0)}   99,9 % ${Math.round(Number(analysis.percentile_99_9) || 0)}`,
+            `Sättigung ${satText}   Schwarz ${Math.round(Number(analysis.black_level) || 0)}   Weiß ${Math.round(Number(analysis.white_level) || 0)}`,
+          ].join("\n"),
+          analysis.histogram_bins,
+        );
+      } catch (_err) {
+        paintMonitor("LIGHT-PREVIEW\nPreview nicht lesbar", null);
+      }
     }
 
     function mountClock(date) {
@@ -4883,6 +5909,9 @@
     useAppPanorama().then((ok) => { if (ok) loadTexture(); });
     pollMount();
     applyMountPoll();
+    setInterval(() => {
+      if (monitor.visible) void refreshMonitor();
+    }, 2000);
     renderer.setAnimationLoop((_time, frame) => {
       if (!renderer.xr.isPresenting) {
         applyLook();

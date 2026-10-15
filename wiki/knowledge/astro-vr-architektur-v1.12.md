@@ -1,7 +1,7 @@
 # Astro-VR Architektur v1.12 — Himmelspunkt
 
 > Quelle: Quest-Achse in [v1.11](astro-vr-architektur-v1.11.md)
-> Stand: **Abgenommen am 2026-10-13.** Feldtest des beschriebenen Umfangs. Name und Tour bleiben außerhalb.
+> Stand: **Abgenommen am 2026-10-13.** Stabile Referenz zusammen mit [v1.11](astro-vr-architektur-v1.11.md). Nächstes Kapitel: [v1.13](astro-vr-architektur-v1.13.md).
 
 Ein Punkt am Himmel kann die Zielkoordinaten eines GoTo liefern. Der Abzug übernimmt nur die Anzeige. Die Fahrt bleibt die bestehende Bestätigung. Ein Name und eine Tour sind nicht Teil dieses Schritts.
 
@@ -19,15 +19,28 @@ Die Seite kehrt nur die Abbildung der Himmelsschale um, einschließlich des Nord
 
 ## Abnahme
 
-Abgenommen am 2026-10-13 für den beschriebenen Umfang.
+Abgenommen am 2026-10-13 für den beschriebenen Umfang. Zusammen mit der manuellen Achse in v1.11 ist das der getestete Stand.
+
+| Kapitel | Funktion | Status |
+| --- | --- | --- |
+| XR-10a | Montierungsanzeige | Abgenommen |
+| XR-10b | Katalog-GoTo und STOP | Abgenommen |
+| v1.11 / XR-10c B2 | Manuelle Achse, STOP ACHSE, Unterbrechung der Quest | Abgenommen |
+| v1.12 | Freier Himmelspunkt | Abgenommen |
 
 | Feldprüfung | Ergebnis |
 | --- | --- |
-| Abzug zeigt Azimut, Höhe, Rektaszension und Deklination und sendet keine Fahrt | Bestanden |
-| GOTO PUNKT, danach GOTO BESTÄTIGEN fährt; ABBRECHEN sendet nichts | Bestanden |
+| Suchstrahl zeigt Azimut, Höhe, Rektaszension und Deklination und sendet keine Fahrt | Bestanden |
+| GOTO PUNKT, danach GOTO BESTÄTIGEN startet die Fahrt | Bestanden |
+| ABBRECHEN sendet keinen Fahrbefehl | Bestanden |
 | Punkt unter dem Horizont oder hinter der Gartenmaske wird abgelehnt | Bestanden |
 | Zeit live und festgehaltene Himmelszeit werden korrekt angezeigt | Bestanden |
+| Koordinatenumrechnung bleibt auf dem Server | Bestanden |
+
+## Referenz für spätere Kapitel
+
+Diese Fassung bleibt die Referenz, bevor eine weitere Funktion beginnt. Spätere Erweiterungen lassen die bestehende Koordinatenumrechnung, die Sicherheitsprüfungen und die Controllerbelegung unverändert. Die Umrechnung bleibt `az_alt_to_radec` auf dem Server. Horizont, Gartenmaske, PHD2, Parken und die Kopplung bleiben die Prüfungen des bestehenden Schwenks. `select` bleibt der Abzug, `squeeze` die optionale Zielhilfe.
 
 ## Nicht in diesem Schritt
 
-Kein gespeicherter Name, keine Tour, kein Schwenk durch den Abzug allein. Parken und Hibernate bleiben unberührt.
+Kein gespeicherter Name, keine Tour, kein Schwenk durch den Abzug allein. Parken und Hibernate sind nicht begonnen.

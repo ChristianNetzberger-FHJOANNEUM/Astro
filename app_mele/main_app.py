@@ -6,7 +6,6 @@ import atexit
 import asyncio
 import logging
 import sys
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from datetime import date, datetime, timezone
@@ -57,6 +56,8 @@ from mele.solar import (
 )
 from mele.prefs import load_prefs, prefs_path, save_prefs
 from mele.config import load_mele_settings, mele_yaml_path, save_site, save_storage_paths
+from mele.capture_frame import capture_one_frame
+from mele.capture_job import CaptureFrameResult, CaptureJobService, CaptureSnapshot, install_capture_routes
 from mele.capture_timing import append_capture_timing, read_capture_timing
 from mele.observe import gps_from_jpeg, list_location_jpegs, resolve_observer
 from mele.shadow_calibration import (
@@ -106,7 +107,8 @@ from mele.weather_safety import (
 from mele.astro_manager import (
     FRAME_TYPE_DARK,
     FRAME_TYPE_LIGHT,
-    bump_session_capture,
+    SessionCreateError,
+    create_object_session,
     create_session,
     delete_profile,
     delete_session,
@@ -130,6 +132,7 @@ from mele.astro_manager import (
     update_session_paths,
     upsert_profile,
 )
+from mele.frame_analysis import schedule_session_preview
 from mele.session_close import (
     SessionCloseError,
     close_imaging_session,
@@ -146,13 +149,11 @@ from mele.session_transfer import (
 from mele.preview_service import (
     PreviewError,
     StretchParams,
-    find_capture_files,
     find_fits_files,
     find_latest_focus,
     preview_for_session,
     roi_preview_for_session,
     session_preview_status,
-    wait_for_new_capture_file,
 )
 from mele.wiki_pages import index_payload, page_payload
 from mele.network import (
@@ -197,7 +198,7 @@ from mele.mount_motion import (
     slew_coordinates_deg,
     target_block_reason,
 )
-from mele.nina import NinaClient, NinaCommandResult, validate_slew_radec_deg
+from mele.nina import NinaClient, validate_slew_radec_deg
 from mele.sky import az_alt_to_radec
 from mele.nina_goto_log import save_goto_record
 from mele.horizon import (
@@ -345,23 +346,48 @@ def run_app(port: int | None = None) -> None:
 
     mount_mover.set_guard(block_probe=_axis_phd2_reason, on_halt=_on_axis_halt)
     ensure_manager_db(settings.astro_manager_db)
-    # S2 Idle-Guard: laufende MeLE-Captures (Multi-Frame), nicht nur NINA IsExposing
-    _capture_inflight_lock = threading.Lock()
-    _capture_inflight = {"n": 0}
 
-    def _capture_inflight_inc() -> int:
-        with _capture_inflight_lock:
-            _capture_inflight["n"] += 1
-            return int(_capture_inflight["n"])
+    def _job_capture_one(snapshot: CaptureSnapshot) -> CaptureFrameResult:
+        raw = capture_one_frame(
+            nina,
+            db_path=settings.astro_manager_db,
+            local_root=settings.local_capture_root,
+            archive_root=settings.archive_root,
+            session_id=snapshot.session_id,
+            catalog_key=snapshot.catalog_key,
+            display_name=snapshot.display_name,
+            exposure_s=snapshot.exposure_s,
+            gain=snapshot.gain,
+            image_type=snapshot.image_type,
+            local_path=snapshot.local_path,
+            archive_path=snapshot.archive_path,
+        )
+        return CaptureFrameResult(
+            ok=bool(raw.get("ok")),
+            error=str(raw.get("error") or ""),
+            file_name=raw.get("file_name"),
+            session_completed=raw.get("session_completed"),
+            session_planned=raw.get("session_planned"),
+        )
 
-    def _capture_inflight_dec() -> int:
-        with _capture_inflight_lock:
-            _capture_inflight["n"] = max(0, int(_capture_inflight["n"]) - 1)
-            return int(_capture_inflight["n"])
+    # Ein Auftrag pro Prozess. Der Zähler hält Session-Close während der Serie.
+    def _schedule_probe(snapshot: object, file_name: str) -> None:
+        schedule_session_preview(
+            getattr(snapshot, "local_path", ""),
+            session_id=int(getattr(snapshot, "session_id")),
+            exposure_s=getattr(snapshot, "exposure_s", None),
+            iso=getattr(snapshot, "iso", None),
+            file_name=file_name,
+        )
+
+    capture_jobs = CaptureJobService(
+        db_path=settings.astro_manager_db,
+        capture_one=_job_capture_one,
+        on_probe_light=_schedule_probe,
+    )
 
     def _capture_inflight_get() -> int:
-        with _capture_inflight_lock:
-            return int(_capture_inflight["n"])
+        return capture_jobs.inflight_count()
 
     @app.get("/pano-view")
     def pano_view() -> HTMLResponse:
@@ -462,12 +488,33 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/astro/sessions")
     async def astro_sessions_post(request: Request) -> JSONResponse:
+        via_edge = request.headers.get(EDGE_HEADER, "") == EDGE_VALUE
+        if via_edge:
+            denied = _mount_gate(request)
+            if denied is not None:
+                return denied
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"ok": False, "error": "JSON erwartet"}, status_code=400)
         if not isinstance(body, dict):
             return JSONResponse({"ok": False, "error": "JSON-Objekt erwartet"}, status_code=400)
+        if via_edge:
+            try:
+                session = create_object_session(
+                    catalog_key=str(body.get("catalog_key") or ""),
+                    display_name=str(body.get("display_name") or ""),
+                    profile_id=_optional_int_body(body.get("profile_id")),
+                    db_path=settings.astro_manager_db,
+                    local_root=settings.local_capture_root,
+                    archive_root=settings.archive_root,
+                )
+            except SessionCreateError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc), "code": exc.code, "profiles": exc.profiles},
+                    status_code=exc.status,
+                )
+            return JSONResponse({"ok": True, "message": "Session erstellt", "session": session.to_dict()})
         try:
             session = create_session(
                 catalog_key=str(body.get("catalog_key") or ""),
@@ -1057,296 +1104,72 @@ def run_app(port: int | None = None) -> None:
                 status_code=400,
             )
 
-        target = display_name or catalog_key
-        # Neue Session zuerst anlegen → echte Session-ID im Ordnerpfad
-        session: object | None = existing
-        if existing is None:
-            try:
-                session = create_session(
-                    catalog_key=catalog_key,
-                    profile_id=profile.id if profile else profile_id,
-                    lights_planned=int(params["frames"]),
-                    lights_completed=0,
-                    darks_planned=0,
-                    darks_completed=0,
-                    exposure_s=float(exposure_s),
-                    gain=params.get("gain"),
-                    iso=params.get("iso"),
-                    binning=str(params.get("binning") or ""),
-                    filter_name=str(params.get("filter_name") or ""),
-                    equipment=str(params.get("equipment") or ""),
-                    local_path="",
-                    archive_path="",
-                    archive_status="local",
-                    notes=f"NINA capture → {target}",
-                    db_path=settings.astro_manager_db,
-                    apply_profile=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                return JSONResponse({"ok": False, "error": f"Session anlegen: {exc}"}, status_code=500)
-
-        assert session is not None
-        sid = int(session.id)  # type: ignore[attr-defined]
-
-        # Session-Root …/Target/Datum/s#####/ (ohne LIGHTS/DARKS)
-        canonical_local = str(
-            suggested_local_session_dir(
-                catalog_key,
-                local_root=settings.local_capture_root,
-                display_name=display_name or None,
-                session_id=sid,
-            )
-        )
-        canonical_archive = str(
-            suggested_archive_session_dir(
-                catalog_key,
-                archive_root=settings.archive_root,
-                display_name=display_name or None,
-                session_id=sid,
-            )
-        )
-        body_local = str(body.get("local_path") or "").strip()
-        body_archive = str(body.get("archive_path") or "").strip()
-        existing_local = (existing.local_path if existing else "") or ""
-        existing_archive = (existing.archive_path if existing else "") or ""
-        raw_local = body_local or existing_local or canonical_local
-        # Veraltete DB-Pfade unter altem Root (\\NAS\…) nicht wiederverwenden
-        if body_archive:
-            raw_archive = body_archive
-        elif existing and path_under_root(existing_archive, settings.archive_root):
-            raw_archive = existing_archive
-        else:
-            raw_archive = (
-                str(resolve_archive_session_dir(existing, archive_root=settings.archive_root))
-                if existing is not None
-                else canonical_archive
-            )
-        session_local = str(ensure_session_subdir(raw_local, sid))
-        session_archive = str(ensure_session_subdir(raw_archive, sid))
-        capture_local = str(ensure_capture_dir(session_local, sid, frame_type=image_type))
-        capture_archive = str(ensure_capture_dir(session_archive, sid, frame_type=image_type))
-
-        try:
-            session = update_session_paths(
-                sid,
-                local_path=session_local,
-                archive_path=session_archive,
-                db_path=settings.astro_manager_db,
-            )
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"ok": False, "error": f"Session-Pfad: {exc}"}, status_code=500)
-
-        cam = nina.get_camera_info()
-        if not cam.api_online:
-            return JSONResponse(
-                {"ok": False, "api_online": False, "error": cam.error or "NINA offline", "camera": None},
-                status_code=502,
-            )
-        if cam.camera is None or not cam.camera.connected:
+        if not capture_jobs.try_begin_direct():
             return JSONResponse(
                 {
                     "ok": False,
-                    "api_online": True,
-                    "error": cam.error or "Kamera in NINA nicht verbunden",
-                    "camera": None if cam.camera is None else cam.camera.to_dict(),
+                    "error": "Es läuft bereits ein Aufnahmeauftrag.",
+                    "code": "busy",
                 },
                 status_code=409,
             )
-
         try:
-            Path(capture_local).mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return JSONResponse(
-                {"ok": False, "error": f"Lokalpfad nicht anlegbar: {exc}", "local_path": capture_local},
-                status_code=500,
-            )
+            target = display_name or catalog_key
+            session: object | None = existing
+            if existing is None:
+                try:
+                    session = create_session(
+                        catalog_key=catalog_key,
+                        profile_id=profile.id if profile else profile_id,
+                        lights_planned=int(params["frames"]),
+                        lights_completed=0,
+                        darks_planned=0,
+                        darks_completed=0,
+                        exposure_s=float(exposure_s),
+                        gain=params.get("gain"),
+                        iso=params.get("iso"),
+                        binning=str(params.get("binning") or ""),
+                        filter_name=str(params.get("filter_name") or ""),
+                        equipment=str(params.get("equipment") or ""),
+                        local_path="",
+                        archive_path="",
+                        archive_status="local",
+                        notes=f"NINA capture → {target}",
+                        db_path=settings.astro_manager_db,
+                        apply_profile=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return JSONResponse({"ok": False, "error": f"Session anlegen: {exc}"}, status_code=500)
 
-        dest = nina.prepare_mele_image_destination(capture_local)
-        if not dest["path"].ok:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": dest["path"].error or "NINA Image File Path fehlgeschlagen",
-                    "destination": {k: v.to_dict() for k, v in dest.items()},
-                    "local_path": capture_local,
-                },
-                status_code=502,
-            )
-        if not dest["pattern"].ok:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": dest["pattern"].error or "NINA File Pattern fehlgeschlagen",
-                    "destination": {k: v.to_dict() for k, v in dest.items()},
-                    "local_path": capture_local,
-                },
-                status_code=502,
-            )
-
-        _capture_inflight_inc()
-        try:
-            snap_sync = nina.sync_snapshot_controls(exposure_s=float(exposure_s), gain=gain)
-            target_for_nina = f"{target}_{session_dir_slug(sid)}"
-
-            # Vorherige Capture-Dateien merken (FITS und RAW/RW2)
-            files_before = {str(p) for p in find_capture_files(capture_local)}
-            t0 = time.monotonic()
-            t_expose_end: float | None = None
-            try:
-                # onlyAwait: HTTP kehrt nach Ende IsExposing zurück.
-                # Bei Lumix-Native laeuft der RW2-Download danach noch — wir warten
-                # unten explizit auf die Datei, bevor das naechste Frame startet.
-                result = nina.capture(
-                    duration_s=float(exposure_s),
+            assert session is not None
+            sid = int(session.id)  # type: ignore[attr-defined]
+            frame = await run.io_bound(
+                lambda: capture_one_frame(
+                    nina,
+                    db_path=settings.astro_manager_db,
+                    local_root=settings.local_capture_root,
+                    archive_root=settings.archive_root,
+                    session_id=sid,
+                    catalog_key=catalog_key,
+                    display_name=display_name,
+                    exposure_s=float(exposure_s),
                     gain=gain,
                     image_type=image_type,
-                    save=True,
-                    target_name=target_for_nina,
-                    wait_for_result=False,
-                    omit_image=True,
-                    only_await_capture_completion=True,
-                    skip_auto_stretch=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-            t_expose_end = time.monotonic()
-
-            # Immer auf neue Datei warten (auch bei HTTP-ok): Lumix-Download > Belichtung
-            wait_s = min(180.0, max(25.0, float(exposure_s) + 120.0))
-            # Bei Timeout der HTTP-Antwort trotzdem auf Datei hoffen
-            if (not result.ok) and "timeout" not in (result.error or "").lower():
-                # Echter Kamera-/API-Fehler: kurzer Nachlauf, falls Datei trotzdem kommt
-                wait_s = min(40.0, wait_s)
-
-            new_capture = await run.io_bound(
-                lambda: wait_for_new_capture_file(
-                    capture_local,
-                    before=files_before,
-                    timeout_s=wait_s,
-                    min_size_bytes=1024,
-                    stable_s=0.8,
+                    local_path=str(body.get("local_path") or ""),
+                    archive_path=str(body.get("archive_path") or ""),
                 )
             )
-            t_file = time.monotonic()
-            expose_s = (t_expose_end - t0) if t_expose_end is not None else None
-            post_s = (t_file - t_expose_end) if t_expose_end is not None else None
-            total_s = t_file - t0
-
-            nina_dl_s = None
-            camera_state = None
-            try:
-                cam_after = nina.get_camera_info()
-                if cam_after.camera is not None:
-                    nina_dl_s = cam_after.camera.last_download_time_s
-                    camera_state = cam_after.camera.camera_state
-            except Exception:  # noqa: BLE001
-                pass
-
-            timing_payload: dict | None = None
-            try:
-                timing_payload = append_capture_timing(
-                    session_local,
-                    session_id=sid,
-                    image_type=image_type,
-                    exposure_planned_s=float(exposure_s),
-                    expose_s=expose_s,
-                    post_s=post_s,
-                    total_s=total_s,
-                    file_name=new_capture.name if new_capture else None,
-                    file_path=str(new_capture) if new_capture else None,
-                    nina_last_download_s=nina_dl_s,
-                    camera_state=camera_state,
-                    ok=bool(new_capture is not None),
-                    note=("" if new_capture else "no_file"),
-                )
-            except Exception:  # noqa: BLE001
-                timing_payload = None
-
-            if new_capture is not None:
-                result = NinaCommandResult(
-                    ok=True,
-                    api_online=True,
-                    message=(
-                        result.message
-                        or f"Capture ok ({new_capture.name})"
-                    ),
-                    error="",
-                    status_code=200,
-                    request=result.request,
-                )
-            elif result.ok:
-                # Belichtung ok, aber keine Datei — naechstes Frame wuerde Downloads stoeren
-                result = NinaCommandResult(
-                    ok=False,
-                    api_online=True,
-                    message="",
-                    error=(
-                        "Belichtung ok, aber keine neue Datei (FITS/RW2) im Zielordner. "
-                        "Bei Lumix-Native: Download dauert oft länger — "
-                        f"Timeout {wait_s:.0f}s, Pfad {capture_local}"
-                    ),
-                    status_code=504,
-                    request=result.request,
-                )
-
-            if result.ok:
-                try:
-                    if existing is not None:
-                        note = str(existing.notes or "")
-                        if image_type == FRAME_TYPE_LIGHT:
-                            n = int(existing.lights_completed or existing.frames_completed or 0) + 1
-                            if "Wiederholung" not in note:
-                                note = (note + f" | Wiederholung ab Frame {n}").strip(" |")
-                        session = bump_session_capture(
-                            sid,
-                            frames_delta=1,
-                            frame_type=image_type,
-                            db_path=settings.astro_manager_db,
-                        )
-                        session = update_session_paths(
-                            sid,
-                            local_path=session_local,
-                            archive_path=session_archive,
-                            notes=note,
-                            db_path=settings.astro_manager_db,
-                        )
-                    else:
-                        session = bump_session_capture(
-                            sid,
-                            frames_delta=1,
-                            frame_type=image_type,
-                            db_path=settings.astro_manager_db,
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    return JSONResponse(
-                        {
-                            "ok": True,
-                            "capture": result.to_dict(),
-                            "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
-                            "warning": f"Capture ok, Session-Update fehlgeschlagen: {exc}",
-                            "camera": cam.camera.to_dict(),
-                            "local_path": session_local,
-                            "capture_path": capture_local,
-                            "capture_file": str(new_capture) if new_capture else None,
-                            "image_type": image_type,
-                        }
-                    )
-
-            preview_payload: dict | None = None
-            preview_error: str | None = None
-            if result.ok and make_preview:
+            preview_payload = None
+            preview_error = None
+            if frame.get("ok") and make_preview and frame.get("capture_file"):
                 try:
                     from mele.preview_service import generate_preview
 
+                    src = frame["capture_file"]
+                    session_local = str(frame.get("local_path") or "")
+
                     def _preview_from_capture():
-                        src = new_capture
-                        if src is None or not Path(src).is_file():
-                            raise PreviewError("Keine Capture-Datei für Preview")
-                        return generate_preview(
-                            src,
-                            session_dir=session_local,
-                            force=True,
-                        )
+                        return generate_preview(src, session_dir=session_local, force=True)
 
                     prev = await run.io_bound(_preview_from_capture)
                     preview_payload = _session_preview_payload(sid, prev)
@@ -1355,53 +1178,43 @@ def run_app(port: int | None = None) -> None:
                 except Exception as exc:  # noqa: BLE001
                     preview_error = f"Preview fehlgeschlagen: {exc}"
 
-            status = 200 if result.ok else 502
+            session_obj = frame.get("session")
+            status = int(frame.get("status_code") or (200 if frame.get("ok") else 502))
+            file_name = frame.get("file_name")
+            capture_path = str(frame.get("capture_path") or "")
             return JSONResponse(
                 {
-                    "ok": result.ok,
-                    "capture": result.to_dict(),
-                    "session": None if session is None else session.to_dict(),  # type: ignore[union-attr]
-                    "camera": cam.camera.to_dict(),
-                    "image_file_path": capture_local,
-                    "local_path": session_local,
-                    "capture_path": capture_local,
-                    "capture_file": str(new_capture) if new_capture else None,
-                    "archive_capture_path": capture_archive,
-                    "image_type": image_type,
-                    "session_folder": session_dir_slug(sid),
+                    "ok": bool(frame.get("ok")),
+                    "error": frame.get("error") or "",
+                    "warning": frame.get("warning") or "",
+                    "code": frame.get("code") or "",
+                    "session": None if session_obj is None else session_obj.to_dict(),
+                    "camera": frame.get("camera"),
+                    "image_file_path": capture_path,
+                    "local_path": frame.get("local_path") or "",
+                    "capture_path": capture_path,
+                    "capture_file": frame.get("capture_file"),
+                    "archive_capture_path": frame.get("archive_capture_path") or "",
+                    "image_type": frame.get("image_type") or image_type,
+                    "session_folder": frame.get("session_folder") or "",
                     "resolved_params": params,
-                    "destination": {k: v.to_dict() for k, v in dest.items()},
-                    "snap_sync": {k: v.to_dict() for k, v in snap_sync.items()},
+                    "destination": frame.get("destination"),
+                    "snap_sync": frame.get("snap_sync"),
                     "reused_session": existing is not None,
                     "make_preview": make_preview,
                     "preview": preview_payload,
                     "preview_error": preview_error,
-                    "timing": None if timing_payload is None else {
-                        "expose_s": expose_s,
-                        "post_s": post_s,
-                        "total_s": total_s,
-                        "summary": timing_payload.get("summary"),
-                        "path": str(Path(session_local) / "capture-timing.json"),
-                    },
-                    "error": result.error,
+                    "timing": frame.get("timing"),
+                    "api_online": frame.get("api_online"),
                     "note": (
-                        f"NINA speichert unter {capture_local}; "
-                        f"Session-Root …/{session_dir_slug(sid)}/; "
-                        f"Typ {image_type}; "
-                        + (
-                            f"Datei {new_capture.name}; "
-                            if new_capture
-                            else "keine neue Datei; "
-                        )
-                        + "naechstes Frame erst nach stabilem Download."
+                        f"Einzelbild über capture_one_frame; Serie über /astro/capture/start. "
+                        + (f"Datei {file_name}." if file_name else "Keine neue Datei.")
                     ),
                 },
                 status_code=status,
             )
-
         finally:
-            _capture_inflight_dec()
-
+            capture_jobs.end_direct()
     @app.get("/nina/mount")
     def nina_mount() -> JSONResponse:
         """Mount-Telemetrie via NINA Advanced API."""
@@ -1471,6 +1284,53 @@ def run_app(port: int | None = None) -> None:
         if verdict:
             return None
         return JSONResponse({"ok": False, "error": "Keine Montierungsberechtigung"}, status_code=401)
+
+    def _camera_payload() -> dict:
+        try:
+            return nina.get_camera_info().to_dict()
+        except Exception as exc:  # noqa: BLE001
+            return {"api_online": False, "error": str(exc) or "NinaClient-Fehler", "camera": None}
+
+    def _close_capture_session(session_id: int) -> tuple[int, dict]:
+        try:
+            result = close_imaging_session(
+                int(session_id),
+                nina_client=nina,
+                me_capture_inflight=_capture_inflight_get(),
+                weather_server_url=settings.local_weather_server_url,
+                poll_interval_s=settings.local_weather_poll_interval_s,
+                db_path=settings.astro_manager_db,
+            )
+        except SessionCloseError as exc:
+            payload: dict = {"ok": False, "error": str(exc)}
+            if exc.idle is not None:
+                payload["idle"] = exc.idle.to_dict()
+            return 409, payload
+        except ValueError as exc:
+            return 404, {"ok": False, "error": str(exc)}
+        payload = {"ok": True, **result.to_dict()}
+        session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+        local_path = str(session.get("local_path") or "")
+        closed_id = session.get("id")
+        if local_path and closed_id is not None:
+            try:
+                schedule_session_preview(
+                    local_path,
+                    session_id=int(closed_id),
+                    exposure_s=session.get("exposure_s"),
+                    iso=session.get("iso"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return 200, payload
+
+    install_capture_routes(
+        app,
+        capture_jobs,
+        gate=_mount_gate,
+        camera_info=_camera_payload,
+        close_session=_close_capture_session,
+    )
 
     def _local_desktop(request: Request) -> bool:
         return authorization(

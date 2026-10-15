@@ -95,11 +95,20 @@ sections:
         title: Astro-VR Architektur v1.10 (XR-10c Stufe A Totmann)
         file: knowledge/astro-vr-architektur-v1.10.md
       - id: astro-vr-architektur-v1.11
-        title: Astro-VR Architektur v1.11 (XR-10c Stufe B2 Quest-Achse)
+        title: Astro-VR Architektur v1.11 (XR-10c Stufe B2, abgenommen)
         file: knowledge/astro-vr-architektur-v1.11.md
       - id: astro-vr-architektur-v1.12
-        title: Astro-VR Architektur v1.12 (Himmelspunkt)
+        title: Astro-VR Architektur v1.12 (Himmelspunkt, abgenommen)
         file: knowledge/astro-vr-architektur-v1.12.md
+      - id: astro-vr-architektur-v1.13
+        title: Astro-VR Architektur v1.13 (Kamera, Quest-Tafel, abgenommen)
+        file: knowledge/astro-vr-architektur-v1.13.md
+      - id: astro-vr-architektur-v1.14
+        title: Astro-VR Architektur v1.14 (Tafel, Kamera, Monitor)
+        file: knowledge/astro-vr-architektur-v1.14.md
+      - id: astro-vr-architektur-v1.15
+        title: Astro-VR Architektur v1.15 (Sessionansicht, Konzept)
+        file: knowledge/astro-vr-architektur-v1.15.md
       - id: astro-vr-desktop-inventar-v0.1
         title: Astro-VR Desktop-Inventar v0.1 (XR-8a)
         file: knowledge/astro-vr-desktop-inventar-v0.1.md

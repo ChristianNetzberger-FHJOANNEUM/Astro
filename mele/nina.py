@@ -135,9 +135,12 @@ class CameraInfo:
     can_set_offset: bool = False
     can_set_temperature: bool = False
     battery: float | None = None
+    gains: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["gains"] = list(self.gains)
+        return data
 
 
 @dataclass(frozen=True)
@@ -254,6 +257,30 @@ def parse_mount_payload(payload: Any) -> NinaMountStatus:
     return NinaMountStatus(api_online=True, error="", mount=mount)
 
 
+def _gain_steps(value: Any) -> tuple[int, ...]:
+    """NINA-Gains als ganze Zahlen. Keine Stufen aus Min/Max ableiten."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    steps: list[int] = []
+    seen: set[int] = set()
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            continue
+        if not number.is_integer() or number <= 0:
+            continue
+        step = int(number)
+        if step in seen:
+            continue
+        seen.add(step)
+        steps.append(step)
+    steps.sort()
+    return tuple(steps)
+
+
 def parse_camera_payload(payload: Any) -> NinaCameraStatus:
     """Parst /equipment/camera/info. Unbekannte Felder werden ignoriert."""
     if not isinstance(payload, dict):
@@ -315,6 +342,7 @@ def parse_camera_payload(payload: Any) -> NinaCameraStatus:
         can_set_offset=_bool(response.get("CanSetOffset"), False),
         can_set_temperature=_bool(response.get("CanSetTemperature"), False),
         battery=_finite(response.get("Battery")),
+        gains=_gain_steps(response.get("Gains")),
     )
     return NinaCameraStatus(api_online=True, error="", camera=camera)
 

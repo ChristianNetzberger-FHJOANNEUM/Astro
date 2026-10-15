@@ -47,7 +47,7 @@ Empfohlene Reihenfolge, keine starre Kette. Ein Raumschiff-Experiment darf paral
 | XR-7 | Schwebende Statuspanels: Wetter, Montierung, Guiding, Vorschau. Nur lesen | mittel | `GEPLANT` |
 | XR-8 | Zuerst Konzept: Inventar der Desktop-Werkzeuge und Panelgruppen. Keine Gerätebefehle vor der Abstimmung | später | `KONZEPT` |
 | XR-9 | Eigenes Raumschiff oder eine Brücke | experimentell | `EXPERIMENTELL` |
-| XR-10 | Montierungsintegration über NINA. Zuerst nur lesen, Steuerung erst nach eigener Sperre | jetzt | XR-10a, XR-10b, XR-10c B2 und Himmelspunkt abgenommen. Name und Tour nicht enthalten. Parken nicht begonnen |
+| XR-10 | Montierungsintegration über NINA. Zuerst nur lesen, Steuerung erst nach eigener Sperre | jetzt | XR-10a, XR-10b, XR-10c B2, Himmelspunkt und die Quest-Kamera v1.13 abgenommen. Name, Tour und Parken nicht begonnen |
 | XR-20 | Flug, Monde, Sonnensystem | langfristig | `EXPERIMENTELL` |
 
 XR-1 ist als eigene Seite `/vr-view` in der MeLE-App. Ohne Parameter verwendet sie das in der App geladene Panorama (`/vr/current`), derselbe Norden wie die 360-Ansicht. Ein Knopf **VR** öffnet dasselbe Bild. `pano.html` bleibt unverändert. Am PC: Mausziehen. Auf der Quest läuft Enter VR über `https://vr.netzberger.at:8443/vr-view`. Port 8082 bleibt HTTP. Was nach einem Neustart noch von Hand gestartet werden muss, steht im [Astro-VR Dauerbetrieb](astro-vr-dauerbetrieb.md). RAW und FITS werden nie direkt als WebGL-Textur geladen. Ein positioniertes Foto ist kein 3D-Modell des Objekts. Ein RA/Dec-Mittelpunkt allein reicht für XR-5 nicht.
