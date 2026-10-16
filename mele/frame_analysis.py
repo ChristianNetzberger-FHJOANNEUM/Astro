@@ -27,11 +27,11 @@ from mele.preview_service import (
 log = logging.getLogger(__name__)
 
 SOURCE_LIGHT_PREVIEW = "light_preview"
+SOURCE_GUIDE_PREVIEW = "phd2_fullframe"
+SOURCE_GUIDE_STAR = "phd2_star"
 MONITOR_SOURCES = (
     SOURCE_LIGHT_PREVIEW,
-    "phd2_fullframe",
-    "phd2_star",
-    "plate_solve",
+    SOURCE_GUIDE_PREVIEW,
 )
 HISTOGRAM_BINS = 64
 _MAD_TO_SIGMA = 1.4826
@@ -245,6 +245,71 @@ def _public_record(record: dict[str, Any], *, session_id: int, preview_url: str)
         "preview_ready": True,
         "preview_url": preview_url,
     }
+
+
+def guide_status_text(error: str, *, star: bool = False) -> str:
+    """Kurzer Status. Die Light-Vorschau bleibt unangetastet."""
+    text = str(error or "").lower()
+    if any(word in text for word in ("offline", "connection", "timeout", "connect")):
+        return "PHD2 läuft nicht"
+    if star:
+        return "Kein Leitstern"
+    if any(word in text for word in ("filename", "empty", "no image", "incomplete")):
+        return "Kein Guiding-Bild"
+    return "Guiding-Bild nicht verfügbar"
+
+
+def read_guide_preview(fetch_jpeg, *, source: str = SOURCE_GUIDE_PREVIEW) -> tuple[int, dict[str, Any]]:
+    """Liest das vorhandene PHD2-JPEG. Kein Histogramm und keine RAW-Statistik."""
+    star = source == SOURCE_GUIDE_STAR
+    missing = "Kein Leitstern" if star else "Kein Guiding-Bild"
+    if fetch_jpeg is None:
+        return 404, {
+            "ok": False,
+            "source": source,
+            "error": "Quelle noch nicht vorhanden",
+            "preview_ready": False,
+            "analysis": None,
+            "sources": list(MONITOR_SOURCES),
+        }
+    try:
+        jpeg, meta = fetch_jpeg()
+    except Exception as exc:  # noqa: BLE001
+        return 200, {
+            "ok": False,
+            "source": source,
+            "error": guide_status_text(str(exc), star=star),
+            "preview_ready": False,
+            "analysis": None,
+            "sources": list(MONITOR_SOURCES),
+        }
+    if not jpeg:
+        return 200, {
+            "ok": False,
+            "source": source,
+            "error": missing,
+            "preview_ready": False,
+            "analysis": None,
+            "sources": list(MONITOR_SOURCES),
+        }
+    stamp = int(jpeg.__len__())
+    token = f"{stamp}-{id(jpeg)}"
+    info = meta if isinstance(meta, dict) else {}
+    payload = {
+        "ok": True,
+        "source": source,
+        "image_id": f"phd2-{token}",
+        "file_name": "Leitstern" if star else "PHD2",
+        "preview_ready": True,
+        "preview_url": f"/astro/capture/preview/file?source={source}&v={token}",
+        "analysis": None,
+        "connection": str(info.get("connection") or ""),
+        "sources": list(MONITOR_SOURCES),
+    }
+    if star:
+        payload["hfd"] = info.get("hfd")
+        payload["snr"] = info.get("snr")
+    return 200, payload
 
 
 def read_light_preview(

@@ -191,6 +191,12 @@ def test_vr_camera_panel_reuses_the_job_and_leaves_the_mount_bindings() -> None:
     assert "selectFrameType" in page
     assert "cameraDraft.dark_frames" in page
     assert "savedSessionRow" in page
+    assert "showSessionView" in page
+    assert 'makeTextButton("MONITOR", "session-monitor"' in page
+    assert 'panelMode === "session-view"' in page
+    closed = page[page.index('hit.userData.action === "session-pick"'):page.index('hit.userData.action === "session-profile"')]
+    assert "showSessionView" in closed
+    assert "showCamera" not in closed.split("return;")[0]
     assert "/astro/capture/session-close" in page
     assert "closeCameraSession" in page
     assert "HIMMELSPUNKT" in page
@@ -208,8 +214,27 @@ def test_vr_camera_panel_reuses_the_job_and_leaves_the_mount_bindings() -> None:
     assert "path /nina " not in caddy
     session_read = caddy[caddy.index("@session_read"):caddy.index("handle @session_read")]
     assert "/astro/sessions" in session_read
+    assert "/astro/imaging-model" in session_read
     session_handle = caddy[caddy.index("handle @session_control"):caddy.index("handle @session_control") + 280]
     assert "X-Astro-Edge" in session_handle
+    phd2_read = caddy[caddy.index("@phd2_read"):caddy.index("handle @phd2_read")]
+    assert "/phd2/status" in phd2_read and "/phd2/exposures" in phd2_read
+    phd2_control = caddy[caddy.index("@phd2_control"):caddy.index("handle @phd2_control")]
+    assert "/phd2/loop" in phd2_control and "/phd2/guide" in phd2_control and "/phd2/stop" in phd2_control
+    assert "/phd2/image" not in phd2_control
+    assert 'makeTextButton("GUIDING", "guide-open"' in page
+    assert 'makeTextButton("NEU", "guide-recal"' in page
+    assert "panelMode === \"guide\"" in page
+    assert "alert_msg" in page
+    guide_start = page[page.index('action === "guide-start"'):page.index('action === "guide-pause"')]
+    assert "recalibrate: false" in guide_start
+    assert "selectedItem" not in guide_start
+    guide_recal = page[page.index('action === "guide-recal"'):page.index('action === "guide-pause"')]
+    assert "recalibrate: true" in guide_recal
+    assert "selectedItem" not in guide_recal
+    leave = page[page.index("function leaveGuide"):page.index("function showCamera")]
+    assert "/phd2/stop" not in leave
+    assert "fetch(" not in leave
 
 
 def test_dashboard_closes_only_through_its_own_button() -> None:
@@ -246,50 +271,51 @@ def test_dashboard_closes_only_through_its_own_button() -> None:
     assert "/astro/capture/session-close" not in hide_monitor
 
 
-def test_quest_session_create_keeps_object_profile_and_paths(tmp_path: Path) -> None:
+def test_quest_session_create_copies_recipe_without_frame_count(tmp_path: Path) -> None:
+    from mele.camera_model import list_cameras, list_configs, list_recipes
+
     db = _db(tmp_path)
-    own = upsert_profile(catalog_key="M31", label="S5", exposure_s=12.5, iso=200, frames=3, db_path=db)
-    foreign = upsert_profile(catalog_key="M42", label="fremd", exposure_s=1, frames=1, db_path=db)
     local = tmp_path / "local"
     archive = tmp_path / "archive"
+    with pytest.raises(SessionCreateError) as missing:
+        create_object_session(
+            catalog_key="M31",
+            display_name="Andromeda",
+            db_path=db,
+            local_root=local,
+            archive_root=archive,
+        )
+    assert missing.value.code == "recipe_required"
+    camera = list_cameras(db_path=db)[0]
+    config = list_configs(camera.id, db_path=db)[0]
+    recipe = next(item for item in list_recipes(db_path=db) if item.name == "Kurz – 2 s")
     session = create_object_session(
         catalog_key="M31",
         display_name="Andromeda",
+        camera_id=camera.id,
+        camera_config_id=config.id,
+        recipe_id=recipe.id,
         db_path=db,
         local_root=local,
         archive_root=archive,
     )
     assert session.catalog_key == "M31"
-    assert session.profile_id == own.id
-    assert session.exposure_s == 12.5
-    assert session.iso == 200
+    assert session.profile_id is None
+    assert session.camera_id == camera.id
+    assert session.recipe_id == recipe.id
+    assert session.exposure_s == 2.0
+    assert session.iso == 640
+    assert session.lights_planned is None
+    assert session.equipment == "Lumix S5IIX"
     assert session.local_path.startswith(str(local))
     assert f"s{session.id:05d}" in session.local_path.replace("\\", "/")
     assert session.archive_path.startswith(str(archive))
-    with pytest.raises(SessionCreateError) as mismatch:
+    with pytest.raises(SessionCreateError) as unknown:
         create_object_session(
             catalog_key="M31",
-            profile_id=foreign.id,
+            recipe_id=9999,
             db_path=db,
             local_root=local,
             archive_root=archive,
         )
-    assert mismatch.value.code == "profile_mismatch"
-    second = upsert_profile(catalog_key="M31", label="kurz", exposure_s=2, frames=1, db_path=db)
-    with pytest.raises(SessionCreateError) as ambiguous:
-        create_object_session(
-            catalog_key="M31",
-            db_path=db,
-            local_root=local,
-            archive_root=archive,
-        )
-    assert ambiguous.value.code == "profile_ambiguous"
-    chosen = create_object_session(
-        catalog_key="M31",
-        profile_id=second.id,
-        db_path=db,
-        local_root=local,
-        archive_root=archive,
-    )
-    assert chosen.profile_id == second.id
-    assert chosen.catalog_key == "M31"
+    assert unknown.value.code == "recipe_missing"

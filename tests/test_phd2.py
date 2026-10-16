@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -207,11 +209,69 @@ def test_mount_alert_classified() -> None:
     assert not is_mount_alert_message("Calibration was too far from equator")
     client = Phd2Client(host="127.0.0.1", port=9)
     client._sock = object()  # type: ignore[assignment]
-    client._handle_message({"Event": "Alert", "Msg": "PulseGuide command failed"})
-    client._handle_message({"Event": "Alert", "Msg": "Calibration was too far from equator"})
+    client._handle_message({"Event": "Alert", "Msg": "PulseGuide command failed", "Type": "error"})
+    client._handle_message({"Event": "Alert", "Msg": "Calibration was too far from equator", "Type": "warning"})
     kinds = [e["kind"] for e in client.events()["events"]]
     assert "MOUNT_ERROR" in kinds
     assert "ALERT" in kinds
+    status = client.get_status()
+    assert status.alert_msg == "Calibration was too far from equator"
+    assert status.alert_type == "warning"
+    client._handle_message({"Event": "StartGuiding"})
+    assert client.get_status().alert_msg == ""
+
+
+def test_guide_alert_clears_when_star_returns_or_calibration_starts() -> None:
+    client = Phd2Client(host="127.0.0.1", port=9)
+    client._sock = object()  # type: ignore[assignment]
+    client._handle_message({"Event": "AppState", "State": "Guiding"})
+    client._handle_message({"Event": "StarLost"})
+    client._handle_message({"Event": "Alert", "Msg": "Star lost", "Type": "error"})
+    assert client.get_status().alert_msg == "Star lost"
+    client._handle_message({"Event": "GuideStep", "Frame": 2, "SNR": 40.0, "RADistanceRaw": 0.1, "DECDistanceRaw": 0.1})
+    assert client.get_status().alert_msg == ""
+    client._handle_message({"Event": "Alert", "Msg": "Guiding stopped", "Type": "error"})
+    client._handle_message({"Event": "StartCalibration", "Mount": "Mount"})
+    assert client.get_status().alert_msg == ""
+    assert client.get_status().connection == "CALIBRATING"
+
+
+def test_calibration_progress_and_result_do_not_need_a_target() -> None:
+    client = Phd2Client(host="127.0.0.1", port=9)
+    client._sock = object()  # type: ignore[assignment]
+    client._handle_message({"Event": "Calibrating", "dir": "West", "step": 3, "State": "West step 3"})
+    status = client.get_status()
+    assert status.connection == "CALIBRATING"
+    assert status.cal_progress == "West 3"
+    client._handle_message({"Event": "Calibrating", "dir": "East", "step": 1})
+    assert client.get_status().cal_progress == "Ost 1"
+    client._handle_message({"Event": "CalibrationComplete", "Mount": "Mount"})
+    done = client.get_status()
+    assert done.calibration_state == "AVAILABLE"
+    assert done.cal_progress == ""
+    client._handle_message({"Event": "CalibrationFailed", "Reason": "star lost"})
+    failed = client.get_status()
+    assert failed.calibration_state == "NONE"
+    assert failed.alert_msg == "star lost"
+    assert failed.alert_type == "error"
+
+
+def test_guide_command_carries_no_sky_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = Phd2Client(host="127.0.0.1", port=9)
+    seen: list[tuple[str, object]] = []
+
+    def fake_call(method, params=None, *, timeout_s=8.0):  # noqa: ANN001, ARG001
+        seen.append((method, params))
+        return {}
+
+    monkeypatch.setattr(client, "call", fake_call)
+    client.guide(recalibrate=False)
+    client.guide(recalibrate=True)
+    assert seen[0][0] == "guide"
+    assert seen[1][0] == "guide"
+    assert list(seen[0][1]) == [{"pixels": 2.0, "time": 10, "timeout": 60}]  # type: ignore[index]
+    assert seen[1][1][1] is True  # type: ignore[index]
+    assert "ra" not in seen[0][1][0] and "dec" not in seen[0][1][0]  # type: ignore[index]
 
 
 def test_calibration_available_from_api(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -316,3 +376,55 @@ def test_star_image_decode_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "call", fake_call)
     jpeg = client._star_jpeg(star_size=16)
     assert jpeg[:2] == b"\xff\xd8"
+    client._star_jpeg(star_size=16)
+    assert client._star_error == ""
+
+
+def test_fullframe_interval_floor_is_four_seconds() -> None:
+    client = Phd2Client()
+    client.set_fullframe_min_interval(0.2)
+    assert client._fullframe_min_interval_s == 4.0
+
+
+def test_fullframe_one_write_serves_waiters_until_the_gap_ends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = Phd2Client()
+    fits = tmp_path / "frame.fits"
+    fits.write_bytes(b"not-read")
+    calls = {"n": 0}
+    entered = threading.Event()
+    release = threading.Event()
+
+    def save_image() -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            assert release.wait(2)
+        return str(fits)
+
+    monkeypatch.setattr(client, "save_image", save_image)
+    monkeypatch.setattr("mele.phd2._fits_path_to_jpeg", lambda *_args, **_kwargs: b"jpeg")
+
+    first: dict[str, bytes] = {}
+    second: dict[str, bytes] = {}
+
+    def run(box: dict[str, bytes]) -> None:
+        box["jpeg"] = client._fullframe_jpeg(max_width=1280)
+
+    ahead = threading.Thread(target=run, args=(first,))
+    behind = threading.Thread(target=run, args=(second,))
+    ahead.start()
+    assert entered.wait(2)
+    behind.start()
+    time.sleep(0.05)
+    assert calls["n"] == 1
+    release.set()
+    ahead.join(2)
+    behind.join(2)
+    assert calls["n"] == 1
+    assert first["jpeg"] == b"jpeg"
+    assert second["jpeg"] == b"jpeg"
+    assert client._fullframe_jpeg(max_width=1280) == b"jpeg"
+    assert calls["n"] == 1
+    client._last_fullframe_mono = time.monotonic() - 5
+    assert client._fullframe_jpeg(max_width=1280) == b"jpeg"
+    assert calls["n"] == 2

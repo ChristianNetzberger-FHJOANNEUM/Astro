@@ -99,6 +99,7 @@
       aimMotion: 0.01,
       aimRotWeight: 0.2,
       panelScale: 1.5,
+      monitorScale: 1,
       panoBrightness: 100,
     };
     const controlDefaults = { dashboard: "select", aimToggle: "" };
@@ -117,6 +118,7 @@
       aimMotion: vrDefaults.aimMotion,
       aimRotWeight: vrDefaults.aimRotWeight,
       panelScale: vrDefaults.panelScale,
+      monitorScale: vrDefaults.monitorScale,
       panoBrightness: vrDefaults.panoBrightness,
     };
     const controlRoles = {
@@ -912,6 +914,8 @@
     paintMenuButton(cameraButton, "KAMERA", "Aufnahmeauftrag");
     const cameraDetailButton = makeTextButton("KAMERA", "camera", 0.22, -0.205, 0.16, 0.05);
     cameraDetailButton.visible = false;
+    const guideDetailButton = makeTextButton("GUIDING", "guide-open", -0.22, -0.205, 0.16, 0.05);
+    guideDetailButton.visible = false;
     const backButton = makeTextButton("ZURÜCK", "back", 0, -0.205, 0.28, 0.05);
     const skyPointButton = makeTextButton("HIMMELSPUNKT", "quest-sky-point", -0.16, -0.205, 0.28, 0.040);
     skyPointButton.visible = false;
@@ -1023,10 +1027,11 @@
     makePrefRow("bild", "mark", prefRowY[1], "hold");
     makePrefRow("bild", "panel", prefRowY[2], "step");
     makePrefRow("bild", "pano", prefRowY[3], "step");
+    makePrefRow("bild", "monitor", -0.120, "step");
     makePrefRow("tasten", "dashboard", prefRowY[0], "cycle");
     makePrefRow("tasten", "aim", prefRowY[1], "cycle");
-    const prefReset = makeTextButton("STANDARD", "prefs-reset", -0.13, -0.148, 0.22, 0.048);
-    const prefDone = makeTextButton("FERTIG", "prefs-done", 0.15, -0.148, 0.18, 0.048);
+    const prefReset = makeTextButton("STANDARD", "prefs-reset", -0.13, -0.178, 0.22, 0.048);
+    const prefDone = makeTextButton("FERTIG", "prefs-done", 0.15, -0.178, 0.18, 0.048);
     prefReset.visible = false;
     prefDone.visible = false;
     const skyControls = [];
@@ -1091,6 +1096,27 @@
     camSkipDarksButton.visible = false;
     const camMonitorButton = makeTextButton("MONITOR", "cam-monitor", 0, 0.155, 0.28, 0.036);
     camMonitorButton.visible = false;
+    const guideExpMinus = makeCameraStep("−", "guide-exp", -0.24, 0.055, -1);
+    const guideExpLabel = makeTextButton("— s", "guide-hold", -0.08, 0.055, 0.20, 0.040);
+    guideExpLabel.visible = false;
+    const guideExpPlus = makeCameraStep("+", "guide-exp", 0.10, 0.055, 1);
+    const guideLoopButton = makeTextButton("LOOP", "guide-loop", -0.16, -0.005, 0.28, 0.044);
+    guideLoopButton.visible = false;
+    const guideStarButton = makeTextButton("AUTO STAR", "guide-star", 0.16, -0.005, 0.28, 0.044);
+    guideStarButton.visible = false;
+    const guideStartButton = makeTextButton("GUIDE", "guide-start", -0.16, -0.062, 0.28, 0.044);
+    guideStartButton.visible = false;
+    const guidePauseButton = makeTextButton("PAUSE", "guide-pause", 0.16, -0.062, 0.28, 0.044);
+    guidePauseButton.visible = false;
+    const guideRecalButton = makeTextButton("NEU", "guide-recal", -0.16, -0.125, 0.28, 0.044);
+    guideRecalButton.visible = false;
+    const guideStopButton = makeTextButton("STOP", "guide-stop", 0.16, -0.125, 0.28, 0.044);
+    guideStopButton.visible = false;
+    const guideControls = [
+      guideExpMinus, guideExpLabel, guideExpPlus,
+      guideLoopButton, guideStarButton, guideStartButton, guidePauseButton,
+      guideRecalButton, guideStopButton,
+    ];
     const cameraControls = [
       camLightsButton, camDarksButton, camMonitorButton,
       camExpMinus, camExpLabel, camExpPlus,
@@ -1131,6 +1157,41 @@
     monitorImage.position.set(0, 0.08, 0);
     monitorImage.renderOrder = 10;
     monitor.add(monitorImage);
+    const starPanel = new THREE.Group();
+    starPanel.position.set(0.50, 0.04, 0);
+    starPanel.visible = false;
+    const starImage = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.22, 0.22),
+      new THREE.MeshBasicMaterial({
+        color: 0x111827,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.FrontSide,
+      }),
+    );
+    starImage.position.set(0, 0, 0);
+    starImage.renderOrder = 10;
+    starPanel.add(starImage);
+    const starCanvas = document.createElement("canvas");
+    starCanvas.width = 512;
+    starCanvas.height = 160;
+    const starTexture = new THREE.CanvasTexture(starCanvas);
+    starTexture.colorSpace = THREE.SRGBColorSpace;
+    const starLabel = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.24, 0.075),
+      new THREE.MeshBasicMaterial({
+        map: starTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.FrontSide,
+      }),
+    );
+    starLabel.position.set(0, -0.16, 0);
+    starLabel.renderOrder = 11;
+    starPanel.add(starLabel);
+    monitor.add(starPanel);
     function makeMonitorButton(label, action, x, y, width, height) {
       const canvas = document.createElement("canvas");
       canvas.width = 512;
@@ -1157,12 +1218,16 @@
       paintTextButton(mesh, label);
       return mesh;
     }
-    const monitorDragButton = makeMonitorButton("ZIEHEN", "monitor-drag", -0.12, 0.28, 0.30, 0.046);
-    const monitorHideButton = makeMonitorButton("AUS", "monitor-hide", 0.18, 0.28, 0.18, 0.046);
-    const monitorButtons = [monitorDragButton, monitorHideButton];
+    const monitorDragButton = makeMonitorButton("ZIEHEN", "monitor-drag", -0.22, 0.28, 0.18, 0.046);
+    const monitorSourceButton = makeMonitorButton("LICHT", "monitor-source", 0, 0.28, 0.22, 0.046);
+    const monitorHideButton = makeMonitorButton("AUS", "monitor-hide", 0.22, 0.28, 0.16, 0.046);
+    const monitorButtons = [monitorDragButton, monitorSourceButton, monitorHideButton];
+    monitor.scale.setScalar(vrTune.monitorScale);
     monitor.visible = false;
     scene.add(monitor);
     let monitorMap = null;
+    let starMap = null;
+    let starImageId = "";
     const sessionRows = [];
     for (let index = 0; index < 6; index += 1) {
       const row = makeTextButton("", "session-pick", 0, 0.10 - index * 0.046, 0.56, 0.040);
@@ -1171,6 +1236,8 @@
     }
     const sessionNewButton = makeTextButton("＋ NEUE SESSION", "session-new", 0, -0.16, 0.42, 0.044);
     sessionNewButton.visible = false;
+    const sessionMonitorButton = makeTextButton("MONITOR", "session-monitor", 0, -0.108, 0.36, 0.044);
+    sessionMonitorButton.visible = false;
     const pointerButtons = [
       objectsButton,
       skyMenuButton,
@@ -1178,6 +1245,7 @@
       mountButton,
       cameraButton,
       cameraDetailButton,
+      guideDetailButton,
       backButton,
       skyPointButton,
       skyGotoButton,
@@ -1207,8 +1275,10 @@
       ...objectRows,
       ...skyControls,
       ...cameraControls,
+      ...guideControls,
       ...sessionRows,
       sessionNewButton,
+      sessionMonitorButton,
       ...prefTabs,
       ...prefRows.flatMap((row) => row.widgets),
       prefReset,
@@ -1237,8 +1307,18 @@
     let sessionsReturn = "home";
     let sessionRowsData = [];
     let sessionPickMode = "session";
+    let questCameras = [];
+    let questConfigs = [];
+    let questRecipes = [];
+    let questCameraId = null;
+    let questConfigId = null;
     let sessionNote = "";
     let cameraPollTimer = null;
+    let guidePollTimer = null;
+    let guideStatus = null;
+    let guideExposures = [];
+    let guideExposureMs = null;
+    let guideNote = "";
     let cameraView = null;
     let cameraNote = "";
     let cameraDraft = {
@@ -1256,6 +1336,7 @@
     let cameraDarksPrompt = false;
     let cameraLightJobId = null;
     let savedSessionRow = null;
+    let viewedSession = null;
     let selectedItem = null;
     let selectedKey = "";
     let selectedMissing = false;
@@ -1266,8 +1347,9 @@
     let skyBytes = 0;
     const pointerHits = new Map();
     const monitorHits = new Map();
-    const monitorSources = ["light_preview", "phd2_fullframe", "phd2_star", "plate_solve"];
+    const monitorSources = ["light_preview", "phd2_fullframe"];
     let monitorSource = "light_preview";
+    let monitorLightAt = 0;
     let monitorSessionId = null;
     let monitorImageId = "";
     let monitorPlaced = false;
@@ -1941,6 +2023,36 @@
       return names[text] || text;
     }
 
+    function formatArcmin(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) return "";
+      const rounded = number >= 10 ? Math.round(number) : Math.round(number * 10) / 10;
+      return `${String(rounded).replace(".", ",")}′`;
+    }
+
+    function extentText(item) {
+      const major = formatArcmin(item && item.maj_arcmin);
+      const minor = formatArcmin(item && item.min_arcmin);
+      if (major && minor && minor !== major) return `Ausdehnung ${major} × ${minor}`;
+      if (major) return `Ausdehnung ${major}`;
+      const diam = Number(item && item.diam_deg);
+      if (Number.isFinite(diam) && diam > 0) {
+        const text = formatArcmin(diam * 60);
+        if (text) return `Ausdehnung ${text}`;
+      }
+      return "";
+    }
+
+    function distanceText(item) {
+      const ly = Number(item && item.dist_ly);
+      if (!Number.isFinite(ly) || ly <= 0) return "";
+      let text;
+      if (ly >= 1000000) text = `${(ly / 1000000).toFixed(1).replace(".", ",")} Mio. Lj`;
+      else if (ly >= 100) text = `${Math.round(ly).toLocaleString("de-AT")} Lj`;
+      else text = `${String(Math.round(ly * 10) / 10).replace(".", ",")} Lj`;
+      return `Abstand ${text}`;
+    }
+
     function detailLines(item, missing) {
       const lines = [
         item.name || item.id || "Objekt",
@@ -1965,8 +2077,13 @@
       }
       if (item.above === false || (item.fromSearch && Number(item.alt) <= 0)) lines.push("unter Horizont");
       if (detailNote) lines.push(detailNote);
+      if (questGotoNote) lines.push(questGotoNote);
       if (missing) lines.push("nicht mehr in der Liste");
       return lines;
+    }
+
+    function detailSideLines(item) {
+      return [extentText(item), distanceText(item)].filter(Boolean);
     }
 
     function hideObjectRows() {
@@ -1999,6 +2116,7 @@
     }
 
     function showHome() {
+      stopGuidePoll();
       if (axisMode && panelMode === "mount") leaveAxisMode("");
       skyPointMode = false;
       panelMode = "home";
@@ -2025,6 +2143,158 @@
       syncPanelButtons();
       dashboardKey = "";
       paintDashboard();
+    }
+
+    function stopGuidePoll() {
+      if (guidePollTimer) {
+        clearInterval(guidePollTimer);
+        guidePollTimer = null;
+      }
+    }
+
+    function guideStateText(status) {
+      if (!status || status.connection === "OFFLINE") return "PHD2 läuft nicht";
+      if (status.connection === "CALIBRATING" || status.app_state === "Calibrating") {
+        return status.cal_progress ? `PHD2 kalibriert · ${status.cal_progress}` : "PHD2 kalibriert";
+      }
+      if (status.guiding || status.connection === "GUIDING") return "PHD2 führt";
+      if (status.paused || status.connection === "PAUSED") return "Pause";
+      if (status.looping || status.connection === "LOOPING") return "Schleife";
+      return "Verbunden";
+    }
+
+    function guideCalText(status) {
+      if (!status || status.connection === "OFFLINE") return "";
+      if (status.connection === "CALIBRATING" || status.app_state === "Calibrating") return "";
+      if (status.calibration_state === "AVAILABLE") return "Kalibrierung vorhanden";
+      return "keine Kalibrierung";
+    }
+
+    function guideAlertText() {
+      if (guideNote) return guideNote;
+      return guideStatus && guideStatus.alert_msg ? String(guideStatus.alert_msg) : "";
+    }
+
+    function guideStarText(status) {
+      if (!status) return "Stern —";
+      if (status.lost_star) return "Stern verloren";
+      if (status.star_selected) return "Stern gewählt";
+      return "Kein Stern";
+    }
+
+    function guideExposureText() {
+      const ms = guideExposureMs != null ? guideExposureMs : (guideStatus && guideStatus.exposure_ms);
+      if (ms == null || !Number.isFinite(Number(ms))) return "— s";
+      return `${(Number(ms) / 1000).toFixed(1).replace(".", ",")} s`;
+    }
+
+    async function pollGuide() {
+      try {
+        const [statusResponse, exposureResponse] = await Promise.all([
+          fetch("/phd2/status?refresh=0", { cache: "no-store", credentials: "same-origin" }),
+          guideExposures.length
+            ? Promise.resolve(null)
+            : fetch("/phd2/exposures", { cache: "no-store", credentials: "same-origin" }),
+        ]);
+        const statusBody = await statusResponse.json().catch(() => ({}));
+        if (statusResponse.ok && statusBody.status) {
+          guideStatus = statusBody.status;
+          if (guideExposureMs == null && guideStatus.exposure_ms != null) guideExposureMs = guideStatus.exposure_ms;
+        } else if (!statusResponse.ok) {
+          guideStatus = null;
+          guideNote = statusBody.error || "PHD2 nicht lesbar";
+        }
+        if (exposureResponse) {
+          const exposureBody = await exposureResponse.json().catch(() => ({}));
+          if (exposureResponse.ok && Array.isArray(exposureBody.durations_ms)) {
+            guideExposures = exposureBody.durations_ms.map(Number).filter((value) => Number.isFinite(value) && value > 0);
+            if (guideExposureMs == null && exposureBody.exposure_ms != null) guideExposureMs = Number(exposureBody.exposure_ms);
+          }
+        }
+      } catch (_err) {
+        guideNote = "PHD2 nicht erreichbar";
+      }
+      if (panelMode === "guide") {
+        dashboardKey = "";
+        syncPanelButtons();
+        paintDashboard();
+      }
+    }
+
+    async function postGuide(path, body) {
+      if (!mountCsrf) {
+        guideNote = "Zuerst mit dem Code am MeLE koppeln.";
+        dashboardKey = "";
+        paintDashboard();
+        return null;
+      }
+      const headers = { "Content-Type": "application/json", "X-Astro-Csrf": mountCsrf };
+      try {
+        const response = await fetch(path, {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify(body || {}),
+        });
+        const data = await response.json().catch(() => ({}));
+        guideNote = response.ok && data.ok !== false ? "" : (data.error || "PHD2 abgelehnt");
+        return data;
+      } catch (_err) {
+        guideNote = "PHD2 nicht erreichbar";
+        return null;
+      } finally {
+        dashboardKey = "";
+        void pollGuide();
+      }
+    }
+
+    function stepGuideExposure(dir) {
+      const steps = guideExposures;
+      if (!steps.length) {
+        guideNote = "Keine Belichtungsstufen von PHD2.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      const current = Number(guideExposureMs);
+      let index = steps.findIndex((value) => value === current);
+      if (index < 0) index = 0;
+      const next = steps[Math.min(steps.length - 1, Math.max(0, index + Number(dir || 0)))];
+      guideExposureMs = next;
+      guideNote = "";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+      void postGuide("/phd2/exposure", { exposure_ms: next });
+    }
+
+    function showGuide() {
+      stopGuidePoll();
+      panelMode = "guide";
+      monitorSource = "phd2_fullframe";
+      monitorImageId = "";
+      starImageId = "";
+      paintTextButton(monitorSourceButton, "GUIDING");
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+      placeMonitor();
+      void pollGuide();
+      guidePollTimer = setInterval(() => {
+        if (panelMode === "guide" && dashboard.visible) void pollGuide();
+      }, 1000);
+    }
+
+    function leaveGuide() {
+      stopGuidePoll();
+      if (selectedItem && !selectedItem.fromSky) {
+        panelMode = "detail";
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      showHome();
     }
 
     function showCamera() {
@@ -2123,6 +2393,7 @@
             : "Session gespeichert";
           const closed = data.session || {};
           savedSessionRow = {
+            ...closed,
             id: sessionId,
             catalog_key: closed.catalog_key || cameraDraft.catalog_key || catalogQueryOf(selectedItem),
             started_utc: closed.started_utc || closed.session_start_utc || "",
@@ -2173,12 +2444,14 @@
 
     function paintSessionRows() {
       const profiles = sessionPickMode === "profile";
+      const setup = sessionPickMode === "camera" || sessionPickMode === "config" || sessionPickMode === "recipe";
       sessionRows.forEach((row, index) => {
         const item = sessionRowsData[index];
         if (!item || panelMode !== "sessions") {
           row.visible = false;
           row.userData.session = null;
           row.userData.profileId = null;
+          row.userData.setupId = null;
           return;
         }
         row.visible = true;
@@ -2186,16 +2459,36 @@
           row.userData.action = "session-profile";
           row.userData.profileId = item.id;
           row.userData.session = null;
+          row.userData.setupId = null;
           paintTextButton(row, item.label || `Profil ${item.id}`);
+          return;
+        }
+        if (setup) {
+          row.userData.action = "setup-pick";
+          row.userData.setupKind = sessionPickMode;
+          row.userData.setupId = item.id;
+          row.userData.session = null;
+          row.userData.profileId = null;
+          paintTextButton(row, item.label || "");
           return;
         }
         row.userData.action = "session-pick";
         row.userData.session = item;
         row.userData.profileId = null;
-        const saved = item.saved ? " · gespeichert" : "";
-        paintTextButton(row, `${sessionRowLabel(item, sessionRowsData)}${saved}`);
+        row.userData.setupId = null;
+        const mark = item.saved ? " · gespeichert" : (item.lifecycle_status === "closed" ? " · geschlossen" : "");
+        paintTextButton(row, `${sessionRowLabel(item, sessionRowsData)}${mark}`);
       });
-      sessionNewButton.visible = panelMode === "sessions" && !profiles && Boolean(catalogQueryOf(selectedItem));
+      sessionNewButton.visible = panelMode === "sessions" && sessionPickMode === "session" && Boolean(catalogQueryOf(selectedItem));
+    }
+
+    function showSessionView(session) {
+      viewedSession = session || null;
+      if (viewedSession && viewedSession.id != null) monitorSessionId = viewedSession.id;
+      panelMode = "session-view";
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
     }
 
     function showSessions() {
@@ -2243,18 +2536,21 @@
           sessionRowsData = [];
           sessionNote = data.error || "Sessions nicht lesbar";
         } else {
-          const rows = Array.isArray(data.sessions) ? data.sessions : [];
-          sessionRowsData = rows.filter((row) => String(row.lifecycle_status || "open") !== "closed");
+          let rows = Array.isArray(data.sessions) ? data.sessions : [];
           if (savedSessionRow && savedSessionRow.catalog_key === key) {
-            sessionRowsData = sessionRowsData.filter((row) => row.id !== savedSessionRow.id);
-            sessionRowsData.unshift(savedSessionRow);
+            const fromServer = rows.find((row) => String(row.id) === String(savedSessionRow.id));
+            const merged = fromServer
+              ? { ...fromServer, saved: true, note: savedSessionRow.note || fromServer.note }
+              : savedSessionRow;
+            rows = rows.filter((row) => String(row.id) !== String(savedSessionRow.id));
+            rows.unshift(merged);
           }
+          sessionRowsData = rows.slice(0, sessionRows.length);
           sessionNote = savedSessionRow && savedSessionRow.catalog_key === key && savedSessionRow.note
             ? savedSessionRow.note
-            : (sessionRowsData.length > sessionRows.length
-              ? "Weitere offene Sessions am Desktop."
+            : (rows.length > sessionRows.length
+              ? "Weitere Sessions am Desktop."
               : "");
-          sessionRowsData = sessionRowsData.slice(0, sessionRows.length);
         }
       } catch (_err) {
         sessionRowsData = [];
@@ -2267,7 +2563,75 @@
       }
     }
 
-    async function createQuestSession(profileId) {
+    function showSetupRows(mode, rows, note) {
+      sessionPickMode = mode;
+      sessionRowsData = rows.slice(0, sessionRows.length);
+      sessionNote = rows.length > sessionRows.length ? `${note} Weitere am Desktop.` : note;
+      syncPanelButtons();
+      dashboardKey = "";
+      paintDashboard();
+    }
+
+    async function beginQuestSetup() {
+      const key = catalogQueryOf(selectedItem);
+      if (!key) {
+        sessionNote = "Objekt auf der Quest wählen.";
+        dashboardKey = "";
+        paintDashboard();
+        return;
+      }
+      try {
+        const response = await fetch("/astro/imaging-model", { cache: "no-store", credentials: "same-origin" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+          sessionNote = data.error || "Kameramodell nicht lesbar";
+          dashboardKey = "";
+          paintDashboard();
+          return;
+        }
+        questCameras = Array.isArray(data.cameras) ? data.cameras : [];
+        questConfigs = Array.isArray(data.configs) ? data.configs : [];
+        questRecipes = Array.isArray(data.recipes) ? data.recipes : [];
+        questCameraId = null;
+        questConfigId = null;
+        showSetupRows(
+          "camera",
+          questCameras.map((camera) => ({ id: camera.id, label: camera.name })),
+          "Kamera wählen.",
+        );
+      } catch (_err) {
+        sessionNote = "Kameramodell nicht lesbar";
+        dashboardKey = "";
+        paintDashboard();
+      }
+    }
+
+    function pickQuestSetup(kind, id) {
+      if (kind === "camera") {
+        questCameraId = id;
+        const rows = questConfigs
+          .filter((config) => config.camera_id === id)
+          .map((config) => ({ id: config.id, label: config.label }));
+        showSetupRows("config", rows, "Kamerakonfiguration wählen.");
+        return;
+      }
+      if (kind === "config") {
+        questConfigId = id;
+        showSetupRows(
+          "recipe",
+          questRecipes.map((recipe) => ({ id: recipe.id, label: recipe.name })),
+          "Aufnahmerezept wählen.",
+        );
+        return;
+      }
+      void createQuestSession(null, {
+        camera_id: questCameraId,
+        camera_config_id: questConfigId,
+        recipe_id: id,
+      });
+    }
+
+    async function createQuestSession(profileId, setup) {
       const key = catalogQueryOf(selectedItem);
       if (!key) {
         sessionNote = "Objekt auf der Quest wählen.";
@@ -2282,6 +2646,9 @@
         display_name: selectedItem ? (selectedItem.name || "") : "",
       };
       if (profileId != null) body.profile_id = profileId;
+      if (setup && setup.camera_id != null) body.camera_id = setup.camera_id;
+      if (setup && setup.camera_config_id != null) body.camera_config_id = setup.camera_config_id;
+      if (setup && setup.recipe_id != null) body.recipe_id = setup.recipe_id;
       try {
         const response = await fetch("/astro/sessions", {
           method: "POST",
@@ -3097,9 +3464,44 @@
         void closeCameraSession();
         return;
       }
+      if (panelMode === "guide") {
+        leaveGuide();
+        return;
+      }
+      if (panelMode === "session-view") {
+        showSessions();
+        return;
+      }
       if (panelMode === "sessions") {
+        if (sessionPickMode === "recipe") {
+          const rows = questConfigs
+            .filter((config) => config.camera_id === questCameraId)
+            .map((config) => ({ id: config.id, label: config.label }));
+          showSetupRows("config", rows, "Kamerakonfiguration wählen.");
+          return;
+        }
+        if (sessionPickMode === "config") {
+          showSetupRows(
+            "camera",
+            questCameras.map((camera) => ({ id: camera.id, label: camera.name })),
+            "Kamera wählen.",
+          );
+          return;
+        }
+        if (sessionPickMode === "camera" || sessionPickMode === "profile") {
+          sessionPickMode = "session";
+          void loadQuestSessions();
+          return;
+        }
         if (sessionsReturn === "detail" && selectedItem) showObjectDetail(selectedItem);
         else showHome();
+        return;
+      }
+      if (panelMode === "mount" && selectedItem && !selectedItem.fromSky) {
+        panelMode = "detail";
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
         return;
       }
       if (panelMode === "search") {
@@ -3263,6 +3665,32 @@
         dashboardTexture.needsUpdate = true;
         return;
       }
+      if (panelMode === "session-view") {
+        const session = viewedSession || {};
+        const exp = session.exposure_s != null ? `${session.exposure_s} s` : "— s";
+        const iso = session.iso != null ? `ISO ${session.iso}` : (session.gain != null ? `Gain ${session.gain}` : "ISO —");
+        const lightsPlan = session.lights_planned != null ? session.lights_planned : "—";
+        const darksPlan = session.darks_planned != null ? session.darks_planned : "—";
+        const weatherStatus = String(session.weather_export_status || "");
+        const weather = weatherStatus && weatherStatus !== "none" ? `Wetter ${weatherStatus}` : "Wetter —";
+        const code = session.id != null ? `s${String(session.id).padStart(5, "0")}` : "";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Session", 48, 28);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "24px sans-serif";
+        ctx.fillText(`${sessionDateText(session)}  ${code}  ·  geschlossen`, 48, 84);
+        ctx.fillText(`${exp}  ·  ${iso}`, 48, 124);
+        ctx.fillText(`Lights ${Number(session.lights_completed || 0)}/${lightsPlan}  ·  Darks ${Number(session.darks_completed || 0)}/${darksPlan}`, 48, 164);
+        ctx.fillText(weather, 48, 204);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "22px sans-serif";
+        if (session.note) ctx.fillText(String(session.note).slice(0, 90), 48, 244);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
       if (panelMode === "camera") {
         const job = cameraView && cameraView.job;
         const cam = cameraView && cameraView.camera;
@@ -3299,6 +3727,25 @@
         ctx.fillStyle = "#fbbf24";
         ctx.font = "22px sans-serif";
         if (errText) ctx.fillText(String(errText).slice(0, 80), 48, 214);
+        dashboardTexture.needsUpdate = true;
+        return;
+      }
+      if (panelMode === "guide") {
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.font = "bold 34px sans-serif";
+        ctx.fillText("Guiding", 48, 28);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "24px sans-serif";
+        const objectName = selectedItem ? (selectedItem.name || selectedItem.id || "Objekt") : "";
+        const calText = guideCalText(guideStatus);
+        ctx.fillText(`${guideStateText(guideStatus)}  ·  ${guideStarText(guideStatus)}`, 48, 78);
+        ctx.fillText(`${guideExposureText()}${calText ? "  ·  " + calText : ""}${objectName ? "  ·  " + objectName : ""}`, 48, 112);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "22px sans-serif";
+        const alertText = guideAlertText();
+        if (alertText) ctx.fillText(String(alertText).slice(0, 90), 48, 150);
         dashboardTexture.needsUpdate = true;
         return;
       }
@@ -3369,6 +3816,11 @@
           ctx.font = index === 0 ? "bold 40px sans-serif" : "32px sans-serif";
           ctx.fillText(line, 48, 36 + index * 52);
         });
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "32px sans-serif";
+        detailSideLines(selectedItem).forEach((line, index) => {
+          ctx.fillText(line, 560, 192 + index * 52);
+        });
         dashboardTexture.needsUpdate = true;
         return;
       }
@@ -3407,12 +3859,14 @@
         ? `sessions|${sessionNote}|${sessionPickMode}|${sessionRowsData.map((row) => row.id).join(",")}|${catalogQueryOf(selectedItem)}`
         : panelMode === "camera"
         ? `camera|${cameraNote}|${cameraDraft.exposure_s}|${cameraDraft.iso}|${cameraDraft.gain}|${cameraDraft.frames}|${cameraView && cameraView.job ? cameraView.job.state : ""}|${cameraView && cameraView.locked}|${cameraView && cameraView.session_code}|${selectedKey}`
+        : panelMode === "guide"
+        ? `guide|${guideNote}|${guideAlertText()}|${guideExposureMs}|${guideStatus ? guideStatus.connection : ""}|${guideStatus ? guideStatus.cal_progress : ""}|${guideStatus ? guideStatus.calibration_state : ""}|${guideStatus ? guideStatus.star_selected : ""}|${guideStatus ? guideStatus.lost_star : ""}|${guideStatus ? guideStatus.paused : ""}`
         : panelMode === "goto"
         ? `goto|${selectedKey}|${mountView.status}|${questGotoNote}|${mountPaired}`
         : panelMode === "pair"
         ? `pair|${pairEntry}|${questGotoNote}`
         : (panelMode === "detail" && selectedItem
-          ? `detail|${detailLines(selectedItem, selectedMissing).join("|")}`
+          ? `detail|${detailLines(selectedItem, selectedMissing).join("|")}|${detailSideLines(selectedItem).join("|")}|${questGotoNote}`
           : `home|${dashboardSections().map((section) => section.title + section.lines.join("|")).join("||")}|${skyStars}|${overlayStateText}`);
       if (key === dashboardKey) return;
       dashboardKey = key;
@@ -3559,6 +4013,7 @@
       if (pref === "ring2") return `Außen ${fmtTune(vrTune.telradHalfDeg[2] * 2, 1)}°`;
       if (pref === "label") return `Namen ${fmtTune(vrTune.labelHeight, 0)}`;
       if (pref === "panel") return `Tafel ${Math.round(vrTune.panelScale * 100)} %`;
+      if (pref === "monitor") return `Monitor ${Math.round(vrTune.monitorScale * 100)} %`;
       if (pref === "pano") return `Foto ${Math.round(vrTune.panoBrightness)} %`;
       if (pref === "mark") return "Markierung Telrad";
       if (pref === "dashboard") return `Öffnen ${roleLabel(controlRoles.dashboard)}`;
@@ -3584,6 +4039,18 @@
       mountButton.visible = home;
       cameraButton.visible = home;
       cameraDetailButton.visible = panelMode === "detail";
+      guideDetailButton.visible = panelMode === "detail";
+      const onGuide = panelMode === "guide";
+      for (const button of guideControls) button.visible = onGuide;
+      if (onGuide) {
+        paintTextButton(guideExpLabel, guideExposureText());
+        const pauseLabel = guideStatus && guideStatus.paused ? "WEITER" : "PAUSE";
+        if (guidePauseButton.userData.face !== pauseLabel) {
+          guidePauseButton.userData.face = pauseLabel;
+          paintTextButton(guidePauseButton, pauseLabel);
+        }
+        paintAlertButton(guideStopButton, "STOP");
+      }
       const onCamera = panelMode === "camera";
       const cameraLocked = Boolean(cameraView && cameraView.locked);
       const cameraPrompt = onCamera && cameraDarksPrompt && !cameraLocked;
@@ -3599,7 +4066,8 @@
         paintFrameTypeButtons();
       }
       paintSessionRows();
-      backButton.visible = (panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount" || panelMode === "camera" || panelMode === "sessions") && !cameraPrompt;
+      sessionMonitorButton.visible = panelMode === "session-view";
+      backButton.visible = (panelMode === "list" || panelMode === "detail" || panelMode === "himmel" || panelMode === "search" || panelMode === "track" || panelMode === "mount" || panelMode === "camera" || panelMode === "guide" || panelMode === "sessions" || panelMode === "session-view") && !cameraPrompt;
       const onMount = panelMode === "mount";
       backButton.position.x = onMount ? 0.16 : 0;
       skyPointButton.visible = onMount;
@@ -3887,7 +4355,10 @@
           return;
         }
         questGotoNote = "GoTo gesendet. Stillstand erst nach der Montierungsmeldung.";
-        showMount();
+        panelMode = "detail";
+        syncPanelButtons();
+        dashboardKey = "";
+        paintDashboard();
       } catch (err) {
         questGotoNote = err && err.message ? err.message : "GoTo nicht gesendet";
         dashboardKey = "";
@@ -4245,7 +4716,11 @@
         questGotoNote = err && err.message ? err.message : "STOP nicht gesendet";
       }
       if (!dashboard.visible) placeDashboard();
-      if (panelMode === "home" || panelMode === "detail" || panelMode === "goto") showMount();
+      if (panelMode === "home" || panelMode === "goto") showMount();
+      else if (panelMode === "detail") {
+        dashboardKey = "";
+        paintDashboard();
+      }
       else {
         dashboardKey = "";
         paintDashboard();
@@ -4464,6 +4939,10 @@
       dashboard.scale.setScalar(vrTune.panelScale);
     }
 
+    function applyMonitorScale() {
+      monitor.scale.setScalar(vrTune.monitorScale);
+    }
+
     function applyLabelHeight() {
       const height = vrTune.labelHeight;
       sky.traverse((object) => {
@@ -4520,6 +4999,7 @@
           pickHoldDeg: vrTune.pickHoldDeg,
           pickSwitchDeg: vrTune.pickSwitchDeg,
           panelScale: vrTune.panelScale,
+          monitorScale: vrTune.monitorScale,
           panoBrightness: vrTune.panoBrightness,
         },
         roles: {
@@ -4559,6 +5039,7 @@
       vrTune.pickHoldDeg = takeNumber(tune.pickHoldDeg, 0.1, 2, vrDefaults.pickHoldDeg);
       vrTune.pickSwitchDeg = takeNumber(tune.pickSwitchDeg, 0.02, 0.5, vrDefaults.pickSwitchDeg);
       vrTune.panelScale = takeNumber(tune.panelScale, 1, 2, vrDefaults.panelScale);
+      vrTune.monitorScale = takeNumber(tune.monitorScale, 1, 2, vrDefaults.monitorScale);
       vrTune.panoBrightness = takeNumber(tune.panoBrightness, 0, 100, vrDefaults.panoBrightness);
       if (vrTune.pickHoldDeg < vrTune.pickAcquireDeg) vrTune.pickHoldDeg = vrTune.pickAcquireDeg;
       if (Array.isArray(tune.telradHalfDeg) && tune.telradHalfDeg.length === 3) {
@@ -4578,6 +5059,7 @@
       applyRayLength();
       rebuildTelrad();
       applyPanelScale();
+      applyMonitorScale();
       applyPanoBrightness();
       const sky = data.sky || {};
       if (typeof sky.stars === "boolean") skyView.stars = sky.stars;
@@ -4600,6 +5082,7 @@
         ray: [() => vrTune.rayMeters, (value) => { vrTune.rayMeters = value; applyRayLength(); }, 0.5, 6, 0.5],
         label: [() => vrTune.labelHeight, (value) => { vrTune.labelHeight = value; applyLabelHeight(); }, 4, 12, 1],
         panel: [() => vrTune.panelScale, (value) => { vrTune.panelScale = value; applyPanelScale(); }, 1, 2, 0.1],
+        monitor: [() => vrTune.monitorScale, (value) => { vrTune.monitorScale = value; applyMonitorScale(); }, 1, 2, 0.1],
         pano: [() => vrTune.panoBrightness, (value) => { vrTune.panoBrightness = value; applyPanoBrightness(); }, 0, 100, 10],
         ring0: [() => vrTune.telradHalfDeg[0] * 2, (value) => { vrTune.telradHalfDeg[0] = value / 2; }, 0.2, 10, 0.1],
         ring1: [() => vrTune.telradHalfDeg[1] * 2, (value) => { vrTune.telradHalfDeg[1] = value / 2; }, 0.2, 10, 0.1],
@@ -4644,6 +5127,7 @@
       vrTune.pickHoldDeg = vrDefaults.pickHoldDeg;
       vrTune.pickSwitchDeg = vrDefaults.pickSwitchDeg;
       vrTune.panelScale = vrDefaults.panelScale;
+      vrTune.monitorScale = vrDefaults.monitorScale;
       vrTune.panoBrightness = vrDefaults.panoBrightness;
       controlRoles.dashboard = controlDefaults.dashboard;
       controlRoles.aimToggle = controlDefaults.aimToggle;
@@ -4657,6 +5141,7 @@
       rebuildTelrad();
       applyLabelHeight();
       applyPanelScale();
+      applyMonitorScale();
       applyPanoBrightness();
       bindControlRoles();
       refreshPrefLabels();
@@ -5307,6 +5792,7 @@
       ) {
         if (source) monitorHits.delete(source);
         if (monitorHit.userData.action === "monitor-hide") hideMonitor();
+        if (monitorHit.userData.action === "monitor-source") toggleMonitorSource();
         return;
       }
       const now = performance.now();
@@ -5349,11 +5835,49 @@
         openCameraEntry();
         return;
       }
+      if (sameHand && hit.userData.action === "guide-open") {
+        showGuide();
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-exp") {
+        stepGuideExposure(hit.userData.dir);
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-loop") {
+        const ms = Number(guideExposureMs);
+        const startLoop = () => { void postGuide("/phd2/loop", {}); };
+        if (Number.isFinite(ms) && ms > 0) {
+          void postGuide("/phd2/exposure", { exposure_ms: ms }).then((set) => {
+            if (set && set.ok !== false && guideNote === "") startLoop();
+          });
+        } else {
+          startLoop();
+        }
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-star") {
+        void postGuide("/phd2/find-star", {});
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-start") {
+        void postGuide("/phd2/guide", { recalibrate: false });
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-recal") {
+        void postGuide("/phd2/guide", { recalibrate: true });
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-pause") {
+        void postGuide("/phd2/pause", { paused: !(guideStatus && guideStatus.paused) });
+        return;
+      }
+      if (sameHand && hit.userData.action === "guide-stop") {
+        void postGuide("/phd2/stop", {});
+        return;
+      }
       if (sameHand && hit.userData.action === "session-pick" && hit.userData.session) {
         if (hit.userData.session.saved || hit.userData.session.lifecycle_status === "closed") {
-          sessionNote = hit.userData.session.note || "Session ist gespeichert.";
-          dashboardKey = "";
-          paintDashboard();
+          showSessionView(hit.userData.session);
           return;
         }
         adoptSessionDraft(hit.userData.session);
@@ -5365,8 +5889,17 @@
         void createQuestSession(hit.userData.profileId);
         return;
       }
+      if (sameHand && hit.userData.action === "setup-pick") {
+        pickQuestSetup(hit.userData.setupKind, hit.userData.setupId);
+        return;
+      }
       if (sameHand && hit.userData.action === "session-new") {
-        void createQuestSession(null);
+        void beginQuestSetup();
+        return;
+      }
+      if (sameHand && hit.userData.action === "session-monitor") {
+        if (viewedSession && viewedSession.id != null) monitorSessionId = viewedSession.id;
+        placeMonitor();
         return;
       }
       if (sameHand && hit.userData.action === "cam-monitor") {
@@ -5634,6 +6167,7 @@
     }
 
     function hideDashboard() {
+      stopGuidePoll();
       dashboard.visible = false;
       if (dragGroup !== monitor) {
         dragSource = null;
@@ -5658,6 +6192,118 @@
       dashboardPlaced = true;
       dashboardKey = "";
       refreshDashboard();
+    }
+
+    function clearMonitorImage() {
+      monitorImageId = "";
+      monitorImage.material.map = null;
+      monitorImage.material.color.setHex(0x111827);
+      monitorImage.material.needsUpdate = true;
+      if (monitorMap) monitorMap.dispose();
+      monitorMap = null;
+    }
+
+    function formatStarMetric(value, digits) {
+      if (value === null || value === undefined || value === "") return "—";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      return number.toFixed(digits).replace(".", ",");
+    }
+
+    function paintStarStatus(text, metrics) {
+      const ctx = starCanvas.getContext("2d");
+      ctx.clearRect(0, 0, starCanvas.width, starCanvas.height);
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, starCanvas.width, starCanvas.height);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if (metrics) {
+        ctx.font = "34px sans-serif";
+        ctx.fillText(text || "LEITSTERN", starCanvas.width / 2, 48);
+        ctx.font = "30px sans-serif";
+        const line = `HFD ${formatStarMetric(metrics.hfd, 2)} px · SNR ${formatStarMetric(metrics.snr, 1)}`;
+        ctx.fillText(line, starCanvas.width / 2, 108);
+      } else {
+        ctx.font = "40px sans-serif";
+        ctx.fillText(text || "LEITSTERN", starCanvas.width / 2, starCanvas.height / 2);
+      }
+      starTexture.needsUpdate = true;
+    }
+
+    function clearStarImage() {
+      starImageId = "";
+      starImage.material.map = null;
+      starImage.material.color.setHex(0x111827);
+      starImage.material.needsUpdate = true;
+      if (starMap) starMap.dispose();
+      starMap = null;
+    }
+
+    function showStarPanel(guiding) {
+      starPanel.visible = Boolean(guiding && monitor.visible);
+      if (!starPanel.visible) return;
+      paintStarStatus("LEITSTERN");
+    }
+
+    async function refreshStarMonitor() {
+      if (!monitor.visible || monitorSource !== "phd2_fullframe") {
+        starPanel.visible = false;
+        return;
+      }
+      starPanel.visible = true;
+      try {
+        const response = await fetch(
+          "/astro/capture/preview?session_id=0&source=phd2_star",
+          { cache: "no-store", credentials: "same-origin" },
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!monitor.visible || monitorSource !== "phd2_fullframe") return;
+        if (!response.ok || data.ok === false || !data.preview_url) {
+          clearStarImage();
+          paintStarStatus(data.error || "Kein Leitstern");
+          return;
+        }
+        paintStarStatus("LEITSTERN", data);
+        const name = data.image_id || "";
+        if (!name || name === starImageId) return;
+        starImageId = name;
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          canvas.getContext("2d").drawImage(img, 0, 0);
+          const texture = new THREE.CanvasTexture(canvas);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.magFilter = THREE.NearestFilter;
+          texture.minFilter = THREE.NearestFilter;
+          texture.needsUpdate = true;
+          starImage.material.map = texture;
+          starImage.material.color.setHex(0xffffff);
+          starImage.material.needsUpdate = true;
+          if (starMap) starMap.dispose();
+          starMap = texture;
+        };
+        img.onerror = () => {
+          clearStarImage();
+          paintStarStatus("Kein Leitstern");
+        };
+        img.src = data.preview_url;
+      } catch (_err) {
+        clearStarImage();
+        paintStarStatus("Kein Leitstern");
+      }
+    }
+
+    function toggleMonitorSource() {
+      monitorSource = monitorSource === "phd2_fullframe" ? "light_preview" : "phd2_fullframe";
+      monitorImageId = "";
+      starImageId = "";
+      paintTextButton(monitorSourceButton, monitorSource === "phd2_fullframe" ? "GUIDING" : "LICHT");
+      showStarPanel(monitorSource === "phd2_fullframe");
+      void refreshMonitor();
+      if (monitorSource === "phd2_fullframe") void refreshStarMonitor();
     }
 
     function hideMonitor() {
@@ -5694,7 +6340,9 @@
         monitorPlaced = true;
       }
       monitor.visible = true;
+      showStarPanel(monitorSource === "phd2_fullframe");
       void refreshMonitor();
+      if (monitorSource === "phd2_fullframe") void refreshStarMonitor();
     }
 
     function paintMonitor(text, bins) {
@@ -5731,19 +6379,22 @@
     async function refreshMonitor() {
       if (!monitor.visible) return;
       const sid = monitorSessionId || cameraDraft.session_id;
-      if (!sid) {
-        paintMonitor("LIGHT-PREVIEW\nKeine Session", null);
+      const guiding = monitorSource === "phd2_fullframe";
+      if (!sid && !guiding) {
+        paintMonitor("LICHT\nKeine Session", null);
         return;
       }
       try {
         const response = await fetch(
-          `/astro/capture/preview?session_id=${encodeURIComponent(sid)}&source=${encodeURIComponent(monitorSource)}`,
+          `/astro/capture/preview?session_id=${encodeURIComponent(sid || 0)}&source=${encodeURIComponent(monitorSource)}`,
           { cache: "no-store", credentials: "same-origin" },
         );
         const data = await response.json().catch(() => ({}));
         if (!monitor.visible) return;
         if (!response.ok || data.ok === false) {
-          paintMonitor(`LIGHT-PREVIEW\n${data.error || "Preview folgt"}`, null);
+          const label = data.source === "phd2_fullframe" ? "GUIDING" : "LICHT";
+          if (data.source === "phd2_fullframe") clearMonitorImage();
+          paintMonitor(`${label}\n${data.error || "Preview folgt"}`, null);
           return;
         }
         const analysis = data.analysis || null;
@@ -5773,7 +6424,9 @@
         }
         const sourceName = monitorSources.includes(data.source) ? data.source : monitorSource;
         if (!analysis) {
-          paintMonitor(`${sourceName}\n${name}\nStatistik folgt`, null);
+          const title = data.source === "phd2_fullframe" ? "GUIDING" : sourceName;
+          const note = data.source === "phd2_fullframe" ? "PHD2-Bild" : "Statistik folgt";
+          paintMonitor(`${title}\n${name}\n${note}`, null);
           return;
         }
         const sat = Number(analysis.saturated_fraction);
@@ -5789,7 +6442,7 @@
           analysis.histogram_bins,
         );
       } catch (_err) {
-        paintMonitor("LIGHT-PREVIEW\nPreview nicht lesbar", null);
+        paintMonitor(monitorSource === "phd2_fullframe" ? "GUIDING\nBild nicht lesbar" : "LICHT\nPreview nicht lesbar", null);
       }
     }
 
@@ -5910,8 +6563,12 @@
     pollMount();
     applyMountPoll();
     setInterval(() => {
-      if (monitor.visible) void refreshMonitor();
-    }, 2000);
+      if (!monitor.visible) return;
+      if (monitorSource !== "phd2_fullframe" && performance.now() - monitorLightAt < 2000) return;
+      if (monitorSource !== "phd2_fullframe") monitorLightAt = performance.now();
+      void refreshMonitor();
+      if (monitorSource === "phd2_fullframe") void refreshStarMonitor();
+    }, 1000);
     renderer.setAnimationLoop((_time, frame) => {
       if (!renderer.xr.isPresenting) {
         applyLook();

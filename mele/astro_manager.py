@@ -214,6 +214,9 @@ class ImagingSession:
     weather_export_status: str = WEATHER_EXPORT_NONE
     object_id: str = ""
     equipment_profile_id: str = ""
+    camera_id: int | None = None
+    camera_config_id: int | None = None
+    recipe_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -279,6 +282,9 @@ def ensure_manager_db(db_path: Path | None = None) -> Path:
         _migrate_sessions_snapshot_columns(conn)
         _migrate_sessions_light_dark_columns(conn)
         _migrate_sessions_storage_v3(conn)
+        from mele.camera_model import migrate_camera_model
+
+        migrate_camera_model(conn)
         conn.commit()
     return path
 
@@ -552,6 +558,9 @@ def _session_from_row(row: sqlite3.Row) -> ImagingSession:
             if "equipment_profile_id" in keys and row["equipment_profile_id"]
             else ""
         ),
+        camera_id=_opt_int("camera_id"),
+        camera_config_id=_opt_int("camera_config_id"),
+        recipe_id=_opt_int("recipe_id"),
     )
 
 
@@ -706,6 +715,9 @@ def create_session(
     notes: str = "",
     db_path: Path | None = None,
     apply_profile: bool = True,
+    camera_id: int | None = None,
+    camera_config_id: int | None = None,
+    recipe_id: int | None = None,
 ) -> ImagingSession:
     key = str(catalog_key or "").strip()
     if not key:
@@ -722,6 +734,38 @@ def create_session(
     lights_p = None if lights_p is None else max(0, int(lights_p))
     darks_p = None if darks_planned is None else max(0, int(darks_planned))
     darks_c = max(0, int(darks_completed or 0))
+
+    if camera_id is not None or camera_config_id is not None or recipe_id is not None:
+        from mele.camera_model import get_camera, get_config, get_recipe
+
+        if recipe_id is not None:
+            recipe = get_recipe(int(recipe_id), db_path=db_path)
+            if recipe is None:
+                raise ValueError(f"Unbekanntes Aufnahmerezept: {recipe_id}")
+            if exposure_s is None:
+                exposure_s = recipe.exposure_s
+        if camera_config_id is not None:
+            config = get_config(int(camera_config_id), db_path=db_path)
+            if config is None:
+                raise ValueError(f"Unbekannte Kamerakonfiguration: {camera_config_id}")
+            if camera_id is None:
+                camera_id = config.camera_id
+            elif int(camera_id) != int(config.camera_id):
+                raise ValueError("Konfiguration gehört nicht zur Kamera.")
+            if iso is None:
+                iso = config.iso
+            if gain is None:
+                gain = config.gain
+            if offset_adu is None:
+                offset_adu = config.offset_adu
+            if not str(binning or "").strip():
+                binning = config.binning or "1x1"
+        if camera_id is not None:
+            camera = get_camera(int(camera_id), db_path=db_path)
+            if camera is None:
+                raise ValueError(f"Unbekannte Kamera: {camera_id}")
+            if not str(equipment or "").strip():
+                equipment = camera.name
 
     # Bei neuer Session: fehlende Felder aus Profil uebernehmen (Snapshot)
     if apply_profile and profile_id is not None:
@@ -770,8 +814,9 @@ def create_session(
               archive_status, notes, created_utc, updated_utc,
               lifecycle_status, session_start_utc, session_end_utc,
               work_transfer_path, work_local_path, archive_completeness,
-              manifest_revision, weather_export_status, object_id, equipment_profile_id
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              manifest_revision, weather_export_status, object_id, equipment_profile_id,
+              camera_id, camera_config_id, recipe_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 key,
@@ -808,6 +853,9 @@ def create_session(
                 WEATHER_EXPORT_NONE,
                 key,
                 "",
+                None if camera_id is None else int(camera_id),
+                None if camera_config_id is None else int(camera_config_id),
+                None if recipe_id is None else int(recipe_id),
             ),
         )
         sid = int(cur.lastrowid)
@@ -826,11 +874,13 @@ class SessionCreateError(ValueError):
         code: str,
         status: int = 409,
         profiles: list[dict[str, Any]] | None = None,
+        choices: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status = status
         self.profiles = profiles or []
+        self.choices = choices or {}
 
 
 def create_object_session(
@@ -838,39 +888,42 @@ def create_object_session(
     catalog_key: str,
     display_name: str = "",
     profile_id: int | None = None,
+    camera_id: int | None = None,
+    camera_config_id: int | None = None,
+    recipe_id: int | None = None,
     db_path: Path | None = None,
     local_root: Path,
     archive_root: Path,
 ) -> ImagingSession:
-    """Session für ein Objekt. Profil und Ordner kommen vom Server."""
+    """Session für ein Objekt. Kamera, Konfiguration, Rezept und Ordner kommen vom Server."""
+    del profile_id
     key = str(catalog_key or "").strip()
     if not key:
         raise SessionCreateError("Objekt fehlt.", "params", 400)
-    profiles = list_profiles(key, db_path=db_path)
-    if profile_id is None:
-        if len(profiles) > 1:
-            raise SessionCreateError(
-                "Mehrere Profile. Eines auswählen.",
-                "profile_ambiguous",
-                409,
-                [
-                    {"id": int(profile.id), "label": profile.label, "catalog_key": profile.catalog_key}
-                    for profile in profiles
-                ],
-            )
-        chosen = None if not profiles else int(profiles[0].id)
-    else:
-        profile = get_profile(int(profile_id), db_path=db_path)
-        if profile is None or profile.catalog_key != key:
-            raise SessionCreateError("Profil gehört nicht zum Objekt.", "profile_mismatch", 409)
-        chosen = int(profile.id)
+    from mele.camera_model import resolve_setup
+
+    choice = resolve_setup(
+        camera_id=camera_id,
+        config_id=camera_config_id,
+        recipe_id=recipe_id,
+        db_path=db_path,
+    )
+    if not choice.ok or choice.camera is None or choice.config is None or choice.recipe is None:
+        raise SessionCreateError(
+            choice.error or "Aufnahmeauswahl fehlt.",
+            choice.code or "params",
+            choice.status,
+            choices=choice.choices,
+        )
     session = create_session(
         catalog_key=key,
-        profile_id=chosen,
+        camera_id=choice.camera.id,
+        camera_config_id=choice.config.id,
+        recipe_id=choice.recipe.id,
         local_path="",
         archive_path="",
         db_path=db_path,
-        apply_profile=True,
+        apply_profile=False,
     )
     name = str(display_name or "").strip() or None
     local_path = suggested_local_session_dir(
@@ -924,6 +977,9 @@ def update_session(
     archive_path: str | None = None,
     archive_status: str | None = None,
     notes: str | None = None,
+    camera_id: int | None = None,
+    camera_config_id: int | None = None,
+    recipe_id: int | None = None,
     db_path: Path | None = None,
 ) -> ImagingSession:
     """Session-Parameter aktualisieren (Vorbereitung / Feintuning vor Capture)."""
@@ -989,6 +1045,9 @@ def update_session(
             status = "local"
         note = str(_pick(notes, row["notes"]) or "")
         integration = None if exp is None else float(exp) * lights_c
+        cam_id = _pick(camera_id, row["camera_id"] if "camera_id" in keys else None)
+        cfg_id = _pick(camera_config_id, row["camera_config_id"] if "camera_config_id" in keys else None)
+        rec_id = _pick(recipe_id, row["recipe_id"] if "recipe_id" in keys else None)
 
         conn.execute(
             """
@@ -1000,7 +1059,8 @@ def update_session(
               exposure_s=?,
               gain=?, iso=?, offset_adu=?, binning=?, filter_name=?, equipment=?,
               integration_s=?, local_path=?, archive_path=?, archive_status=?,
-              notes=?, updated_utc=?
+              notes=?, updated_utc=?,
+              camera_id=?, camera_config_id=?, recipe_id=?
             WHERE id=?
             """,
             (
@@ -1024,6 +1084,9 @@ def update_session(
                 status,
                 note,
                 now,
+                None if cam_id is None else int(cam_id),
+                None if cfg_id is None else int(cfg_id),
+                None if rec_id is None else int(rec_id),
                 int(session_id),
             ),
         )

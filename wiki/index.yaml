@@ -107,8 +107,17 @@ sections:
         title: Astro-VR Architektur v1.14 (Tafel, Kamera, Monitor)
         file: knowledge/astro-vr-architektur-v1.14.md
       - id: astro-vr-architektur-v1.15
-        title: Astro-VR Architektur v1.15 (Sessionansicht, Konzept)
+        title: Astro-VR Architektur v1.15 (Sessionansicht)
         file: knowledge/astro-vr-architektur-v1.15.md
+      - id: astro-vr-architektur-v1.16
+        title: Astro-VR Architektur v1.16 (Kamera und Rezept, Entwurf)
+        file: knowledge/astro-vr-architektur-v1.16.md
+      - id: astro-vr-architektur-v1.17
+        title: Astro-VR Architektur v1.17 (Toolkit-Audit)
+        file: knowledge/astro-vr-architektur-v1.17.md
+      - id: astro-toolkit-roadmap-v1
+        title: Astro-Toolkit Roadmap v1
+        file: knowledge/astro-toolkit-roadmap-v1.md
       - id: astro-vr-desktop-inventar-v0.1
         title: Astro-VR Desktop-Inventar v0.1 (XR-8a)
         file: knowledge/astro-vr-desktop-inventar-v0.1.md

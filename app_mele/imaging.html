@@ -242,6 +242,15 @@
           <summary id="img-session-form-sum">Session anlegen / bearbeiten</summary>
           <form id="img-session-form" class="grid" style="margin-top:10px;">
             <input type="hidden" id="img-session-edit-id" value="">
+            <label class="field span2">Kamera
+              <select id="img-session-camera" required></select>
+            </label>
+            <label class="field span2">Kamerakonfiguration
+              <select id="img-session-config" required></select>
+            </label>
+            <label class="field span2">Aufnahmerezept
+              <select id="img-session-recipe" required></select>
+            </label>
             <label class="field span2">Profil
               <select id="img-session-profile"></select>
             </label>
@@ -282,6 +291,8 @@
         <div class="row" style="margin-bottom:8px;">
           <label class="toggle"><input type="checkbox" id="chk-color" checked> Farbe</label>
           <button type="button" class="btn" id="btn-restretch">Neu stretchen</button>
+          <button type="button" class="btn" id="btn-monitor-light">LICHT</button>
+          <button type="button" class="btn" id="btn-monitor-guide">GUIDING</button>
         </div>
         <div id="img-session-preview"><div class="hint">Session wählen…</div></div>
       </section>
@@ -326,6 +337,7 @@
     let imagingSuggestedArchive = "";
     let imagingLoadToken = 0;
     let imagingProfilesCache = [];
+    let imagingModel = { cameras: [], configs: [], recipes: [] };
     let imagingSessionsCache = [];
     let imagingStoragePaths = {
       work_configured: false,
@@ -468,6 +480,45 @@
       const p = imagingProfilesCache.find((x) => String(x.id) === id);
       applyProfileDefaultsToSession(p, onlyEmpty);
     }
+    function fillSelect(select, rows, placeholder, labelOf) {
+      const prev = select.value;
+      select.innerHTML = "";
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = placeholder;
+      select.appendChild(none);
+      rows.forEach((row) => {
+        const opt = document.createElement("option");
+        opt.value = String(row.id);
+        opt.textContent = labelOf(row);
+        select.appendChild(opt);
+      });
+      if (prev && [...select.options].some((opt) => opt.value === prev)) select.value = prev;
+      else if (rows.length === 1) select.value = String(rows[0].id);
+    }
+    function fillConfigSelect(cameraId) {
+      const configs = (imagingModel.configs || []).filter((config) => String(config.camera_id) === String(cameraId));
+      fillSelect($("img-session-config"), configs, "(Konfiguration wählen)", (config) => config.label);
+      applyConfigToSessionForm();
+    }
+    function fillCameraSelects() {
+      fillSelect($("img-session-camera"), imagingModel.cameras || [], "(Kamera wählen)", (camera) => camera.name);
+      fillConfigSelect($("img-session-camera").value);
+      fillSelect($("img-session-recipe"), imagingModel.recipes || [], "(Rezept wählen)", (recipe) => recipe.name);
+    }
+    function applyConfigToSessionForm() {
+      const config = (imagingModel.configs || []).find((item) => String(item.id) === $("img-session-config").value);
+      if (!config) return;
+      if (config.iso != null) $("img-session-iso").value = String(config.iso);
+      if (config.binning) $("img-session-binning").value = config.binning;
+      const camera = (imagingModel.cameras || []).find((item) => String(item.id) === String(config.camera_id));
+      if (camera) $("img-session-equipment").value = camera.name;
+    }
+    function applyRecipeToSessionForm() {
+      const recipe = (imagingModel.recipes || []).find((item) => String(item.id) === $("img-session-recipe").value);
+      if (!recipe || recipe.exposure_s == null) return;
+      $("img-session-exposure").value = String(recipe.exposure_s);
+    }
     function resetSessionForm() {
       imagingSessionEditing = false;
       imagingSessionCreating = false;
@@ -509,6 +560,10 @@
       imagingSessionCreating = false;
       $("img-session-edit-id").value = s.id || "";
       $("img-session-profile").value = s.profile_id != null ? String(s.profile_id) : "";
+      if (s.camera_id != null) $("img-session-camera").value = String(s.camera_id);
+      fillConfigSelect($("img-session-camera").value);
+      if (s.camera_config_id != null) $("img-session-config").value = String(s.camera_config_id);
+      if (s.recipe_id != null) $("img-session-recipe").value = String(s.recipe_id);
       const lightsP = s.lights_planned != null ? s.lights_planned : s.frames_planned;
       const lightsC = s.lights_completed != null ? s.lights_completed : (s.frames_completed || 0);
       $("img-session-lights-planned").value = lightsP != null ? lightsP : "";
@@ -1049,7 +1104,64 @@
       }
     }
 
+    let imagingMonitorSource = "light_preview";
+    let imagingGuideTimer = 0;
+
+    function stopGuidePreview() {
+      if (imagingGuideTimer) window.clearInterval(imagingGuideTimer);
+      imagingGuideTimer = 0;
+    }
+
+    async function refreshGuidePreview() {
+      const wrap = $("img-session-preview");
+      if (!wrap || imagingMonitorSource !== "phd2_fullframe") return;
+      try {
+        const response = await fetch(
+          `/astro/capture/preview?session_id=${encodeURIComponent(imagingSelectedSessionId || 0)}&source=phd2_fullframe`,
+          { cache: "no-store" },
+        );
+        const data = await response.json().catch(() => ({}));
+        if (imagingMonitorSource !== "phd2_fullframe") return;
+        if (!response.ok || data.ok === false || !data.preview_url) {
+          wrap.innerHTML = `<div class="hint">GUIDING\n${data.error || "Kein Guiding-Bild"}</div>`;
+          return;
+        }
+        let img = wrap.querySelector("img");
+        if (!img || img.dataset.imageId !== String(data.image_id || "")) {
+          wrap.innerHTML = "";
+          img = document.createElement("img");
+          img.alt = "PHD2";
+          img.dataset.imageId = String(data.image_id || "");
+          img.src = data.preview_url;
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = "GUIDING · PHD2";
+          wrap.appendChild(img);
+          wrap.appendChild(meta);
+        }
+      } catch (err) {
+        if (imagingMonitorSource !== "phd2_fullframe") return;
+        wrap.innerHTML = `<div class="hint">GUIDING\n${String(err.message || err)}</div>`;
+      }
+    }
+
+    function showGuidePreview() {
+      imagingMonitorSource = "phd2_fullframe";
+      stopGuidePreview();
+      void refreshGuidePreview();
+      imagingGuideTimer = window.setInterval(() => { void refreshGuidePreview(); }, 1000);
+    }
+
+    function showLightPreview() {
+      imagingMonitorSource = "light_preview";
+      stopGuidePreview();
+      if (imagingSelectedSessionId) {
+        void loadSessionPreview(imagingSelectedSessionId, $("img-session-preview"), { forceLight: true });
+      }
+    }
+
     async function loadSessionPreview(sessionId, wrap, opts) {
+      if (imagingMonitorSource === "phd2_fullframe" && !(opts && opts.forceLight)) return;
       if (!wrap || !sessionId) return;
       const force = opts && opts.force;
       const wantColor = (opts && opts.color != null) ? !!opts.color : imagingPreviewColor;
@@ -1156,6 +1268,7 @@
       });
       if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
       else if (profiles.length === 1) sel.value = String(profiles[0].id);
+      fillCameraSelects();
       if (!imagingSessionEditing) syncSessionFormFromSelectedProfile(false);
 
       imagingSessionsCache = sessions;
@@ -1208,6 +1321,12 @@
           return;
         }
         await loadStoragePaths();
+        if (token !== imagingLoadToken) return;
+        try {
+          const modelResponse = await fetch("/astro/imaging-model", { cache: "no-store" });
+          const model = await modelResponse.json();
+          if (modelResponse.ok && model.ok !== false) imagingModel = model;
+        } catch (_) {}
         if (token !== imagingLoadToken) return;
         renderImaging(data);
         setStatus("");
@@ -1663,6 +1782,9 @@
     });
     $("img-session-new").addEventListener("click", beginNewSession);
     $("img-session-profile").addEventListener("change", () => syncSessionFormFromSelectedProfile(false));
+    $("img-session-camera").addEventListener("change", () => fillConfigSelect($("img-session-camera").value));
+    $("img-session-config").addEventListener("change", applyConfigToSessionForm);
+    $("img-session-recipe").addEventListener("change", applyRecipeToSessionForm);
     $("img-session-cancel-edit").addEventListener("click", () => {
       resetSessionForm();
       $("img-session-form-box").open = false;
@@ -1676,6 +1798,9 @@
         const body = {
           catalog_key: imagingCatalogKey,
           profile_id: numOrNull("img-session-profile"),
+          camera_id: numOrNull("img-session-camera"),
+          camera_config_id: numOrNull("img-session-config"),
+          recipe_id: numOrNull("img-session-recipe"),
           lights_planned: numOrNull("img-session-lights-planned"),
           lights_completed: numOrNull("img-session-lights-completed"),
           darks_planned: numOrNull("img-session-darks-planned"),
@@ -1735,7 +1860,11 @@
       closeSessionTimingLog();
       closeRemoveSessionModal();
     });
+    $("btn-monitor-light").addEventListener("click", () => showLightPreview());
+    $("btn-monitor-guide").addEventListener("click", () => showGuidePreview());
     $("btn-restretch").addEventListener("click", async () => {
+      imagingMonitorSource = "light_preview";
+      stopGuidePreview();
       if (!imagingSelectedSessionId) return;
       await loadSessionPreview(imagingSelectedSessionId, $("img-session-preview"), {
         force: true,

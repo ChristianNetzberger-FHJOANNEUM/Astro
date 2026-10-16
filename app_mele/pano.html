@@ -2827,6 +2827,26 @@
       rows.push(["Az", `${item.az.toFixed(1)}°`]);
       rows.push(["h", fmtAlt(item.alt)]);
       if (item.phase != null) rows.push(["Phase", `${Math.round(item.phase * 100)}%`]);
+      const major = Number(item.maj_arcmin);
+      const minor = Number(item.min_arcmin);
+      if (Number.isFinite(major) && major > 0) {
+        const majorText = major >= 10 ? String(Math.round(major)) : String(Math.round(major * 10) / 10).replace(".", ",");
+        const minorText = Number.isFinite(minor) && minor > 0
+          ? (minor >= 10 ? String(Math.round(minor)) : String(Math.round(minor * 10) / 10).replace(".", ","))
+          : "";
+        rows.push(["Ausdehnung", minorText && minorText !== majorText ? `${majorText}′ × ${minorText}′` : `${majorText}′`]);
+      } else if (Number.isFinite(Number(item.diam_deg)) && Number(item.diam_deg) > 0) {
+        const arcmin = Number(item.diam_deg) * 60;
+        const text = arcmin >= 10 ? String(Math.round(arcmin)) : String(Math.round(arcmin * 10) / 10).replace(".", ",");
+        rows.push(["Ausdehnung", `${text}′`]);
+      }
+      const ly = Number(item.dist_ly);
+      if (Number.isFinite(ly) && ly > 0) {
+        const text = ly >= 1000000
+          ? `${(ly / 1000000).toFixed(1).replace(".", ",")} Mio. Lj`
+          : (ly >= 100 ? `${Math.round(ly).toLocaleString("de-AT")} Lj` : `${String(Math.round(ly * 10) / 10).replace(".", ",")} Lj`);
+        rows.push(["Abstand", text]);
+      }
       const dl = document.getElementById("info-dl");
       dl.innerHTML = "";
       rows.forEach(([key, value]) => {

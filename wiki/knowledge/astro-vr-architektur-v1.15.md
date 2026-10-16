@@ -1,7 +1,9 @@
 # Astro-VR Architektur v1.15 — Sessionansicht
 
 > Quelle: Monitor in [v1.14](astro-vr-architektur-v1.14.md)
-> Stand: **15. Oktober 2026.** Konzept, nicht beauftragt.
+> Stand: **16. Oktober 2026.** Auf der Quest geprüft. Eine gespeicherte Session zeigt Belichtung und ISO. Der Monitor zeigt das Vorschaubild und die Statistik. Nächster Entwurf: [v1.16](astro-vr-architektur-v1.16.md).
+
+Eine Zeile `geschlossen` oder `gespeichert` öffnet Datum, Belichtung, ISO, Lights, Darks und Wetter. `MONITOR` zeigt das vorhandene JPEG. `ZURÜCK` geht zur Liste und schließt nichts. Eine offene Zeile geht weiter auf die Kameratafel.
 
 Die Kameratafel bleibt in der bestätigten Größe. Weitere Knöpfe kommen auf eigene Seiten derselben Tafel, so wie die Einstellungen schon Seiten haben. Das Vorschaubild bleibt auf dem eigenen Monitor.
 

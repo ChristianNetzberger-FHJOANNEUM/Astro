@@ -35,8 +35,8 @@ synscan_pro_exe: C:/Astro/SW/synscanpro_windows_2611/SynScanPro/SynScanPro.exe
 phd2_exe: C:/Program Files (x86)/PHDGuiding2/phd2.exe
 phd2_host: 127.0.0.1
 phd2_port: 4400
-# Fullframe via save_image → FITS → JPEG (Setup/Navigation), nicht jedes Guide-Frame
-phd2_fullframe_interval_s: 1.0
+# Fullframe via save_image → FITS → JPEG. Unter 4 s bleibt PHD2 beim Looping hängen.
+phd2_fullframe_interval_s: 4.0
 # GeoSphere-Forecast-Journal (stündlich via Task Scheduler / CLI).
 weather_journal_enabled: true
 weather_journal_interval_h: 1

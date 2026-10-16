@@ -8,6 +8,8 @@ from mele.catalog import (
     canonical_dso_key,
     catalog_ready,
     classify_daylight,
+    distance_ly_from_parallax,
+    distance_ly_from_parsec,
     normalize_object_query,
     object_track,
     parse_constellation_fab,
@@ -158,6 +160,16 @@ def test_openngc_b_mag_fallback(tmp_path: Path) -> None:
     assert m31["mag_band"] == "V"
     assert float(n6426["mag"]) == 11.2
     assert n6426["mag_band"] == "B"
+
+
+def test_distance_uses_cluster_parallax_and_skips_galaxies() -> None:
+    assert distance_ly_from_parallax(6.0, "G") is None
+    assert distance_ly_from_parallax(0.02, "GCl") is None
+    cluster = distance_ly_from_parallax(1.9536, "OCl")
+    assert cluster is not None
+    assert 1600 < cluster < 1750
+    assert distance_ly_from_parsec(100000) is None
+    assert distance_ly_from_parsec(133) is not None
 
 
 def test_horizon_hides_objects_below_profile(tmp_path: Path) -> None:

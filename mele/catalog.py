@@ -187,7 +187,8 @@ CREATE TABLE IF NOT EXISTS stars (
     dec_deg REAL NOT NULL,
     mag REAL,
     name TEXT,
-    con TEXT
+    con TEXT,
+    dist_ly REAL
 );
 CREATE INDEX IF NOT EXISTS stars_hip ON stars(hip);
 CREATE INDEX IF NOT EXISTS stars_mag ON stars(mag);
@@ -206,7 +207,10 @@ CREATE TABLE IF NOT EXISTS dso (
     dec_deg REAL NOT NULL,
     mag REAL,
     mag_band TEXT,
-    messier INTEGER
+    messier INTEGER,
+    maj_arcmin REAL,
+    min_arcmin REAL,
+    dist_ly REAL
 );
 CREATE INDEX IF NOT EXISTS dso_messier ON dso(messier);
 CREATE INDEX IF NOT EXISTS dso_mag ON dso(mag);
@@ -219,6 +223,39 @@ def catalog_db_path(explicit: Path | None = None) -> Path:
     return load_mele_settings().catalog_dir / "sky.sqlite"
 
 
+_PARALLAX_TYPES = frozenset({"*", "**", "OCl", "*Ass", "Cl+N"})
+_LY_PER_PC = 3.261563777
+_measures_done: set[str] = set()
+DSO_COLUMNS = (
+    "key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier, "
+    "maj_arcmin, min_arcmin, dist_ly"
+)
+STAR_COLUMNS = "hip, ra_deg, dec_deg, mag, name, con, dist_ly"
+
+
+def distance_ly_from_parallax(pax_mas: float | None, type_code: str) -> float | None:
+    """Lichtjahre aus OpenNGC-Parallaxe. Galaxien bleiben ohne Abstand.
+
+    Die Parallaxe ferner Galaxien in OpenNGC ist keine Entfernung.
+    Nur Stern- und Haufenparallaxen ab 0,5 Millibogensekunden zählen.
+    """
+    if pax_mas is None or type_code not in _PARALLAX_TYPES:
+        return None
+    if not (0.5 <= float(pax_mas) <= 2000.0):
+        return None
+    return (1000.0 / float(pax_mas)) * _LY_PER_PC
+
+
+def distance_ly_from_parsec(dist_pc: float | None) -> float | None:
+    """HYG-Abstand. 100000 pc ist dort der Platzhalter für unbekannt."""
+    if dist_pc is None:
+        return None
+    value = float(dist_pc)
+    if value <= 0 or value >= 100000:
+        return None
+    return value * _LY_PER_PC
+
+
 def catalog_ready(db_path: Path | None = None) -> bool:
     path = catalog_db_path(db_path)
     if not path.is_file():
@@ -228,7 +265,62 @@ def catalog_ready(db_path: Path | None = None) -> bool:
             n = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]
         except sqlite3.Error:
             return False
+        if n > 0:
+            _ensure_object_measures(conn, path)
     return n > 0
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _ensure_object_measures(conn: sqlite3.Connection, db_path: Path) -> None:
+    """Ergänzt Ausdehnung und Abstand in der bestehenden Katalogdatei."""
+    key = str(db_path.resolve())
+    if key in _measures_done:
+        return
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'object_measures'").fetchone()
+    except sqlite3.Error:
+        return
+    if row is not None and str(row[0]) == "1":
+        _measures_done.add(key)
+        return
+    dso_cols = _column_names(conn, "dso")
+    star_cols = _column_names(conn, "stars")
+    if "maj_arcmin" not in dso_cols:
+        conn.execute("ALTER TABLE dso ADD COLUMN maj_arcmin REAL")
+    if "min_arcmin" not in dso_cols:
+        conn.execute("ALTER TABLE dso ADD COLUMN min_arcmin REAL")
+    if "dist_ly" not in dso_cols:
+        conn.execute("ALTER TABLE dso ADD COLUMN dist_ly REAL")
+    if "dist_ly" not in star_cols:
+        conn.execute("ALTER TABLE stars ADD COLUMN dist_ly REAL")
+    src = db_path.parent / "src"
+    ngc_paths = [src / name for name in ("NGC.csv", "addendum.csv") if (src / name).is_file()]
+    if ngc_paths:
+        updates = []
+        for path in ngc_paths:
+            for parsed in _parse_openngc(path):
+                updates.append((parsed[10], parsed[11], parsed[12], parsed[0]))
+        conn.executemany(
+            "UPDATE dso SET maj_arcmin = ?, min_arcmin = ?, dist_ly = ? WHERE key = ?",
+            updates,
+        )
+    hyg = src / "hygdata_v41.csv"
+    if hyg.is_file():
+        star_updates = [
+            (parsed[6], parsed[0])
+            for parsed in _parse_hyg(hyg)
+            if parsed[0] is not None and parsed[6] is not None
+        ]
+        conn.executemany("UPDATE stars SET dist_ly = ? WHERE hip = ?", star_updates)
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('object_measures', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = '1'"
+    )
+    conn.commit()
+    _measures_done.add(key)
 
 
 def _open_text(path: Path):
@@ -324,7 +416,14 @@ def _parse_hyg(path: Path) -> list[tuple]:
             mag = None
         hip_s = (raw.get("hip") or "").strip()
         hip = int(hip_s) if hip_s.isdigit() else None
-        rows.append((hip, ra_deg, dec, mag, name, (raw.get("con") or "").strip()))
+        dist_ly = None
+        dist_s = (raw.get("dist") or "").strip()
+        if dist_s:
+            try:
+                dist_ly = distance_ly_from_parsec(float(dist_s))
+            except ValueError:
+                dist_ly = None
+        rows.append((hip, ra_deg, dec, mag, name, (raw.get("con") or "").strip(), dist_ly))
     return rows
 
 
@@ -405,8 +504,37 @@ def _parse_openngc(path: Path) -> list[tuple]:
             display = f"M{messier}" if messier is not None else name
             if common:
                 display = f"{display} {common}" if messier is not None else f"{name} {common}"
-            rows.append((key, catalog, number, display, kind, ra, dec, mag, mag_band, messier))
+            rows.append(
+                (
+                    key,
+                    catalog,
+                    number,
+                    display,
+                    kind,
+                    ra,
+                    dec,
+                    mag,
+                    mag_band,
+                    messier,
+                    _positive_float(raw.get("MajAx")),
+                    _positive_float(raw.get("MinAx")),
+                    distance_ly_from_parallax(_positive_float(raw.get("Pax")), kind),
+                )
+            )
     return rows
+
+
+def _positive_float(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    if number <= 0:
+        return None
+    return number
 
 
 def _parse_openngc_mag(raw: dict) -> tuple[float | None, str | None]:
@@ -445,7 +573,7 @@ def build_database(
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
         conn.executemany(
-            "INSERT INTO stars (hip, ra_deg, dec_deg, mag, name, con) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO stars (hip, ra_deg, dec_deg, mag, name, con, dist_ly) VALUES (?,?,?,?,?,?,?)",
             stars,
         )
         conn.executemany(
@@ -453,8 +581,8 @@ def build_database(
             lines,
         )
         conn.executemany(
-            "INSERT INTO dso (key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO dso (key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier, "
+            "maj_arcmin, min_arcmin, dist_ly) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             objects,
         )
         conn.execute(
@@ -568,6 +696,16 @@ def _dso_kind(row: sqlite3.Row) -> str:
     return "messier" if row["messier"] is not None else "ngc"
 
 
+def _copy_measures(item: dict, row: sqlite3.Row) -> None:
+    names = set(row.keys())
+    if "maj_arcmin" in names and row["maj_arcmin"] is not None:
+        item["maj_arcmin"] = round(float(row["maj_arcmin"]), 2)
+    if "min_arcmin" in names and row["min_arcmin"] is not None:
+        item["min_arcmin"] = round(float(row["min_arcmin"]), 2)
+    if "dist_ly" in names and row["dist_ly"] is not None:
+        item["dist_ly"] = round(float(row["dist_ly"]), 1)
+
+
 def _dso_hit(row: sqlite3.Row) -> dict:
     item = {
         "key": str(row["key"]),
@@ -583,6 +721,7 @@ def _dso_hit(row: sqlite3.Row) -> dict:
         band = str(row["mag_band"] or "").strip().upper()
         if band in {"V", "B"}:
             item["mag_band"] = band
+    _copy_measures(item, row)
     return item
 
 
@@ -604,6 +743,7 @@ def _star_hit(row: sqlite3.Row) -> dict:
         item["mag"] = float(row["mag"])
     if row["con"]:
         item["con"] = str(row["con"])
+    _copy_measures(item, row)
     return item
 
 
@@ -676,7 +816,7 @@ def search_catalog(
         # 1) Exakter Key
         if norm:
             row = conn.execute(
-                "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                f"SELECT {DSO_COLUMNS} "
                 "FROM dso WHERE upper(key)=? LIMIT 1",
                 (norm,),
             ).fetchone()
@@ -686,7 +826,7 @@ def search_catalog(
             if norm.startswith("HIP") and norm[3:].isdigit():
                 hip = int(norm[3:])
                 star = conn.execute(
-                    "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars WHERE hip=? LIMIT 1",
+                    f"SELECT {STAR_COLUMNS} FROM stars WHERE hip=? LIMIT 1",
                     (hip,),
                 ).fetchone()
                 if star is not None:
@@ -695,8 +835,8 @@ def search_catalog(
         # Exakter Sternname vor Teilworten in DSO-Namen („Polaris“ ≠ „Polarissima“).
         if len(hits) < limit and raw.strip():
             for star in conn.execute(
-                """
-                SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                f"""
+                SELECT {STAR_COLUMNS} FROM stars
                 WHERE name = ? COLLATE NOCASE
                 ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END, name
                 LIMIT ?
@@ -709,8 +849,8 @@ def search_catalog(
 
         # 2) Key-Prefix / Name
         for row in conn.execute(
-            """
-            SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier
+            f"""
+            SELECT {DSO_COLUMNS}
             FROM dso
             WHERE upper(key) LIKE ? OR upper(key) LIKE ?
                OR name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE
@@ -730,8 +870,8 @@ def search_catalog(
 
         if len(hits) < limit:
             for star in conn.execute(
-                """
-                SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                f"""
+                SELECT {STAR_COLUMNS} FROM stars
                 WHERE name IS NOT NULL AND name != ''
                   AND (name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE)
                 ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END ASC, name
@@ -792,6 +932,8 @@ def resolve_catalog_object(
             }
             if body.phase is not None:
                 item["phase"] = round(float(body.phase), 3)
+            if body.diam_deg is not None:
+                item["diam_deg"] = float(body.diam_deg)
             return _with_horizon(item, body.ra_deg, body.dec_deg)
         return None
 
@@ -825,7 +967,7 @@ def resolve_catalog_object(
             row = None
             if norm:
                 row = conn.execute(
-                    "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                    f"SELECT {DSO_COLUMNS} "
                     "FROM dso WHERE upper(key)=? LIMIT 1",
                     (norm,),
                 ).fetchone()
@@ -834,7 +976,7 @@ def resolve_catalog_object(
                     alt_keys = {f"NGC{int(norm[3:])}", f"NGC{int(norm[3:]):04d}"}
                     for key in alt_keys:
                         row = conn.execute(
-                            "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                            f"SELECT {DSO_COLUMNS} "
                             "FROM dso WHERE upper(key)=? LIMIT 1",
                             (key,),
                         ).fetchone()
@@ -843,7 +985,7 @@ def resolve_catalog_object(
                 if row is None and norm.startswith("IC") and norm[2:].isdigit():
                     for key in {f"IC{int(norm[2:])}", f"IC{int(norm[2:]):04d}"}:
                         row = conn.execute(
-                            "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                            f"SELECT {DSO_COLUMNS} "
                             "FROM dso WHERE upper(key)=? LIMIT 1",
                             (key,),
                         ).fetchone()
@@ -853,7 +995,7 @@ def resolve_catalog_object(
                 hit = _dso_hit(row)
             elif norm.startswith("HIP") and norm[3:].isdigit():
                 star = conn.execute(
-                    "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars WHERE hip=? LIMIT 1",
+                    f"SELECT {STAR_COLUMNS} FROM stars WHERE hip=? LIMIT 1",
                     (int(norm[3:]),),
                 ).fetchone()
                 if star is not None:
@@ -862,8 +1004,8 @@ def resolve_catalog_object(
                 # Exakter Sternname vor der Teilwortsuche. Sonst gewinnt
                 # „Polarissima Australis“, weil „Polaris“ darin vorkommt.
                 star = conn.execute(
-                    """
-                    SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars
+                    f"""
+                    SELECT {STAR_COLUMNS} FROM stars
                     WHERE name = ? COLLATE NOCASE
                     ORDER BY CASE WHEN mag IS NULL THEN 99.0 ELSE mag END, name
                     LIMIT 1
@@ -934,7 +1076,7 @@ def query_overlay(
             if stars or constellations:
                 star_rows = list(
                     conn.execute(
-                        "SELECT hip, ra_deg, dec_deg, mag, name, con FROM stars "
+                        f"SELECT {STAR_COLUMNS} FROM stars "
                         "WHERE mag IS NOT NULL AND mag <= ?",
                         (max(mag_limit, 6.5) if constellations else mag_limit,),
                     )
@@ -944,7 +1086,7 @@ def query_overlay(
                     dso_rows = []
                 else:
                     selected = (
-                        "SELECT key, catalog, number, name, type, ra_deg, dec_deg, mag, mag_band, messier "
+                        f"SELECT {DSO_COLUMNS} "
                         "FROM dso WHERE "
                     )
                     seen: set[str] = set()
@@ -1007,6 +1149,7 @@ def query_overlay(
                     item["hip"] = int(hip)
                 if row["con"]:
                     item["con"] = row["con"]
+                _copy_measures(item, row)
                 out_stars.append(item)
 
     out_lines: list[dict] = []
@@ -1075,6 +1218,7 @@ def query_overlay(
                 band = (row["mag_band"] or "").strip().upper()
                 if band in {"V", "B"}:
                     item["mag_band"] = band
+            _copy_measures(item, row)
             out_dso.append(item)
 
     out_bodies: list[dict] = []

@@ -31,7 +31,8 @@ EVENT_LOG_MAX = 500
 SNR_DROP_RATIO = 0.45
 SNR_DROP_MIN_INTERVAL_S = 15.0
 CALIBRATION_REFRESH_INTERVAL_S = 2.5
-DEFAULT_FULLFRAME_MIN_INTERVAL_S = 1.0
+DEFAULT_FULLFRAME_MIN_INTERVAL_S = 4.0
+STAR_MIN_INTERVAL_S = 1.0
 DEFAULT_SETTLE = {"pixels": 2.0, "time": 10, "timeout": 60}
 _MOUNT_ALERT_HINTS = (
     "pulseguide",
@@ -66,6 +67,30 @@ class Phd2LogEvent:
             "message": self.message,
             "payload": dict(self.payload),
         }
+
+
+_CAL_DIR_DE = {
+    "west": "West",
+    "east": "Ost",
+    "north": "Nord",
+    "south": "Süd",
+    "w": "West",
+    "e": "Ost",
+    "n": "Nord",
+    "s": "Süd",
+}
+
+
+def _calibration_progress(msg: dict[str, Any]) -> str:
+    """Kurzer Kalibrierschritt aus dem PHD2-Ereignis Calibrating."""
+    direction = str(msg.get("dir") or "").strip()
+    label = _CAL_DIR_DE.get(direction.lower(), direction)
+    step = msg.get("step")
+    if label and step is not None and str(step).strip() != "":
+        return f"{label} {step}"
+    if label:
+        return label
+    return str(msg.get("State") or "").strip()
 
 
 def is_mount_alert_message(text: str) -> bool:
@@ -126,6 +151,9 @@ class Phd2Status:
     phd2_profile_id: int | None = None
     phd2_profile_name: str = ""
     calibration_state: str = "NONE"  # AVAILABLE | NONE
+    cal_progress: str = ""  # z. B. "West 3", leer außerhalb der Kalibrierung
+    alert_msg: str = ""
+    alert_type: str = ""  # info | warning | error
     cal_x_angle: float | None = None
     cal_y_angle: float | None = None
     cal_x_rate: float | None = None
@@ -246,7 +274,12 @@ class Phd2Client:
         self._status = Phd2Status()
         self._steps: deque[GuideStepSample] = deque()
         self._events: deque[Phd2LogEvent] = deque(maxlen=EVENT_LOG_MAX)
+        self._image_gate = threading.Lock()
+        self._star_cache: tuple[float, bytes] | None = None
+        self._last_star_mono = 0.0
+        self._star_error = ""
         self._fullframe_cache: tuple[float, bytes] | None = None
+        self._fullframe_error = ""
         self._fullframe_min_interval_s = DEFAULT_FULLFRAME_MIN_INTERVAL_S
         self._last_fullframe_mono = 0.0
         self._pixel_scale_stale = True
@@ -255,6 +288,8 @@ class Phd2Client:
         self._last_snr_for_drop: float | None = None
         self._last_snr_drop_utc: float = 0.0
         self._last_cal_refresh_mono = 0.0
+        self._calibration_known = False
+        self._cal_probe_mono = 0.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -339,7 +374,7 @@ class Phd2Client:
         }
 
     def set_fullframe_min_interval(self, seconds: float) -> None:
-        self._fullframe_min_interval_s = max(0.2, float(seconds))
+        self._fullframe_min_interval_s = max(DEFAULT_FULLFRAME_MIN_INTERVAL_S, float(seconds))
 
     def events(self, *, limit: int = 100) -> dict[str, Any]:
         """Letzte Event-Log-Einträge (neueste zuletzt)."""
@@ -657,6 +692,21 @@ class Phd2Client:
                 self._status.cal_y_rate = None
                 self._status.cal_x_parity = ""
                 self._status.cal_y_parity = ""
+            if calibrated is not None or data is not None:
+                self._calibration_known = True
+
+    def ensure_calibration_known(self) -> None:
+        """Einmal get_calibrated, nicht bei jedem Quest-Poll."""
+        with self._lock:
+            if self._calibration_known:
+                return
+            if self._status.connection in ("OFFLINE", "CONNECTING"):
+                return
+            now = time.monotonic()
+            if (now - self._cal_probe_mono) < 10.0:
+                return
+            self._cal_probe_mono = now
+        self.refresh_calibration_and_profile()
 
     # --- image provider ----------------------------------------------------
 
@@ -681,9 +731,17 @@ class Phd2Client:
                 mode = "full"
         if mode == "star":
             try:
+                step = status.last_step if isinstance(status.last_step, dict) else {}
+                fresh = False
+                try:
+                    fresh = (time.time() - float(step.get("utc") or 0)) < 30.0
+                except (TypeError, ValueError):
+                    fresh = False
                 return self._star_jpeg(star_size=star_size), {
                     "kind": "star",
                     "connection": status.connection,
+                    "hfd": step.get("hfd") if fresh else None,
+                    "snr": step.get("snr") if fresh else None,
                 }
             except Phd2Error:
                 if requested == "star":
@@ -697,25 +755,64 @@ class Phd2Client:
             "min_interval_s": self._fullframe_min_interval_s,
         }
 
+    def _remember_image(
+        self,
+        *,
+        cache_name: str,
+        last_name: str,
+        error_name: str,
+        min_interval_s: float,
+        produce,
+    ) -> bytes:
+        """Ein Bildbefehl gleichzeitig. Der Abstand zählt ab dem Ende."""
+        with self._image_gate:
+            now = time.monotonic()
+            with self._lock:
+                cached = getattr(self, cache_name)
+                last = float(getattr(self, last_name))
+                error = str(getattr(self, error_name) or "")
+            if (now - last) < min_interval_s:
+                if cached is not None:
+                    return cached[1]
+                if error:
+                    raise Phd2Error(error)
+            try:
+                jpeg = produce()
+            except Exception as exc:
+                with self._lock:
+                    setattr(self, last_name, time.monotonic())
+                    setattr(self, error_name, str(exc))
+                if cached is not None:
+                    return cached[1]
+                raise
+            finished = time.monotonic()
+            with self._lock:
+                setattr(self, cache_name, (finished, jpeg))
+                setattr(self, last_name, finished)
+                setattr(self, error_name, "")
+            return jpeg
+
     def _star_jpeg(self, *, star_size: int) -> bytes:
-        data = self.get_star_image(star_size)
-        width = int(data.get("width") or 0)
-        height = int(data.get("height") or 0)
-        pixels_b64 = data.get("pixels")
-        if width <= 0 or height <= 0 or not pixels_b64:
-            raise Phd2Error("get_star_image: incomplete")
-        raw = base64.b64decode(pixels_b64)
-        arr = np.frombuffer(raw, dtype="<u2").reshape((height, width)).astype(np.float32)
-        return _stretch_to_jpeg(arr, max_width=max(width, 256))
+        def produce() -> bytes:
+            data = self.get_star_image(star_size)
+            width = int(data.get("width") or 0)
+            height = int(data.get("height") or 0)
+            pixels_b64 = data.get("pixels")
+            if width <= 0 or height <= 0 or not pixels_b64:
+                raise Phd2Error("get_star_image: incomplete")
+            raw = base64.b64decode(pixels_b64)
+            arr = np.frombuffer(raw, dtype="<u2").reshape((height, width)).astype(np.float32)
+            return _stretch_to_jpeg(arr, max_width=max(width, 256))
+
+        return self._remember_image(
+            cache_name="_star_cache",
+            last_name="_last_star_mono",
+            error_name="_star_error",
+            min_interval_s=STAR_MIN_INTERVAL_S,
+            produce=produce,
+        )
 
     def _fullframe_jpeg(self, *, max_width: int) -> bytes:
-        now = time.monotonic()
-        with self._lock:
-            cached = self._fullframe_cache
-            min_iv = self._fullframe_min_interval_s
-            last = self._last_fullframe_mono
-        if cached is not None and (now - last) < min_iv:
-            return cached[1]
         with self._lock:
             fallback_lock = (
                 (self._status.lock_x, self._status.lock_y)
@@ -723,23 +820,30 @@ class Phd2Client:
                 else None
             )
             lock_box_px = int(self._status.lock_box_px or 21)
-        path = Path(self.save_image())
-        try:
-            jpeg = _fits_path_to_jpeg(
-                path,
-                max_width=max_width,
-                lock=fallback_lock,
-                lock_box_px=lock_box_px,
-            )
-        finally:
+            min_iv = self._fullframe_min_interval_s
+
+        def produce() -> bytes:
+            path = Path(self.save_image())
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        with self._lock:
-            self._fullframe_cache = (now, jpeg)
-            self._last_fullframe_mono = now
-        return jpeg
+                return _fits_path_to_jpeg(
+                    path,
+                    max_width=max_width,
+                    lock=fallback_lock,
+                    lock_box_px=lock_box_px,
+                )
+            finally:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        return self._remember_image(
+            cache_name="_fullframe_cache",
+            last_name="_last_fullframe_mono",
+            error_name="_fullframe_error",
+            min_interval_s=min_iv,
+            produce=produce,
+        )
 
     # --- reader thread -----------------------------------------------------
 
@@ -756,9 +860,11 @@ class Phd2Client:
                     self._status.last_error = str(exc)
                     sock = self._sock
                     self._sock = None
-                    if prev and prev != "OFFLINE":
-                        self._emit_event("OFFLINE", "derived", f"PHD2 offline: {exc}")
-                        self._last_logged_connection = "OFFLINE"
+                if prev and prev != "OFFLINE":
+                    self._emit_event("OFFLINE", "derived", f"PHD2 offline: {exc}")
+                    self._last_logged_connection = "OFFLINE"
+                self._calibration_known = False
+                self._cal_probe_mono = 0.0
                 if sock is not None:
                     try:
                         sock.close()
@@ -844,11 +950,19 @@ class Phd2Client:
             self._refresh_connection_label()
             return
         if event == "StartCalibration":
-            self._status.app_state = "Calibrating"
-            self._refresh_connection_label()
+            self._clear_guide_alert()
+            self._status.cal_progress = ""
+            self._apply_app_state("Calibrating")
+            return
+        if event == "Calibrating":
+            self._status.cal_progress = _calibration_progress(msg)
+            self._apply_app_state("Calibrating")
             return
         if event == "CalibrationComplete":
             mount = str(msg.get("Mount") or "")
+            self._status.cal_progress = ""
+            self._status.calibration_state = "AVAILABLE"
+            self._calibration_known = True
             self._emit_event(
                 "CALIBRATION_COMPLETE",
                 "phd2",
@@ -859,11 +973,17 @@ class Phd2Client:
             return
         if event == "CalibrationFailed":
             reason = str(msg.get("Reason") or msg.get("Msg") or "calibration failed")
+            self._status.cal_progress = ""
+            self._status.calibration_state = "NONE"
+            self._calibration_known = True
+            self._set_guide_alert(reason, "error")
             self._emit_event("CALIBRATION_FAILED", "phd2", reason, reason=reason)
             self._status.last_error = reason
             self._last_cal_refresh_mono = 0.0
             return
         if event == "StartGuiding":
+            self._clear_guide_alert()
+            self._status.cal_progress = ""
             self._clear_lost_star(source_hint="StartGuiding")
             self._status.guiding = True
             self._status.looping = True
@@ -943,9 +1063,13 @@ class Phd2Client:
             # RPC nicht unter Event-Lock — Flag für nächsten refresh/telemetry
             self._pixel_scale_stale = True
             self._last_cal_refresh_mono = 0.0
+            self._calibration_known = False
+            self._cal_probe_mono = 0.0
             return
         if event == "Alert":
             text = str(msg.get("Msg") or "PHD2 alert")
+            kind = str(msg.get("Type") or "error")
+            self._set_guide_alert(text, kind)
             self._status.last_error = text
             if is_mount_alert_message(text):
                 self._emit_event("MOUNT_ERROR", "phd2", text, alert=text)
@@ -981,6 +1105,7 @@ class Phd2Client:
             outage = max(0.0, now - self._star_lost_utc)
         self._status.lost_star = False
         self._star_lost_utc = None
+        self._clear_guide_alert()
         self._emit_event(
             "STAR_RECOVERED",
             "derived",
@@ -990,11 +1115,22 @@ class Phd2Client:
         )
         return True
 
+    def _set_guide_alert(self, text: str, kind: str) -> None:
+        cleaned = str(kind or "error").strip().lower()
+        self._status.alert_msg = str(text or "").strip()
+        self._status.alert_type = cleaned if cleaned in ("info", "warning", "error") else "error"
+
+    def _clear_guide_alert(self) -> None:
+        self._status.alert_msg = ""
+        self._status.alert_type = ""
+
     def _apply_app_state(self, state: str) -> None:
         self._status.app_state = state
         self._status.guiding = state == "Guiding"
         self._status.looping = state in ("Looping", "Guiding", "Calibrating")
         self._status.paused = state == "Paused"
+        if state != "Calibrating":
+            self._status.cal_progress = ""
         if state == "LostLock":
             if not self._status.lost_star:
                 last_snr = None

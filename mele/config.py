@@ -51,7 +51,7 @@ class MeleSettings:
     phd2_exe: Path = Path(r"C:\Program Files (x86)\PHDGuiding2\phd2.exe")
     phd2_host: str = "127.0.0.1"
     phd2_port: int = 4400
-    phd2_fullframe_interval_s: float = 1.0
+    phd2_fullframe_interval_s: float = 4.0
     weather_journal_enabled: bool = True
     weather_journal_interval_h: float = 1.0
     local_weather_enabled: bool = False
@@ -168,7 +168,7 @@ def load_mele_settings(path: Path | None = None) -> MeleSettings:
         phd2_exe=phd2_exe,
         phd2_host=str(raw.get("phd2_host") or "127.0.0.1").strip() or "127.0.0.1",
         phd2_port=int(raw.get("phd2_port") or 4400),
-        phd2_fullframe_interval_s=float(raw.get("phd2_fullframe_interval_s") or 1.0),
+        phd2_fullframe_interval_s=float(raw.get("phd2_fullframe_interval_s") or 4.0),
         weather_journal_enabled=_optional_bool(raw.get("weather_journal_enabled"), True),
         weather_journal_interval_h=float(raw.get("weather_journal_interval_h") or 1.0),
         local_weather_enabled=_optional_bool(local.get("enabled"), False),

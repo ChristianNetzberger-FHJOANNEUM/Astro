@@ -104,6 +104,7 @@ from mele.weather_safety import (
     SAFETY_UNSAFE,
     evaluate_weather_safety,
 )
+from mele.camera_model import imaging_model
 from mele.astro_manager import (
     FRAME_TYPE_DARK,
     FRAME_TYPE_LIGHT,
@@ -437,6 +438,10 @@ def run_app(port: int | None = None) -> None:
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc), "catalog_key": catalog_key}, status_code=500)
 
+    @app.get("/astro/imaging-model")
+    def astro_imaging_model() -> JSONResponse:
+        return JSONResponse(imaging_model(db_path=settings.astro_manager_db))
+
     @app.get("/astro/profiles")
     def astro_profiles_get(catalog_key: str = "") -> JSONResponse:
         if not catalog_key.strip():
@@ -505,20 +510,25 @@ def run_app(port: int | None = None) -> None:
                     catalog_key=str(body.get("catalog_key") or ""),
                     display_name=str(body.get("display_name") or ""),
                     profile_id=_optional_int_body(body.get("profile_id")),
+                    camera_id=_optional_int_body(body.get("camera_id")),
+                    camera_config_id=_optional_int_body(body.get("camera_config_id")),
+                    recipe_id=_optional_int_body(body.get("recipe_id")),
                     db_path=settings.astro_manager_db,
                     local_root=settings.local_capture_root,
                     archive_root=settings.archive_root,
                 )
             except SessionCreateError as exc:
-                return JSONResponse(
-                    {"ok": False, "error": str(exc), "code": exc.code, "profiles": exc.profiles},
-                    status_code=exc.status,
-                )
+                payload = {"ok": False, "error": str(exc), "code": exc.code, "profiles": exc.profiles}
+                payload.update(exc.choices)
+                return JSONResponse(payload, status_code=exc.status)
             return JSONResponse({"ok": True, "message": "Session erstellt", "session": session.to_dict()})
         try:
             session = create_session(
                 catalog_key=str(body.get("catalog_key") or ""),
                 profile_id=_optional_int_body(body.get("profile_id")),
+                camera_id=_optional_int_body(body.get("camera_id")),
+                camera_config_id=_optional_int_body(body.get("camera_config_id")),
+                recipe_id=_optional_int_body(body.get("recipe_id")),
                 started_utc=str(body.get("started_utc") or "") or None,
                 frames_planned=_optional_int_body(body.get("frames_planned")),
                 frames_completed=int(body.get("frames_completed") or 0),
@@ -817,6 +827,9 @@ def run_app(port: int | None = None) -> None:
                 ),
                 archive_status=None if body.get("archive_status") is None else str(body.get("archive_status") or ""),
                 notes=None if body.get("notes") is None else str(body.get("notes") or ""),
+                camera_id=_optional_int_body(body.get("camera_id")),
+                camera_config_id=_optional_int_body(body.get("camera_config_id")),
+                recipe_id=_optional_int_body(body.get("recipe_id")),
                 db_path=settings.astro_manager_db,
             )
         except ValueError as exc:
@@ -1324,12 +1337,23 @@ def run_app(port: int | None = None) -> None:
                 pass
         return 200, payload
 
+    def _guide_monitor_jpeg() -> tuple[bytes, dict]:
+        return phd2.guide_image_jpeg(
+            kind="full",
+            fullframe_min_interval_s=settings.phd2_fullframe_interval_s,
+        )
+
+    def _guide_star_jpeg() -> tuple[bytes, dict]:
+        return phd2.guide_image_jpeg(kind="star")
+
     install_capture_routes(
         app,
         capture_jobs,
         gate=_mount_gate,
         camera_info=_camera_payload,
         close_session=_close_capture_session,
+        guide_image=_guide_monitor_jpeg,
+        guide_star=_guide_star_jpeg,
     )
 
     def _local_desktop(request: Request) -> bool:
@@ -1375,11 +1399,17 @@ def run_app(port: int | None = None) -> None:
         return JSONResponse(result.to_dict(), status_code=status)
 
     @app.get("/phd2/status")
-    def phd2_status() -> JSONResponse:
-        try:
-            phd2.refresh_equipment()
-        except Exception:  # noqa: BLE001
-            pass
+    def phd2_status(refresh: int = Query(1)) -> JSONResponse:
+        if int(refresh):
+            try:
+                phd2.refresh_equipment()
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                phd2.ensure_calibration_known()
+            except Exception:  # noqa: BLE001
+                pass
         st = phd2.get_status()
         pad_ok, pad_reason = _phd2_pad_allowed()
         return JSONResponse(
@@ -1394,7 +1424,10 @@ def run_app(port: int | None = None) -> None:
         )
 
     @app.post("/phd2/loop")
-    def phd2_loop() -> JSONResponse:
+    def phd2_loop(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             phd2.loop()
             return JSONResponse({"ok": True})
@@ -1402,7 +1435,10 @@ def run_app(port: int | None = None) -> None:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
 
     @app.post("/phd2/stop")
-    def phd2_stop() -> JSONResponse:
+    def phd2_stop(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             phd2.stop_capture()
             return JSONResponse({"ok": True})
@@ -1410,7 +1446,10 @@ def run_app(port: int | None = None) -> None:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
 
     @app.post("/phd2/find-star")
-    def phd2_find_star() -> JSONResponse:
+    def phd2_find_star(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             result = phd2.find_star()
             return JSONResponse({"ok": True, "result": result})
@@ -1419,6 +1458,9 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/phd2/guide")
     async def phd2_guide(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             body = await request.json()
         except Exception:
@@ -1434,6 +1476,9 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/phd2/pause")
     async def phd2_pause(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             body = await request.json()
         except Exception:
@@ -1451,6 +1496,9 @@ def run_app(port: int | None = None) -> None:
 
     @app.post("/phd2/exposure")
     async def phd2_exposure(request: Request) -> JSONResponse:
+        denied = _mount_gate(request)
+        if denied is not None:
+            return denied
         try:
             body = await request.json()
         except Exception:
@@ -1551,7 +1599,7 @@ def run_app(port: int | None = None) -> None:
             seconds = float(body.get("seconds"))
         except (TypeError, ValueError):
             return JSONResponse({"ok": False, "error": "seconds ungültig"}, status_code=400)
-        seconds = max(0.2, min(seconds, 30.0))
+        seconds = max(4.0, min(seconds, 30.0))
         settings.phd2_fullframe_interval_s = seconds
         phd2.set_fullframe_min_interval(seconds)
         return JSONResponse({"ok": True, "fullframe_interval_s": seconds})

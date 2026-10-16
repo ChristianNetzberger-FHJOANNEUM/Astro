@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from mele.astro_manager import (
     FRAME_TYPE_DARK,
@@ -259,7 +259,13 @@ class CaptureJobService:
                 profile_code="job",
                 profile_message="Parameter kommen vom laufenden Auftrag.",
             )
-            _apply_iso_offer(body, camera_payload, job.get("iso"))
+            _apply_iso_offer(
+                body,
+                camera_payload,
+                job.get("iso"),
+                enabled=_iso_enabled(session, camera_payload, self.db_path),
+            )
+            _attach_camera_view(body, session, camera_payload, self.db_path)
             return body
         key = str(catalog_key or "").strip()
         if not key:
@@ -272,7 +278,8 @@ class CaptureJobService:
                 profile_code="no_object",
                 profile_message="Objekt auf der Quest wählen.",
             )
-            _apply_iso_offer(body, camera_payload, None)
+            _apply_iso_offer(body, camera_payload, None, enabled=False)
+            _attach_camera_view(body, None, camera_payload, self.db_path)
             return body
         choice = choose_open_session(catalog_key=key, session_id=None, db_path=self.db_path)
         profile, profile_code, profile_message = _profile_choice(
@@ -294,7 +301,26 @@ class CaptureJobService:
             fallback_iso = choice.session.iso
         elif profile is not None and profile.iso is not None:
             fallback_iso = profile.iso
-        _apply_iso_offer(body, camera_payload, fallback_iso)
+        enabled = _iso_enabled(choice.session, camera_payload, self.db_path)
+        _apply_iso_offer(body, camera_payload, fallback_iso, enabled=enabled)
+        _attach_camera_view(body, choice.session, camera_payload, self.db_path)
+        if profile is None and choice.session is not None and choice.session.recipe_id is not None:
+            from mele.camera_model import get_recipe
+
+            recipe = get_recipe(int(choice.session.recipe_id), db_path=self.db_path)
+            if recipe is not None:
+                profile = _RecipeView(
+                    recipe.id,
+                    recipe.name,
+                    choice.session.exposure_s,
+                    choice.session.gain,
+                    choice.session.iso,
+                )
+                profile_code = "recipe"
+                profile_message = "Rezept der Session. Die Bildanzahl bleibt am Auftrag."
+                body["profile"] = _profile_brief(profile)
+                body["profile_code"] = profile_code
+                body["profile_message"] = profile_message
         return body
 
     def start_from_body(
@@ -328,7 +354,21 @@ class CaptureJobService:
         iso = _opt_int(body.get("iso"))
         if iso is None:
             iso = session.iso
-        gain, iso = bind_nina_gain(gain=gain, iso=iso, camera_payload=camera_payload)
+        from mele.camera_model import camera_connection_problem, get_camera, iso_from_gains_enabled
+
+        camera_row = None
+        if session.camera_id is not None:
+            camera_row = get_camera(int(session.camera_id), db_path=self.db_path)
+        if camera_payload is not None:
+            problem = camera_connection_problem(camera_row, camera_payload)
+            if problem is not None:
+                return 409, _error_body(problem[1], problem[0])
+        gain, iso = bind_nina_gain(
+            gain=gain,
+            iso=iso,
+            camera_payload=camera_payload,
+            iso_from_gains=iso_from_gains_enabled(camera_row, camera_payload),
+        )
 
         if "frames" in body and body.get("frames") not in (None, ""):
             frames = _opt_int(body.get("frames"))
@@ -516,6 +556,8 @@ def install_capture_routes(
     gate: Callable[[Request], JSONResponse | None] | None = None,
     camera_info: Callable[[], dict[str, Any]] | None = None,
     close_session: Callable[[int], tuple[int, dict[str, Any]]] | None = None,
+    guide_image: Callable[[], tuple[bytes, dict[str, Any]]] | None = None,
+    guide_star: Callable[[], tuple[bytes, dict[str, Any]]] | None = None,
 ) -> None:
     def _guard(request: Request) -> JSONResponse | None:
         if gate is None:
@@ -591,15 +633,57 @@ def install_capture_routes(
 
     @app.get("/astro/capture/preview")
     def capture_preview(session_id: int = 0, source: str = "light_preview") -> JSONResponse:
-        from mele.frame_analysis import read_light_preview
+        from mele.frame_analysis import (
+            SOURCE_GUIDE_PREVIEW,
+            SOURCE_GUIDE_STAR,
+            read_guide_preview,
+            read_light_preview,
+        )
 
+        wanted = str(source or "").strip()
+        if wanted == SOURCE_GUIDE_PREVIEW:
+            status, payload = read_guide_preview(guide_image, source=SOURCE_GUIDE_PREVIEW)
+            return JSONResponse(payload, status_code=status)
+        if wanted == SOURCE_GUIDE_STAR:
+            status, payload = read_guide_preview(guide_star, source=SOURCE_GUIDE_STAR)
+            return JSONResponse(payload, status_code=status)
         status, payload = read_light_preview(session_id, db_path=service.db_path, source=source)
+        if isinstance(payload, dict):
+            payload["sources"] = ["light_preview", SOURCE_GUIDE_PREVIEW]
         return JSONResponse(payload, status_code=status)
 
     @app.get("/astro/capture/preview/file", response_model=None)
-    def capture_preview_file(session_id: int = 0):
-        from mele.frame_analysis import light_preview_file
+    def capture_preview_file(session_id: int = 0, source: str = "light_preview"):
+        from mele.frame_analysis import (
+            SOURCE_GUIDE_PREVIEW,
+            SOURCE_GUIDE_STAR,
+            guide_status_text,
+            light_preview_file,
+        )
 
+        wanted = str(source or "").strip()
+        if wanted in {SOURCE_GUIDE_PREVIEW, SOURCE_GUIDE_STAR}:
+            fetch = guide_image if wanted == SOURCE_GUIDE_PREVIEW else guide_star
+            star = wanted == SOURCE_GUIDE_STAR
+            if fetch is None:
+                return JSONResponse(
+                    {"ok": False, "error": "Quelle noch nicht vorhanden", "source": wanted},
+                    status_code=404,
+                )
+            try:
+                jpeg, _meta = fetch()
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse(
+                    {"ok": False, "error": guide_status_text(str(exc), star=star), "source": wanted},
+                    status_code=404,
+                )
+            if not jpeg:
+                missing = "Kein Leitstern" if star else "Kein Guiding-Bild"
+                return JSONResponse(
+                    {"ok": False, "error": missing, "source": wanted},
+                    status_code=404,
+                )
+            return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
         status, payload = light_preview_file(session_id, db_path=service.db_path)
         if status != 200 or not isinstance(payload, Path):
             body = payload if isinstance(payload, dict) else {"ok": False, "error": "Preview fehlt"}
@@ -607,12 +691,18 @@ def install_capture_routes(
         return FileResponse(payload, media_type="image/jpeg", filename=payload.name)
 
 
-def confirmed_iso_steps(camera_payload: dict[str, Any] | None) -> list[int]:
-    """ISO-Stufen nur aus der Gain-Liste der verbundenen Kamera.
+def confirmed_iso_steps(
+    camera_payload: dict[str, Any] | None,
+    *,
+    enabled: bool = False,
+) -> list[int]:
+    """ISO-Stufen nur aus der Gain-Liste, und nur wenn die Kamera das so meldet.
 
     Der Lumix-Treiber legt die ISO-Werte der S5IIX in NINA unter ``Gains`` ab.
-    GainMin und GainMax ergeben keine Stufen. Eine leere Antwort bleibt leer.
+    Das gilt nicht für eine andere Kamera. GainMin und GainMax ergeben keine Stufen.
     """
+    if not enabled:
+        return []
     raw = camera_payload if isinstance(camera_payload, dict) else {}
     camera = raw.get("camera") if isinstance(raw.get("camera"), dict) else {}
     gains = camera.get("gains")
@@ -641,9 +731,11 @@ def confirmed_iso_steps(camera_payload: dict[str, Any] | None) -> list[int]:
 def iso_offer(
     camera_payload: dict[str, Any] | None,
     fallback_iso: Any,
+    *,
+    enabled: bool = False,
 ) -> tuple[list[int], bool]:
     """Bestätigte Stufen, sonst nur der gespeicherte ISO-Wert, dann nicht veränderbar."""
-    steps = confirmed_iso_steps(camera_payload)
+    steps = confirmed_iso_steps(camera_payload, enabled=enabled)
     if steps:
         return steps, True
     try:
@@ -690,6 +782,7 @@ def bind_nina_gain(
     gain: float | None,
     iso: int | None,
     camera_payload: dict[str, Any] | None,
+    iso_from_gains: bool = False,
 ) -> tuple[float | None, int | None]:
     """ISO der Lumix geht als NINA-Gain an die Aufnahme.
 
@@ -697,8 +790,9 @@ def bind_nina_gain(
     davon abweichenden gespeicherten Gain. Ohne diese Liste bleibt die bisherige
     Regel: ein gesetzter Gain hat Vorrang, fehlt er, wird die ISO-Zahl als Gain
     geschickt. Die Zahl bei NINA ist noch kein Beleg für die Empfindlichkeit der Datei.
+    Eine andere Kamera benutzt diese Gain-Liste nicht als ISO.
     """
-    steps = confirmed_iso_steps(camera_payload)
+    steps = confirmed_iso_steps(camera_payload, enabled=iso_from_gains)
     if iso is not None and int(iso) in steps:
         return float(int(iso)), int(iso)
     if gain is None and iso is not None:
@@ -707,8 +801,14 @@ def bind_nina_gain(
     return (None if gain is None else float(gain)), stored_iso
 
 
-def _apply_iso_offer(body: dict[str, Any], camera_payload: dict[str, Any] | None, fallback_iso: Any) -> None:
-    steps, adjustable = iso_offer(camera_payload, fallback_iso)
+def _apply_iso_offer(
+    body: dict[str, Any],
+    camera_payload: dict[str, Any] | None,
+    fallback_iso: Any,
+    *,
+    enabled: bool = False,
+) -> None:
+    steps, adjustable = iso_offer(camera_payload, fallback_iso, enabled=enabled)
     body["iso_steps"] = steps
     body["iso_adjustable"] = adjustable
 
@@ -723,6 +823,64 @@ def exposure_steps(exposure_min: Any, exposure_max: Any) -> list[float]:
     if hi > lo > 0:
         return [step for step in EXPOSURE_STEPS_S if lo <= step <= hi]
     return list(EXPOSURE_STEPS_S)
+
+
+class _RecipeView:
+    def __init__(
+        self,
+        recipe_id: int,
+        label: str,
+        exposure_s: float | None,
+        gain: float | None,
+        iso: int | None,
+    ) -> None:
+        self.id = recipe_id
+        self.label = label
+        self.exposure_s = exposure_s
+        self.gain = gain
+        self.iso = iso
+        self.frames = None
+
+
+def _iso_enabled(session: Any, camera_payload: dict[str, Any] | None, db_path: Path) -> bool:
+    from mele.camera_model import get_camera, iso_from_gains_enabled
+
+    if session is None or getattr(session, "camera_id", None) is None:
+        return False
+    camera = get_camera(int(session.camera_id), db_path=db_path)
+    return iso_from_gains_enabled(camera, camera_payload)
+
+
+def _attach_camera_view(
+    body: dict[str, Any],
+    session: Any,
+    camera_payload: dict[str, Any] | None,
+    db_path: Path,
+) -> None:
+    from mele.camera_model import get_camera
+
+    camera = None
+    if session is not None and getattr(session, "camera_id", None) is not None:
+        camera = get_camera(int(session.camera_id), db_path=db_path)
+    if camera is None:
+        body["capabilities"] = {
+            "iso": False,
+            "gain": False,
+            "offset": False,
+            "binning": False,
+            "roi": False,
+            "cooling": False,
+            "video": False,
+            "still": False,
+        }
+    else:
+        body["capabilities"] = camera.capabilities()
+    brief = body.get("camera") if isinstance(body.get("camera"), dict) else {}
+    body["camera_state"] = {
+        "connected": bool(brief.get("connected")),
+        "name": str(brief.get("name") or ""),
+    }
+    del camera_payload
 
 
 def _camera_brief(payload: dict[str, Any] | None) -> dict[str, Any]:

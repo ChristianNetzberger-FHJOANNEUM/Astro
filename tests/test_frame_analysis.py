@@ -148,3 +148,74 @@ def test_preview_route_reads_without_starting_analysis(tmp_path: Path, monkeypat
     assert status == 200
     assert Path(path).read_bytes() == b"jpeg-30"
     assert calls["preview"] == 1
+    assert body["sources"] == ["light_preview", "phd2_fullframe"]
+
+
+def test_guide_preview_uses_the_existing_jpeg_and_leaves_light_stats_alone(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    frame = b"guide-jpeg"
+
+    def fetch():
+        calls["n"] += 1
+        return frame, {"kind": "full", "connection": "CONNECTED"}
+
+    app = FastAPI()
+    install_capture_routes(
+        app,
+        CaptureJobService(db_path=tmp_path / "empty.sqlite", capture_one=lambda _snapshot: CaptureFrameResult(ok=True)),
+        guide_image=fetch,
+    )
+    client = TestClient(app)
+    first = client.get("/astro/capture/preview?source=phd2_fullframe")
+    body = first.json()
+    assert first.status_code == 200
+    assert body["ok"] is True
+    assert body["source"] == "phd2_fullframe"
+    assert body["analysis"] is None
+    image = client.get(body["preview_url"])
+    assert image.status_code == 200
+    assert image.content == b"guide-jpeg"
+    again = client.get("/astro/capture/preview?source=phd2_fullframe")
+    assert again.json()["image_id"] == body["image_id"]
+    assert calls["n"] == 3
+
+    def offline():
+        raise RuntimeError("PHD2 offline")
+
+    app_off = FastAPI()
+    install_capture_routes(
+        app_off,
+        CaptureJobService(db_path=tmp_path / "empty.sqlite", capture_one=lambda _snapshot: CaptureFrameResult(ok=True)),
+        guide_image=offline,
+    )
+    stopped = TestClient(app_off).get("/astro/capture/preview?source=phd2_fullframe")
+    assert stopped.status_code == 200
+    assert stopped.json()["ok"] is False
+    assert stopped.json()["error"] == "PHD2 läuft nicht"
+    assert stopped.json()["analysis"] is None
+
+
+def test_guide_star_uses_its_own_image_and_not_the_full_frame(tmp_path: Path) -> None:
+    def full():
+        raise AssertionError("Vollbild darf der Leitstern nicht anstoßen")
+
+    def star():
+        return b"star-jpeg", {"kind": "star", "connection": "CONNECTED", "hfd": 3.2, "snr": 36.6}
+
+    app = FastAPI()
+    install_capture_routes(
+        app,
+        CaptureJobService(db_path=tmp_path / "empty.sqlite", capture_one=lambda _snapshot: CaptureFrameResult(ok=True)),
+        guide_image=full,
+        guide_star=star,
+    )
+    client = TestClient(app)
+    body = client.get("/astro/capture/preview?source=phd2_star").json()
+    assert body["ok"] is True
+    assert body["source"] == "phd2_star"
+    assert body["analysis"] is None
+    assert body["hfd"] == 3.2
+    assert body["snr"] == 36.6
+    image = client.get(body["preview_url"])
+    assert image.status_code == 200
+    assert image.content == b"star-jpeg"

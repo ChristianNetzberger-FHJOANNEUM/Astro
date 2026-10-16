@@ -520,17 +520,34 @@ def test_dark_frames_keep_the_requested_type(tmp_path: Path) -> None:
 
 def test_iso_steps_come_only_from_the_camera_gain_list(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    _session(db)
+    sid = _session(db)
+    _bind_lumix(db, sid)
     service = _service(db, lambda _snapshot: CaptureFrameResult(ok=True))
-    listed = service.context(
-        "M31",
-        {"api_online": True, "camera": {"connected": True, "gains": list(_LUMIX_GAINS), "gain_min": 100, "gain_max": 51200}},
-    )
+    lumix = {
+        "api_online": True,
+        "camera": {
+            "connected": True,
+            "name": "DC-S5M2X",
+            "gains": list(_LUMIX_GAINS),
+            "gain_min": 100,
+            "gain_max": 51200,
+        },
+    }
+    listed = service.context("M31", lumix)
     assert listed["iso_steps"] == _LUMIX_GAINS
     assert listed["iso_adjustable"] is True
+    assert listed["capabilities"]["iso"] is True
+    assert listed["capabilities"]["cooling"] is False
+    other = {
+        "api_online": True,
+        "camera": {"connected": True, "name": "ASI585MC", "gains": list(_LUMIX_GAINS)},
+    }
+    foreign = service.context("M31", other)
+    assert foreign["iso_steps"] == [640]
+    assert foreign["iso_adjustable"] is False
     bounds_only = service.context(
         "M31",
-        {"api_online": True, "camera": {"connected": True, "gain_min": 100, "gain_max": 51200, "gains": []}},
+        {"api_online": True, "camera": {"connected": True, "name": "DC-S5M2X", "gain_min": 100, "gain_max": 51200, "gains": []}},
     )
     assert bounds_only["iso_steps"] == [640]
     assert bounds_only["iso_adjustable"] is False
@@ -550,9 +567,20 @@ def test_iso_step_stays_inside_the_list() -> None:
     assert select_iso_step([], 640, 1) == 640
 
 
+def _bind_lumix(db: Path, session_id: int) -> None:
+    from mele.camera_model import list_cameras
+
+    camera = list_cameras(db_path=db)[0]
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE sessions SET camera_id=? WHERE id=?", (camera.id, int(session_id)))
+    conn.commit()
+    conn.close()
+
+
 def test_selected_iso_replaces_a_different_gain_on_the_nina_call(tmp_path: Path) -> None:
     db = _db(tmp_path)
     sid = _session(db, frames=1, exposure=1.0)
+    _bind_lumix(db, sid)
     seen: dict[str, object] = {}
 
     def capture(snapshot):
@@ -561,7 +589,7 @@ def test_selected_iso_replaces_a_different_gain_on_the_nina_call(tmp_path: Path)
         return CaptureFrameResult(ok=True, file_name="iso.rw2", session_completed=1)
 
     service = _service(db, capture)
-    camera = {"api_online": True, "camera": {"connected": True, "gains": list(_LUMIX_GAINS)}}
+    camera = {"api_online": True, "camera": {"connected": True, "name": "DC-S5M2X", "gains": list(_LUMIX_GAINS)}}
     status, _body = service.start_from_body(
         {
             "catalog_key": "M31",
@@ -579,6 +607,7 @@ def test_selected_iso_replaces_a_different_gain_on_the_nina_call(tmp_path: Path)
     assert seen["gain"] == 800.0
 
     kept = _session(db, frames=1, exposure=1.0)
+    _bind_lumix(db, kept)
     held: dict[str, object] = {}
 
     def keep(snapshot):
